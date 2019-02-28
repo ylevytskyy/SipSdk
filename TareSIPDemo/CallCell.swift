@@ -9,5 +9,5 @@
 import UIKit
 
 class CallCell: UITableViewCell {
-    @IBOutlet weak var remoteUriLabel: UILabel!
+    @IBOutlet weak var remoteUriLabel: UILabel!    
 }

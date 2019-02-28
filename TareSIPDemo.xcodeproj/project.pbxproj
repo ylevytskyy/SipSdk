@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		A2FABC62F71736D19A40C9AC /* Pods_TareSIPDemo.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 3E50DF2FF5588800EBD8D873 /* Pods_TareSIPDemo.framework */; };
 		B41B7A122226C2800078B9F7 /* SipClient.mm in Sources */ = {isa = PBXBuildFile; fileRef = B41B7A112226C2800078B9F7 /* SipClient.mm */; };
+		B41E9BBC2227EE9200647A38 /* SipCallDetailsViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = B41E9BBB2227EE9200647A38 /* SipCallDetailsViewController.swift */; };
 		B44A572B2225A0F100570604 /* CFNetwork.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B44A572A2225A0F100570604 /* CFNetwork.framework */; };
 		B44A572D2225A0FE00570604 /* AudioToolbox.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B44A572C2225A0FE00570604 /* AudioToolbox.framework */; };
 		B44A572F2225A10500570604 /* AVFoundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B44A572E2225A10400570604 /* AVFoundation.framework */; };
@@ -17,7 +18,7 @@
 		B44A573B2225A67600570604 /* config in Resources */ = {isa = PBXBuildFile; fileRef = B44A573A2225A67600570604 /* config */; };
 		B49EE8572227EA7E00B8F170 /* CallCell.swift in Sources */ = {isa = PBXBuildFile; fileRef = B49EE8562227EA7E00B8F170 /* CallCell.swift */; };
 		B4E342BB22259C9200D70E9A /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4E342BA22259C9200D70E9A /* AppDelegate.swift */; };
-		B4E342BD22259C9200D70E9A /* ViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4E342BC22259C9200D70E9A /* ViewController.swift */; };
+		B4E342BD22259C9200D70E9A /* SipCallsViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4E342BC22259C9200D70E9A /* SipCallsViewController.swift */; };
 		B4E342C022259C9200D70E9A /* Main.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = B4E342BE22259C9200D70E9A /* Main.storyboard */; };
 		B4E342C222259C9300D70E9A /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B4E342C122259C9300D70E9A /* Assets.xcassets */; };
 		B4E342C522259C9400D70E9A /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = B4E342C322259C9400D70E9A /* LaunchScreen.storyboard */; };
@@ -28,6 +29,7 @@
 		3E50DF2FF5588800EBD8D873 /* Pods_TareSIPDemo.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_TareSIPDemo.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		B41B7A102226C2800078B9F7 /* SipClient.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = SipClient.h; sourceTree = "<group>"; };
 		B41B7A112226C2800078B9F7 /* SipClient.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = SipClient.mm; sourceTree = "<group>"; };
+		B41E9BBB2227EE9200647A38 /* SipCallDetailsViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SipCallDetailsViewController.swift; sourceTree = "<group>"; };
 		B44A572A2225A0F100570604 /* CFNetwork.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CFNetwork.framework; path = System/Library/Frameworks/CFNetwork.framework; sourceTree = SDKROOT; };
 		B44A572C2225A0FE00570604 /* AudioToolbox.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AudioToolbox.framework; path = System/Library/Frameworks/AudioToolbox.framework; sourceTree = SDKROOT; };
 		B44A572E2225A10400570604 /* AVFoundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AVFoundation.framework; path = System/Library/Frameworks/AVFoundation.framework; sourceTree = SDKROOT; };
@@ -38,7 +40,7 @@
 		B49EE8562227EA7E00B8F170 /* CallCell.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallCell.swift; sourceTree = "<group>"; };
 		B4E342B722259C9200D70E9A /* TareSIPDemo.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = TareSIPDemo.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		B4E342BA22259C9200D70E9A /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
-		B4E342BC22259C9200D70E9A /* ViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ViewController.swift; sourceTree = "<group>"; };
+		B4E342BC22259C9200D70E9A /* SipCallsViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SipCallsViewController.swift; sourceTree = "<group>"; };
 		B4E342BF22259C9200D70E9A /* Base */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; name = Base; path = Base.lproj/Main.storyboard; sourceTree = "<group>"; };
 		B4E342C122259C9300D70E9A /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		B4E342C422259C9400D70E9A /* Base */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; name = Base; path = Base.lproj/LaunchScreen.storyboard; sourceTree = "<group>"; };
@@ -107,7 +109,9 @@
 			isa = PBXGroup;
 			children = (
 				B4E342BA22259C9200D70E9A /* AppDelegate.swift */,
-				B4E342BC22259C9200D70E9A /* ViewController.swift */,
+				B4E342BC22259C9200D70E9A /* SipCallsViewController.swift */,
+				B49EE8562227EA7E00B8F170 /* CallCell.swift */,
+				B41E9BBB2227EE9200647A38 /* SipCallDetailsViewController.swift */,
 				B4E342BE22259C9200D70E9A /* Main.storyboard */,
 				B4E342C122259C9300D70E9A /* Assets.xcassets */,
 				B4E342C322259C9400D70E9A /* LaunchScreen.storyboard */,
@@ -116,7 +120,6 @@
 				B44A573A2225A67600570604 /* config */,
 				B41B7A102226C2800078B9F7 /* SipClient.h */,
 				B41B7A112226C2800078B9F7 /* SipClient.mm */,
-				B49EE8562227EA7E00B8F170 /* CallCell.swift */,
 			);
 			path = TareSIPDemo;
 			sourceTree = "<group>";
@@ -220,7 +223,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				B4E342BD22259C9200D70E9A /* ViewController.swift in Sources */,
+				B41E9BBC2227EE9200647A38 /* SipCallDetailsViewController.swift in Sources */,
+				B4E342BD22259C9200D70E9A /* SipCallsViewController.swift in Sources */,
 				B49EE8572227EA7E00B8F170 /* CallCell.swift in Sources */,
 				B41B7A122226C2800078B9F7 /* SipClient.mm in Sources */,
 				B4E342BB22259C9200D70E9A /* AppDelegate.swift in Sources */,

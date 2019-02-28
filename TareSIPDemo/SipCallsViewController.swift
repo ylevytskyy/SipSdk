@@ -1,5 +1,5 @@
 //
-//  ViewController.swift
+//  SipCallsViewController.swift
 //  TareSIPDemo
 //
 //  Created by Yuriy Levytskyy on 2/26/19.
@@ -8,7 +8,7 @@
 
 import UIKit
 
-class ViewController: UIViewController {
+class SipCallsViewController: UIViewController {
     @IBOutlet weak var remoteUri: UITextField!
     @IBOutlet weak var callsTableView: UITableView!
     @IBOutlet weak var logsTextView: UITextView!
@@ -39,9 +39,18 @@ class ViewController: UIViewController {
         client.password = "popup"
         client.start()
     }
+    
+    override func prepare(for segue: UIStoryboardSegue, sender: Any?) {
+        if segue.identifier == "sipCallDetailsSegue" {
+            let calls = Array(self.calls)
+            let path = callsTableView.indexPathForSelectedRow!
+            let destination = segue.destination as! SipCallDetailsViewController
+            destination.sipCall = calls[path.row]
+        }
+    }
 }
 
-extension ViewController : SipClientDelegate {
+extension SipCallsViewController : SipClientDelegate {
     func onWillRegister(_ sipSdk: SipClient) {
         logsTextView.text += "Registering...\n";
     }
@@ -62,15 +71,12 @@ extension ViewController : SipClientDelegate {
         logsTextView.text += "Incomming call from \(sipCall.remoteUri)...\n";
         
         let alertController = UIAlertController(title: sipCall.remoteUri, message: "Incoming Call", preferredStyle: .alert)
-        let yesAction = UIAlertAction(title: "Answer", style: .default) { _ in
+        alertController.addAction(UIAlertAction(title: "Answer", style: .default) { _ in
             sipCall.answer()
-        }
-        let noAction = UIAlertAction(title: "Decline", style: .default) { _ in
-            sipCall.hangup(486, reason: "User Busy")
-        }
-        
-        alertController.addAction(yesAction)
-        alertController.addAction(noAction)
+        })
+        alertController.addAction(UIAlertAction(title: "Decline", style: .default) { _ in
+            sipCall.hangup(486, reason: "Busy Here")
+        })
         
         self.present(alertController, animated: true, completion: nil)
         
@@ -98,7 +104,7 @@ extension ViewController : SipClientDelegate {
     }
 }
 
-extension ViewController : UITableViewDataSource {
+extension SipCallsViewController : UITableViewDataSource {
     func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
         return calls.count
     }
