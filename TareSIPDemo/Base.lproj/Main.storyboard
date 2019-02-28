@@ -127,17 +127,17 @@
                         <autoresizingMask key="autoresizingMask" widthSizable="YES" heightSizable="YES"/>
                         <subviews>
                             <stackView opaque="NO" contentMode="scaleToFill" spacing="31" translatesAutoresizingMaskIntoConstraints="NO" id="5ck-l1-vxL">
-                                <rect key="frame" x="128.5" y="617" width="118" height="30"/>
+                                <rect key="frame" x="119.5" y="617" width="136" height="30"/>
                                 <subviews>
                                     <button opaque="NO" contentMode="scaleToFill" contentHorizontalAlignment="center" contentVerticalAlignment="center" buttonType="roundedRect" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="nxy-Lt-iwO">
-                                        <rect key="frame" x="0.0" y="0.0" width="33" height="30"/>
-                                        <state key="normal" title="Hold"/>
+                                        <rect key="frame" x="0.0" y="0.0" width="51" height="30"/>
+                                        <state key="normal" title="Answer"/>
                                         <connections>
-                                            <action selector="hold:" destination="xrw-cs-e5W" eventType="touchUpInside" id="y4k-me-LP7"/>
+                                            <action selector="answer:" destination="xrw-cs-e5W" eventType="touchUpInside" id="y4k-me-LP7"/>
                                         </connections>
                                     </button>
                                     <button opaque="NO" contentMode="scaleToFill" contentHorizontalAlignment="center" contentVerticalAlignment="center" buttonType="roundedRect" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="9l4-3B-VD2">
-                                        <rect key="frame" x="64" y="0.0" width="54" height="30"/>
+                                        <rect key="frame" x="82" y="0.0" width="54" height="30"/>
                                         <state key="normal" title="Hangup"/>
                                         <connections>
                                             <action selector="hangup:" destination="xrw-cs-e5W" eventType="touchUpInside" id="g4M-53-Avs"/>

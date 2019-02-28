@@ -6,6 +6,6 @@ target 'TareSIPDemo' do
   use_frameworks!
 
   # Pods for TareSIPDemo
-  pod 'taresip'
+#  pod 'taresip'
 
 end

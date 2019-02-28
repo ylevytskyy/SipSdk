@@ -10,13 +10,18 @@
 		A2FABC62F71736D19A40C9AC /* Pods_TareSIPDemo.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 3E50DF2FF5588800EBD8D873 /* Pods_TareSIPDemo.framework */; };
 		B41B7A122226C2800078B9F7 /* SipClient.mm in Sources */ = {isa = PBXBuildFile; fileRef = B41B7A112226C2800078B9F7 /* SipClient.mm */; };
 		B41E9BBC2227EE9200647A38 /* SipCallDetailsViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = B41E9BBB2227EE9200647A38 /* SipCallDetailsViewController.swift */; };
+		B44726622228191C00C1468C /* libresolv.9.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = B44726612228191C00C1468C /* libresolv.9.tbd */; };
 		B44A572B2225A0F100570604 /* CFNetwork.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B44A572A2225A0F100570604 /* CFNetwork.framework */; };
 		B44A572D2225A0FE00570604 /* AudioToolbox.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B44A572C2225A0FE00570604 /* AudioToolbox.framework */; };
 		B44A572F2225A10500570604 /* AVFoundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B44A572E2225A10400570604 /* AVFoundation.framework */; };
 		B44A57312225A10F00570604 /* SystemConfiguration.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B44A57302225A10F00570604 /* SystemConfiguration.framework */; };
 		B44A57332225A11A00570604 /* CoreMedia.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B44A57322225A11A00570604 /* CoreMedia.framework */; };
 		B44A573B2225A67600570604 /* config in Resources */ = {isa = PBXBuildFile; fileRef = B44A573A2225A67600570604 /* config */; };
+		B455D17B2228170A007F61F4 /* libbaresip.a in Frameworks */ = {isa = PBXBuildFile; fileRef = B455D1782228170A007F61F4 /* libbaresip.a */; };
+		B455D17C2228170A007F61F4 /* libre.a in Frameworks */ = {isa = PBXBuildFile; fileRef = B455D1792228170A007F61F4 /* libre.a */; };
+		B455D17D2228170A007F61F4 /* librem.a in Frameworks */ = {isa = PBXBuildFile; fileRef = B455D17A2228170A007F61F4 /* librem.a */; };
 		B49EE8572227EA7E00B8F170 /* CallCell.swift in Sources */ = {isa = PBXBuildFile; fileRef = B49EE8562227EA7E00B8F170 /* CallCell.swift */; };
+		B4ABB296222824B200644446 /* static.c in Sources */ = {isa = PBXBuildFile; fileRef = B4ABB295222824B200644446 /* static.c */; };
 		B4E342BB22259C9200D70E9A /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4E342BA22259C9200D70E9A /* AppDelegate.swift */; };
 		B4E342BD22259C9200D70E9A /* SipCallsViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4E342BC22259C9200D70E9A /* SipCallsViewController.swift */; };
 		B4E342C022259C9200D70E9A /* Main.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = B4E342BE22259C9200D70E9A /* Main.storyboard */; };
@@ -30,6 +35,7 @@
 		B41B7A102226C2800078B9F7 /* SipClient.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = SipClient.h; sourceTree = "<group>"; };
 		B41B7A112226C2800078B9F7 /* SipClient.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = SipClient.mm; sourceTree = "<group>"; };
 		B41E9BBB2227EE9200647A38 /* SipCallDetailsViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SipCallDetailsViewController.swift; sourceTree = "<group>"; };
+		B44726612228191C00C1468C /* libresolv.9.tbd */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.text-based-dylib-definition"; name = libresolv.9.tbd; path = usr/lib/libresolv.9.tbd; sourceTree = SDKROOT; };
 		B44A572A2225A0F100570604 /* CFNetwork.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CFNetwork.framework; path = System/Library/Frameworks/CFNetwork.framework; sourceTree = SDKROOT; };
 		B44A572C2225A0FE00570604 /* AudioToolbox.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AudioToolbox.framework; path = System/Library/Frameworks/AudioToolbox.framework; sourceTree = SDKROOT; };
 		B44A572E2225A10400570604 /* AVFoundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AVFoundation.framework; path = System/Library/Frameworks/AVFoundation.framework; sourceTree = SDKROOT; };
@@ -37,7 +43,62 @@
 		B44A57322225A11A00570604 /* CoreMedia.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreMedia.framework; path = System/Library/Frameworks/CoreMedia.framework; sourceTree = SDKROOT; };
 		B44A57342225A17700570604 /* TareSIPDemo-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "TareSIPDemo-Bridging-Header.h"; sourceTree = "<group>"; };
 		B44A573A2225A67600570604 /* config */ = {isa = PBXFileReference; lastKnownFileType = text; path = config; sourceTree = "<group>"; };
+		B455D14522281665007F61F4 /* re.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = re.h; sourceTree = "<group>"; };
+		B455D14622281665007F61F4 /* re_aes.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = re_aes.h; sourceTree = "<group>"; };
+		B455D14722281665007F61F4 /* re_base64.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = re_base64.h; sourceTree = "<group>"; };
+		B455D14822281665007F61F4 /* re_bfcp.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = re_bfcp.h; sourceTree = "<group>"; };
+		B455D14922281665007F61F4 /* re_bitv.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = re_bitv.h; sourceTree = "<group>"; };
+		B455D14A22281665007F61F4 /* re_conf.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = re_conf.h; sourceTree = "<group>"; };
+		B455D14B22281665007F61F4 /* re_crc32.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = re_crc32.h; sourceTree = "<group>"; };
+		B455D14C22281665007F61F4 /* re_dbg.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = re_dbg.h; sourceTree = "<group>"; };
+		B455D14D22281665007F61F4 /* re_dns.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = re_dns.h; sourceTree = "<group>"; };
+		B455D14E22281665007F61F4 /* re_fmt.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = re_fmt.h; sourceTree = "<group>"; };
+		B455D14F22281665007F61F4 /* re_hash.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = re_hash.h; sourceTree = "<group>"; };
+		B455D15022281665007F61F4 /* re_hmac.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = re_hmac.h; sourceTree = "<group>"; };
+		B455D15122281665007F61F4 /* re_http.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = re_http.h; sourceTree = "<group>"; };
+		B455D15222281665007F61F4 /* re_httpauth.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = re_httpauth.h; sourceTree = "<group>"; };
+		B455D15322281665007F61F4 /* re_ice.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = re_ice.h; sourceTree = "<group>"; };
+		B455D15422281665007F61F4 /* re_jbuf.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = re_jbuf.h; sourceTree = "<group>"; };
+		B455D15522281665007F61F4 /* re_json.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = re_json.h; sourceTree = "<group>"; };
+		B455D15622281665007F61F4 /* re_list.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = re_list.h; sourceTree = "<group>"; };
+		B455D15722281665007F61F4 /* re_lock.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = re_lock.h; sourceTree = "<group>"; };
+		B455D15822281665007F61F4 /* re_main.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = re_main.h; sourceTree = "<group>"; };
+		B455D15922281665007F61F4 /* re_mbuf.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = re_mbuf.h; sourceTree = "<group>"; };
+		B455D15A22281665007F61F4 /* re_md5.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = re_md5.h; sourceTree = "<group>"; };
+		B455D15B22281665007F61F4 /* re_mem.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = re_mem.h; sourceTree = "<group>"; };
+		B455D15C22281665007F61F4 /* re_mod.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = re_mod.h; sourceTree = "<group>"; };
+		B455D15D22281665007F61F4 /* re_mqueue.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = re_mqueue.h; sourceTree = "<group>"; };
+		B455D15E22281665007F61F4 /* re_msg.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = re_msg.h; sourceTree = "<group>"; };
+		B455D15F22281665007F61F4 /* re_natbd.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = re_natbd.h; sourceTree = "<group>"; };
+		B455D16022281665007F61F4 /* re_net.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = re_net.h; sourceTree = "<group>"; };
+		B455D16122281665007F61F4 /* re_odict.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = re_odict.h; sourceTree = "<group>"; };
+		B455D16222281665007F61F4 /* re_rtmp.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = re_rtmp.h; sourceTree = "<group>"; };
+		B455D16322281665007F61F4 /* re_rtp.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = re_rtp.h; sourceTree = "<group>"; };
+		B455D16422281665007F61F4 /* re_sa.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = re_sa.h; sourceTree = "<group>"; };
+		B455D16522281665007F61F4 /* re_sdp.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = re_sdp.h; sourceTree = "<group>"; };
+		B455D16622281665007F61F4 /* re_sha.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = re_sha.h; sourceTree = "<group>"; };
+		B455D16722281665007F61F4 /* re_sip.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = re_sip.h; sourceTree = "<group>"; };
+		B455D16822281665007F61F4 /* re_sipevent.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = re_sipevent.h; sourceTree = "<group>"; };
+		B455D16922281665007F61F4 /* re_sipreg.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = re_sipreg.h; sourceTree = "<group>"; };
+		B455D16A22281665007F61F4 /* re_sipsess.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = re_sipsess.h; sourceTree = "<group>"; };
+		B455D16B22281665007F61F4 /* re_srtp.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = re_srtp.h; sourceTree = "<group>"; };
+		B455D16C22281665007F61F4 /* re_stun.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = re_stun.h; sourceTree = "<group>"; };
+		B455D16D22281665007F61F4 /* re_sys.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = re_sys.h; sourceTree = "<group>"; };
+		B455D16E22281665007F61F4 /* re_tcp.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = re_tcp.h; sourceTree = "<group>"; };
+		B455D16F22281665007F61F4 /* re_telev.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = re_telev.h; sourceTree = "<group>"; };
+		B455D17022281665007F61F4 /* re_tls.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = re_tls.h; sourceTree = "<group>"; };
+		B455D17122281665007F61F4 /* re_tmr.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = re_tmr.h; sourceTree = "<group>"; };
+		B455D17222281665007F61F4 /* re_turn.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = re_turn.h; sourceTree = "<group>"; };
+		B455D17322281665007F61F4 /* re_types.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = re_types.h; sourceTree = "<group>"; };
+		B455D17422281665007F61F4 /* re_udp.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = re_udp.h; sourceTree = "<group>"; };
+		B455D17522281665007F61F4 /* re_uri.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = re_uri.h; sourceTree = "<group>"; };
+		B455D17622281665007F61F4 /* re_websock.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = re_websock.h; sourceTree = "<group>"; };
+		B455D17722281665007F61F4 /* baresip.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = baresip.h; sourceTree = SOURCE_ROOT; };
+		B455D1782228170A007F61F4 /* libbaresip.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libbaresip.a; sourceTree = "<group>"; };
+		B455D1792228170A007F61F4 /* libre.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libre.a; sourceTree = "<group>"; };
+		B455D17A2228170A007F61F4 /* librem.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = librem.a; sourceTree = "<group>"; };
 		B49EE8562227EA7E00B8F170 /* CallCell.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallCell.swift; sourceTree = "<group>"; };
+		B4ABB295222824B200644446 /* static.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = static.c; sourceTree = SOURCE_ROOT; };
 		B4E342B722259C9200D70E9A /* TareSIPDemo.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = TareSIPDemo.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		B4E342BA22259C9200D70E9A /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		B4E342BC22259C9200D70E9A /* SipCallsViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SipCallsViewController.swift; sourceTree = "<group>"; };
@@ -53,6 +114,10 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				B44726622228191C00C1468C /* libresolv.9.tbd in Frameworks */,
+				B455D17B2228170A007F61F4 /* libbaresip.a in Frameworks */,
+				B455D17C2228170A007F61F4 /* libre.a in Frameworks */,
+				B455D17D2228170A007F61F4 /* librem.a in Frameworks */,
 				B44A57332225A11A00570604 /* CoreMedia.framework in Frameworks */,
 				B44A57312225A10F00570604 /* SystemConfiguration.framework in Frameworks */,
 				B44A572F2225A10500570604 /* AVFoundation.framework in Frameworks */,
@@ -68,6 +133,10 @@
 		193ED1425638EE209F25F16F /* Frameworks */ = {
 			isa = PBXGroup;
 			children = (
+				B44726612228191C00C1468C /* libresolv.9.tbd */,
+				B455D1782228170A007F61F4 /* libbaresip.a */,
+				B455D1792228170A007F61F4 /* libre.a */,
+				B455D17A2228170A007F61F4 /* librem.a */,
 				B44A57322225A11A00570604 /* CoreMedia.framework */,
 				B44A57302225A10F00570604 /* SystemConfiguration.framework */,
 				B44A572E2225A10400570604 /* AVFoundation.framework */,
@@ -86,6 +155,63 @@
 			);
 			path = Pods;
 			sourceTree = "<group>";
+		};
+		B455D14422281665007F61F4 /* re */ = {
+			isa = PBXGroup;
+			children = (
+				B455D14522281665007F61F4 /* re.h */,
+				B455D14622281665007F61F4 /* re_aes.h */,
+				B455D14722281665007F61F4 /* re_base64.h */,
+				B455D14822281665007F61F4 /* re_bfcp.h */,
+				B455D14922281665007F61F4 /* re_bitv.h */,
+				B455D14A22281665007F61F4 /* re_conf.h */,
+				B455D14B22281665007F61F4 /* re_crc32.h */,
+				B455D14C22281665007F61F4 /* re_dbg.h */,
+				B455D14D22281665007F61F4 /* re_dns.h */,
+				B455D14E22281665007F61F4 /* re_fmt.h */,
+				B455D14F22281665007F61F4 /* re_hash.h */,
+				B455D15022281665007F61F4 /* re_hmac.h */,
+				B455D15122281665007F61F4 /* re_http.h */,
+				B455D15222281665007F61F4 /* re_httpauth.h */,
+				B455D15322281665007F61F4 /* re_ice.h */,
+				B455D15422281665007F61F4 /* re_jbuf.h */,
+				B455D15522281665007F61F4 /* re_json.h */,
+				B455D15622281665007F61F4 /* re_list.h */,
+				B455D15722281665007F61F4 /* re_lock.h */,
+				B455D15822281665007F61F4 /* re_main.h */,
+				B455D15922281665007F61F4 /* re_mbuf.h */,
+				B455D15A22281665007F61F4 /* re_md5.h */,
+				B455D15B22281665007F61F4 /* re_mem.h */,
+				B455D15C22281665007F61F4 /* re_mod.h */,
+				B455D15D22281665007F61F4 /* re_mqueue.h */,
+				B455D15E22281665007F61F4 /* re_msg.h */,
+				B455D15F22281665007F61F4 /* re_natbd.h */,
+				B455D16022281665007F61F4 /* re_net.h */,
+				B455D16122281665007F61F4 /* re_odict.h */,
+				B455D16222281665007F61F4 /* re_rtmp.h */,
+				B455D16322281665007F61F4 /* re_rtp.h */,
+				B455D16422281665007F61F4 /* re_sa.h */,
+				B455D16522281665007F61F4 /* re_sdp.h */,
+				B455D16622281665007F61F4 /* re_sha.h */,
+				B455D16722281665007F61F4 /* re_sip.h */,
+				B455D16822281665007F61F4 /* re_sipevent.h */,
+				B455D16922281665007F61F4 /* re_sipreg.h */,
+				B455D16A22281665007F61F4 /* re_sipsess.h */,
+				B455D16B22281665007F61F4 /* re_srtp.h */,
+				B455D16C22281665007F61F4 /* re_stun.h */,
+				B455D16D22281665007F61F4 /* re_sys.h */,
+				B455D16E22281665007F61F4 /* re_tcp.h */,
+				B455D16F22281665007F61F4 /* re_telev.h */,
+				B455D17022281665007F61F4 /* re_tls.h */,
+				B455D17122281665007F61F4 /* re_tmr.h */,
+				B455D17222281665007F61F4 /* re_turn.h */,
+				B455D17322281665007F61F4 /* re_types.h */,
+				B455D17422281665007F61F4 /* re_udp.h */,
+				B455D17522281665007F61F4 /* re_uri.h */,
+				B455D17622281665007F61F4 /* re_websock.h */,
+			);
+			path = re;
+			sourceTree = SOURCE_ROOT;
 		};
 		B4E342AE22259C9200D70E9A = {
 			isa = PBXGroup;
@@ -108,6 +234,8 @@
 		B4E342B922259C9200D70E9A /* TareSIPDemo */ = {
 			isa = PBXGroup;
 			children = (
+				B455D17722281665007F61F4 /* baresip.h */,
+				B455D14422281665007F61F4 /* re */,
 				B4E342BA22259C9200D70E9A /* AppDelegate.swift */,
 				B4E342BC22259C9200D70E9A /* SipCallsViewController.swift */,
 				B49EE8562227EA7E00B8F170 /* CallCell.swift */,
@@ -120,6 +248,7 @@
 				B44A573A2225A67600570604 /* config */,
 				B41B7A102226C2800078B9F7 /* SipClient.h */,
 				B41B7A112226C2800078B9F7 /* SipClient.mm */,
+				B4ABB295222824B200644446 /* static.c */,
 			);
 			path = TareSIPDemo;
 			sourceTree = "<group>";
@@ -228,6 +357,7 @@
 				B49EE8572227EA7E00B8F170 /* CallCell.swift in Sources */,
 				B41B7A122226C2800078B9F7 /* SipClient.mm in Sources */,
 				B4E342BB22259C9200D70E9A /* AppDelegate.swift in Sources */,
+				B4ABB296222824B200644446 /* static.c in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -378,10 +508,15 @@
 				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_TEAM = GFN9SKWLAD;
 				ENABLE_BITCODE = NO;
+				FRAMEWORK_SEARCH_PATHS = "$(PROJECT_DIR)";
 				INFOPLIST_FILE = TareSIPDemo/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
+				);
+				LIBRARY_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(PROJECT_DIR)",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.wiseland.TareSIPDemo;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -401,10 +536,15 @@
 				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_TEAM = GFN9SKWLAD;
 				ENABLE_BITCODE = NO;
+				FRAMEWORK_SEARCH_PATHS = "$(PROJECT_DIR)";
 				INFOPLIST_FILE = TareSIPDemo/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
+				);
+				LIBRARY_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(PROJECT_DIR)",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.wiseland.TareSIPDemo;
 				PRODUCT_NAME = "$(TARGET_NAME)";

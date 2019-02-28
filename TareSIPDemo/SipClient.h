@@ -56,7 +56,7 @@ NS_ASSUME_NONNULL_BEGIN
 
 /// SIP Call
 @interface SipCall : NSObject
-@property (nonatomic, readonly) NSString* remoteUri;
+@property (nonatomic, readonly) NSString* peerUri;
 
 - (void)answer;
 - (void)hangup:(unsigned short)statusCode reason:(NSString*)reason;

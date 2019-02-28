@@ -68,11 +68,14 @@ extension SipCallsViewController : SipClientDelegate {
     }
     
     func onCallIncoming(_ sipCall: SipCall) {
-        logsTextView.text += "Incomming call from \(sipCall.remoteUri)...\n";
+        logsTextView.text += "Incomming call from \(sipCall.peerUri)...\n";
         
-        let alertController = UIAlertController(title: sipCall.remoteUri, message: "Incoming Call", preferredStyle: .alert)
+        let alertController = UIAlertController(title: sipCall.peerUri, message: "Incoming Call", preferredStyle: .alert)
         alertController.addAction(UIAlertAction(title: "Answer", style: .default) { _ in
             sipCall.answer()
+        })
+        alertController.addAction(UIAlertAction(title: "Hold", style: .default) { _ in
+            sipCall.holdAnswer()
         })
         alertController.addAction(UIAlertAction(title: "Decline", style: .default) { _ in
             sipCall.hangup(486, reason: "Busy Here")
@@ -85,19 +88,19 @@ extension SipCallsViewController : SipClientDelegate {
     }
     
     func onCallRinging(_ sipCall: SipCall) {
-        logsTextView.text += "Call ringing from \(sipCall.remoteUri)...\n";
+        logsTextView.text += "Call ringing from \(sipCall.peerUri)...\n";
     }
     
     func onCallProcess(_ sipCall: SipCall) {
-        logsTextView.text += "Call process from \(sipCall.remoteUri)...\n";
+        logsTextView.text += "Call process from \(sipCall.peerUri)...\n";
     }
     
     func onCallEstablished(_ sipCall: SipCall) {
-        logsTextView.text += "Call established from \(sipCall.remoteUri)...\n";
+        logsTextView.text += "Call established from \(sipCall.peerUri)...\n";
     }
     
     func onCallClosed(_ sipCall: SipCall) {
-        logsTextView.text += "Call closed from \(sipCall.remoteUri)...\n";
+        logsTextView.text += "Call closed from \(sipCall.peerUri)...\n";
         
         calls.remove(sipCall)
         callsTableView.reloadData()
@@ -106,14 +109,15 @@ extension SipCallsViewController : SipClientDelegate {
 
 extension SipCallsViewController : UITableViewDataSource {
     func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
-        return calls.count
+//        return calls.count
+        return 0
     }
     
     func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
         let cell = tableView.dequeueReusableCell(withIdentifier: "CellId", for: indexPath) as! CallCell
         let calls = Array(self.calls)
         let sipCall = calls[indexPath.row]
-        cell.remoteUriLabel.text = sipCall.remoteUri
+        cell.remoteUriLabel.text = sipCall.peerUri
         return cell
     }
 }

@@ -11,8 +11,8 @@ import UIKit
 class SipCallDetailsViewController : UIViewController {
     var sipCall: SipCall!
 
-    @IBAction func hold(_ sender: Any) {
-        sipCall.holdAnswer()
+    @IBAction func answer(_ sender: Any) {
+        sipCall.answer()
     }
     
     @IBAction func hangup(_ sender: Any) {

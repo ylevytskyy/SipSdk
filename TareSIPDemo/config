@@ -43,9 +43,10 @@ jitter_buffer_delay    5-10        # frames
 #module_path        /usr/local/lib/baresip/modules
 
 # UI Modules
-module            stdio.so
+#module            stdio.so
 #module            cons.so
 #module            evdev.so
+module            opengles.so
 
 # Audio codec Modules (in order)
 module            opus.so

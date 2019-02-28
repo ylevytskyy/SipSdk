@@ -10,8 +10,8 @@
 
 #define HAVE__BOOL
 
-#import <re.h>
-#import <baresip.h>
+#import "re.h"
+#import "baresip.h"
 
 #include <unordered_map>
 
@@ -19,15 +19,8 @@ static const int kDefaultPort = 5060;
 
 static std::unordered_map<call*, SipCall*> sipCallsCache;
 
-//static dispatch_once_t eventDispatchQueueToken;
-//static dispatch_queue_t eventDispatchQueue;
-
 @interface SipCall ()
-@property (nonatomic) struct ua *ua;
 @property (nonatomic) struct call* call;
-@property (nonatomic) int baresipResultCode;
-
-@property (nonatomic) NSString* cachedRemoteUri;
 @end
 
 @implementation SipCall
@@ -40,21 +33,44 @@ static std::unordered_map<call*, SipCall*> sipCallsCache;
     sipCallsCache.erase(self.call);
 }
 
-- (NSString*)remoteUri {
-    return self.cachedRemoteUri;
+- (NSString*)peerUri {
+    return @(call_peeruri(self.call));
 }
 
 - (void)answer {
-    ua_answer(self.ua, self.call);
+    ua_answer(call_get_ua(self.call), self.call);
 }
 
 - (void)hangup:(unsigned short)statusCode reason:(NSString*)reason {
-    ua_hangup(self.ua, self.call, statusCode, [reason cStringUsingEncoding:NSUTF8StringEncoding]);
+    ua_hangup(call_get_ua(self.call), self.call, statusCode, [reason cStringUsingEncoding:NSUTF8StringEncoding]);
 }
 
 - (void)holdAnswer {
-    ua_hold_answer(self.ua, self.call);
+    ua_hold_answer(call_get_ua(self.call), self.call);
 }
+
+/*
+ int  call_connect(struct call *call, const struct pl *paddr);
+ int  call_modify(struct call *call);
+ int  call_hold(struct call *call, bool hold);
+ int  call_send_digit(struct call *call, char key);
+ bool call_has_audio(const struct call *call);
+ bool call_has_video(const struct call *call);
+ int  call_transfer(struct call *call, const char *uri);
+
+ uint16_t      call_scode(const struct call *call);
+ uint32_t      call_duration(const struct call *call);
+ uint32_t      call_setup_duration(const struct call *call);
+ const char   *call_id(const struct call *call);
+ const char   *call_peername(const struct call *call);
+ const char   *call_localuri(const struct call *call);
+ struct audio *call_audio(const struct call *call);
+ struct video *call_video(const struct call *call);
+ struct list  *call_streaml(const struct call *call);
+ struct ua    *call_get_ua(const struct call *call);
+ bool          call_is_onhold(const struct call *call);
+ bool          call_is_outgoing(const struct call *call);
+ */
 @end
 
 @interface SipClient()
@@ -65,11 +81,13 @@ static SipCall* getSipCall(struct call *call, SipClient* sipSdk, NSString* remot
     SipCall* sipCall;
     auto sipCallCache = sipCallsCache.find(call);
     if (sipCallCache == sipCallsCache.end()) {
+        NSLog(@"New call created");
+        
         sipCall = [[SipCall alloc] init];
-        sipCall.ua = sipSdk.ua;
         sipCall.call = call;
-        sipCall.cachedRemoteUri = remoteUri;
     } else {
+        NSLog(@"Existing call found");
+        
         sipCall = sipCallCache->second;
     }
     
@@ -79,7 +97,7 @@ static SipCall* getSipCall(struct call *call, SipClient* sipSdk, NSString* remot
 static void ua_event_handler(struct ua *ua, enum ua_event ev,
     struct call *call, const char *prm, void *arg)
 {
-    NSLog(@"ua_event_handler %@ %@", @(ev), @(prm));
+    NSLog(@"ua_event_handler ev = \"%@\" prm = \"%@\" call = \"%@\"", @(ev), @(prm), @((long)call));
     
     SipClient* sipSdk = (__bridge SipClient*)arg;
     SipCall* sipCall = getSipCall(call, sipSdk, @(prm));
@@ -196,11 +214,6 @@ static void ua_event_handler(struct ua *ua, enum ua_event ev,
 }
 
 @implementation SipClient
-//+ (void)load {
-//    dispatch_once (&eventDispatchQueueToken, ^{
-//        eventDispatchQueue = dispatch_queue_create("SIPSDK Event Queue", NULL);
-//    });
-//}
 
 - (NSString*)aor {
     return @(ua_aor(self.ua));
@@ -218,9 +231,9 @@ static void ua_event_handler(struct ua *ua, enum ua_event ev,
 }
 
 - (int)start {
-    int result = libre_init();
-    if (result != 0) {
-        return result;
+    int error = libre_init();
+    if (error != 0) {
+        return error;
     }
     
     // Initialize dynamic modules.
@@ -231,39 +244,44 @@ static void ua_event_handler(struct ua *ua, enum ua_event ev,
         conf_path_set([documentDirectory cStringUsingEncoding:NSUTF8StringEncoding]);
     }
     
-    result = conf_configure();
-    if (result != 0) {
-        return result;
+    error = conf_configure();
+    if (error != 0) {
+        return error;
+    }
+    
+    error = baresip_init(conf_config(), false);
+    if (error != 0) {
+        return error;
     }
 
     // Initialize the SIP stack.
-    result = ua_init("SIP", 1, 1, 1, 0);
-    if (result != 0) {
-        return result;
+    error = ua_init("SIP", 1, 1, 1, 0);
+    if (error != 0) {
+        return error;
     }
 
     // Register UA event handler
-    result = uag_event_register(ua_event_handler, (__bridge void *)(self));
-    if (result != 0) {
-        return result;
+    error = uag_event_register(ua_event_handler, (__bridge void *)(self));
+    if (error != 0) {
+        return error;
     }
     
-    result = conf_modules();
-    if (result != 0) {
-        return result;
+    error = conf_modules();
+    if (error != 0) {
+        return error;
     }
-
+    
     NSString* aor;
     if (self.password) {
-        aor = [NSString stringWithFormat:@"sip:%@:%@@%@:%@", self.username, self.password, self.domain, @(self.port)];
+        aor = [NSString stringWithFormat:@"sip:%@@%@:%@;auth_pass=%@", self.username, self.domain, @(self.port), self.password];
     } else {
         aor = [NSString stringWithFormat:@"sip:%@@%@:%@", self.username, self.domain, @(self.port)];
     }
     
     // Start user agent.
-    result = ua_alloc(&_ua, [aor cStringUsingEncoding:NSUTF8StringEncoding]);
-    if (result != 0) {
-        return result;
+    error = ua_alloc(&_ua, [aor cStringUsingEncoding:NSUTF8StringEncoding]);
+    if (error != 0) {
+        return error;
     }
     
     // Start the main loop.
@@ -296,9 +314,9 @@ static void ua_event_handler(struct ua *ua, enum ua_event ev,
 }
 
 - (int)registry {
-    int result = ua_register(self.ua);
-    if (result != 0) {
-        return result;
+    int error = ua_register(self.ua);
+    if (error != 0) {
+        return error;
     }
     return 0;
 }
@@ -313,13 +331,11 @@ static void ua_event_handler(struct ua *ua, enum ua_event ev,
 
 - (SipCall*)makeCall:(NSString*)uri {
     SipCall* sipCall = [[SipCall alloc] init];
-    sipCall.ua = self.ua;
-    sipCall.cachedRemoteUri = uri;
 
     struct call *call;
-    int result = ua_connect(self.ua, &call, nil, [uri cStringUsingEncoding:NSUTF8StringEncoding], nil, VIDMODE_OFF);
-    if (result != 0) {
-        sipCall.baresipResultCode = result;
+    int error = ua_connect(self.ua, &call, [uri cStringUsingEncoding:NSUTF8StringEncoding], nil, VIDMODE_OFF);
+    if (error != 0) {
+        return nil;
     } else {
         sipCall.call = call;
     }
