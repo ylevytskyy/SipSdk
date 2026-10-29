@@ -106,6 +106,7 @@ build_slice() {
   local archive_symbols
   archive_symbols="$(xcrun nm -g "$baresip_build/libbaresip.a")"
   local -a missing_module_objects=()
+  local has_missing_module_objects=0
   local module
   for module in "${MODULES[@]}"; do
     if grep -Eq "[[:space:]][A-TV-Z][[:space:]]_?exports_${module}$" <<< "$archive_symbols"; then
@@ -122,14 +123,21 @@ build_slice() {
 
     (("${#found[@]}" > 0)) || die "No compiled objects found for module '$module' ($sdk/$arch)"
     missing_module_objects+=("${found[@]}")
+    has_missing_module_objects=1
   done
 
   [[ -f "$baresip_build/libbaresip.a" ]] || die "libbaresip.a was not produced"
   [[ -f "$prefix/lib/libre.a" ]] || die "libre.a was not installed"
 
   mkdir -p "$slice/output"
-  xcrun libtool -static -o "$slice/output/libBaresipCore.a" \
-    "$baresip_build/libbaresip.a" "$prefix/lib/libre.a" "${missing_module_objects[@]}"
+  if [[ "$has_missing_module_objects" -eq 1 ]]; then
+    xcrun libtool -static -o "$slice/output/libBaresipCore.a" \
+      "$baresip_build/libbaresip.a" "$prefix/lib/libre.a" "${missing_module_objects[@]}"
+  else
+    # Bash 3.2 treats expanding an empty array under set -u as an unbound variable.
+    xcrun libtool -static -o "$slice/output/libBaresipCore.a" \
+      "$baresip_build/libbaresip.a" "$prefix/lib/libre.a"
+  fi
 
   xcrun lipo -verify_arch "$arch" "$slice/output/libBaresipCore.a"
 }
