@@ -9,8 +9,9 @@ on:
       - ".github/workflows/publish-baresip-xcframework.yml"
       - "scripts/build-baresip-xcframework.sh"
       - "scripts/check-baresip-adapter.sh"
-      - "TareSIPDemo/SipClientBaresipV4.mm"
-      - "TareSIPDemo/config.baresip-v4"
+      - "scripts/generate-spm-package.sh"
+      - "Package.swift"
+      - "Sources/SipSdk/**"
       - "docs/SPM_MIGRATION.md"
   workflow_dispatch:
 
@@ -40,6 +41,9 @@ jobs:
 
       - name: Build pinned Baresip and libre slices
         run: ./scripts/build-baresip-xcframework.sh "$RUNNER_TEMP/baresip-output"
+
+      - name: Check SwiftPM manifest generator syntax
+        run: bash -n ./scripts/generate-spm-package.sh
 
       - name: Compile-check Baresip v4 adapter
         run: bash ./scripts/check-baresip-adapter.sh "$RUNNER_TEMP/baresip-output"
