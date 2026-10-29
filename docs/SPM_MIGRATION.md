@@ -17,11 +17,11 @@ The tag-triggered workflow .github/workflows/publish-baresip-xcframework.yml reb
 
 ## Adapter port staged for validation
 
-TareSIPDemo/SipClientBaresipV4.mm ports the existing SipClientDelegate contract to the Baresip v4 event/call API. It is intentionally not added to TareSIPDemo.xcodeproj yet: the current CocoaPods app still compiles against the old API, and that working path must remain intact until the release-backed SwiftPM dependency is available.
+Sources/SipSdk/SipClientBaresipV4.mm ports the existing SipClientDelegate contract to the Baresip v4 event/call API. It is intentionally not added to TareSIPDemo.xcodeproj yet: the current CocoaPods app still compiles against the old API, and that working path must remain intact until the release-backed SwiftPM dependency is available.
 
 The native-build workflow runs scripts/check-baresip-adapter.sh, which syntax-checks the new Objective-C++ source and compiles/links it against the freshly built XCFramework for iOS device arm64 and iOS Simulator arm64/x86_64. This catches API mismatch and unresolved native symbols, but it does not prove successful integration into the full demo app or functional SIP/audio behavior.
 
-The paired TareSIPDemo/config.baresip-v4 is a minimal configuration for the modules included in the current XCFramework build: g711, audiounit, account, stun, turn, ice, and srtp. The adapter stores the v4 config under a separate Documents/baresip-v4 directory so an older Documents/config left by the CocoaPods app is not accidentally reused.
+The paired Sources/SipSdk/Resources/config.baresip-v4 is a minimal configuration for the modules included in the current XCFramework build: g711, audiounit, account, stun, turn, ice, and srtp. The adapter stores the v4 config under a separate Documents/baresip-v4 directory so an older Documents/config left by the CocoaPods app is not accidentally reused. In the eventual SwiftPM package, the config is copied into the generated SipSdk_SipSdk.bundle resource bundle.
 
 ### API differences handled by the adapter
 
@@ -34,9 +34,9 @@ The paired TareSIPDemo/config.baresip-v4 is a minimal configuration for the modu
 
 ## Next steps
 
-1. Review and merge the adapter compile-check PR only when both the existing CocoaPods app build and the Baresip v4 build/syntax check pass.
-2. Publish the XCFramework with a baresip-core-v* tag after the build and release workflows are present on the tagged commit. Confirm the release ZIP, checksum, metadata and license assets.
-3. Add a SwiftPM binaryTarget using the real release URL and exact generated checksum. Migrate the demo target to SwiftPM in a separate change and stop compiling the legacy SipClient.mm when compiling the v4 adapter.
+1. Create and push the annotated baresip-core-v4.12.0 tag on the verified master commit so the release workflow can publish the XCFramework ZIP, checksum, metadata and license assets.
+2. After the release exists, run `scripts/generate-spm-package.sh 4.12.0`. The script downloads the published ZIP and checksum sidecar, computes SHA-256 independently, checks the archive contents, and only then generates `Package.swift` with the real URL/checksum. Do not hand-write or guess the checksum.
+3. Run `swift package resolve` and build the package for iOS device and Simulator. Then migrate the demo target to the generated SwiftPM package in a separate change and stop compiling the legacy `SipClient.mm` when compiling the v4 adapter.
 4. Test on a physical iPhone against a controlled SIP server/account: registration success/failure, incoming and outgoing calls, answer/hangup, DTMF, audio both ways, repeated start/stop, and cleanup after failed initialization. Only then remove Podfile / Podfile.lock.
 
 ## Build locally
