@@ -13,7 +13,7 @@ The scripts/build-baresip-xcframework.sh script pins and verifies these upstream
 
 The script builds a static core for iOS device arm64 and iOS Simulator arm64 + x86_64, creates an XCFramework, and generates a ZIP and SHA-256 checksum. CI performs link smoke tests against the public startup/call APIs for device arm64 and both Simulator architectures. The distribution ZIP includes the upstream Baresip and libre license texts. The pinned libre checkout receives two deterministic iOS build adjustments: its Apple/OpenSSL-disabled build includes the TLS API stubs required by UA allocation, and its legacy HAVE_RESOLV resolver path is disabled because the required resolver symbols are unavailable in the iOS SDK.
 
-The tag-triggered workflow .github/workflows/publish-baresip-xcframework.yml rebuilds the pinned sources and publishes a GitHub Release containing the XCFramework ZIP, generated SHA-256 file, build metadata, and standalone license files. Use the exact checksum from the published release when defining the SwiftPM binary target; never use a temporary Actions artifact URL.
+The release workflow .github/workflows/publish-baresip-xcframework.yml can publish through either a pushed `baresip-core-vX.Y.Z` tag or the GitHub Actions manual-dispatch UI. The manual path must be run from `master`; it creates an annotated version tag at the exact selected commit and then builds and publishes a GitHub Release containing the XCFramework ZIP, SHA-256 file, build metadata, and standalone license files. Use the exact checksum from the published release when defining the SwiftPM binary target; never use a temporary Actions artifact URL.
 
 ## Adapter port staged for validation
 
@@ -34,7 +34,7 @@ The paired Sources/SipSdk/Resources/config.baresip-v4 is a minimal configuration
 
 ## Next steps
 
-1. Create and push the annotated baresip-core-v4.12.0 tag on the verified master commit so the release workflow can publish the XCFramework ZIP, checksum, metadata and license assets.
+1. Publish the pinned Baresip XCFramework release from GitHub Actions: open **Actions → Publish Baresip Core XCFramework → Run workflow**, select `master`, and enter `4.12.0`. The workflow creates the annotated `baresip-core-v4.12.0` tag at that master commit and publishes the ZIP, checksum, metadata and license assets. Alternatively, push the same annotated tag locally if you prefer the tag-triggered path.
 2. After the release exists, run `bash scripts/generate-spm-package.sh 4.12.0`. The script downloads the published ZIP and checksum sidecar, computes SHA-256 independently, checks the archive contents, and only then generates `Package.swift` with the real URL/checksum. Do not hand-write or guess the checksum.
 3. Run `swift package resolve` and build the package for iOS device and Simulator. Then migrate the demo target to the generated SwiftPM package in a separate change and stop compiling the legacy `SipClient.mm` when compiling the v4 adapter.
 4. Test on a physical iPhone against a controlled SIP server/account: registration success/failure, incoming and outgoing calls, answer/hangup, DTMF, audio both ways, repeated start/stop, and cleanup after failed initialization. Only then remove Podfile / Podfile.lock.
