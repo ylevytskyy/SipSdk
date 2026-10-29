@@ -1,65 +1,75 @@
 # SipSdk (TareSIP Demo for iOS)
 
-> Objective-C++ & Swift VoIP Client SDK powered by the BareSIP modular SIP engine.
+> Objective-C++ and Swift demo client for the BareSIP modular SIP engine, integrated through the legacy `taresip` CocoaPod.
 
-`SipSdk` provides an easy-to-use iOS integration layer for BareSIP. It bridges native C SIP/SDP/RTP/audio-driver internals into clean Objective-C and Swift abstractions, enabling background VoIP calls, session management, and DTMF signaling.
+This repository currently contains an iOS demo application and a thin Objective-C++ wrapper around the native SIP API. It is not yet a standalone, versioned binary SDK.
 
----
+## Architecture
 
-## 🏛 Architecture
-
-```
-┌──────────────────────────────────────────────┐
-│             Swift UI Application             │
-│   (SipCallsViewController, Call Details)     │
-└──────────────────────┬───────────────────────┘
-                       │ Bridging Header
-                       ▼
-┌──────────────────────────────────────────────┐
-│           Objective-C++ SIP SDK              │
-│       (SipClient.mm, SipClientDelegate)      │
-└──────────────────────┬───────────────────────┘
-                       │ Native C FFI / CocoaPods
-                       ▼
-┌──────────────────────────────────────────────┐
-│             BareSIP / Libre / Librem         │
-│     (AudioUnit, SIP, RTP/RTCP, Codecs)       │
-└──────────────────────────────────────────────┘
+```text
+Swift UIKit application
+        |
+        | Objective-C bridging header
+        v
+Objective-C++ wrapper (SipClient.mm)
+        |
+        | native C API
+        v
+TareSIP / BareSIP libraries (SIP, RTP, audio and codecs)
 ```
 
----
+## Features
 
-## 🚀 Features
+- SIP registration and deregistration.
+- Incoming and outgoing audio calls.
+- Call lifecycle callbacks exposed through `SipClientDelegate`.
+- DTMF start/end events.
+- Swift interoperability through `SipClient.h`.
 
-- **Protocol Support:** Full SIP signaling, registration, call state machine, and bidirectional audio streaming via iOS AudioUnit.
-- **Event-Driven Delegate:** Clean `SipClientDelegate` protocol covering registration events, incoming calls, ringing, established sessions, and DTMF start/end.
-- **Swift Interoperability:** Clang-bridged headers allowing idiomatic Swift consumption without leaking low-level C pointers.
-- **Dependency Management:** Integrated via CocoaPods (`taresip`).
+## Requirements
 
----
+- macOS with Xcode and the iOS Simulator SDK.
+- Ruby and CocoaPods.
+- An SIP account and server that you are authorized to use for testing.
 
-## 📋 Delegate API Overview
+The app was originally created with Swift 4.2 and an iOS deployment target of 12.1. It relies on `taresip 0.1.1`, whose CocoaPods release dates to 2016. This native dependency is the primary compatibility risk; do not blindly upgrade it or swap it for current BareSIP libraries without checking the C API and binary/linking compatibility.
 
-```objc
-@protocol SipClientDelegate <NSObject>
-@optional
-- (void)onDidRegister:(SipClient *)sipSdk;
-- (void)onFailedRegister:(SipClient *)sipSdk;
-- (void)onCallIncoming:(SipCall *)sipCall;
-- (void)onCallRinging:(SipCall *)sipCall;
-- (void)onCallEstablished:(SipCall *)sipCall;
-- (void)onCallClosed:(SipCall *)sipCall;
-- (void)onCallDtmfStart:(SipCall *)sipCall;
-@end
+## Build
+
+From the repository root:
+
+```bash
+gem install cocoapods --version 1.17.0
+pod install --repo-update
+open TareSIPDemo.xcworkspace
 ```
 
----
+In Xcode, select the `TareSIPDemo` scheme and an iOS Simulator or connected device, then build. For a command-line simulator build:
 
-## 🛠 Quick Start
+```bash
+xcodebuild \
+  -workspace TareSIPDemo.xcworkspace \
+  -scheme TareSIPDemo \
+  -configuration Debug \
+  -sdk iphonesimulator \
+  -destination 'generic/platform=iOS Simulator' \
+  CODE_SIGNING_ALLOWED=NO \
+  build
+```
 
-1. Install dependencies via CocoaPods:
-   ```bash
-   pod install
-   ```
-2. Open `TareSIPDemo.xcworkspace` in Xcode.
-3. Configure your SIP server credentials in `config` or via client initialization, then build and run on a physical device or simulator.
+A GitHub Actions workflow runs the same dependency installation and simulator build on pushes and pull requests.
+
+## SIP configuration
+
+Configure a test SIP account in `TareSIPDemo/SipCallsViewController.swift` before running the app. Do not commit real account credentials. The bundled `TareSIPDemo/config` file contains BareSIP module and audio settings; it is not a secrets store.
+
+## Known limitations / next steps
+
+- The `taresip` 0.1.1 pod is old and has no automated tests published on CocoaPods. Validate dependency installation and the simulator build before planning further modernization.
+- The repository does not yet commit a generated `Podfile.lock`; after a successful install, commit the lockfile so local and CI dependency resolution remain reproducible.
+- The sample app still uses legacy Swift / Xcode project settings and hard-coded demo account values. Move account configuration into a non-committed local configuration mechanism before using non-demo credentials.
+- The repository is a demonstration client; production VoIP behavior, background audio/call handling, security, and runtime error handling need separate validation.
+
+## CI
+
+The `iOS Build` GitHub Actions workflow installs the pinned CocoaPods version, resolves the pinned `taresip` dependency, lists the Xcode workspace schemes, and builds the app for the iOS Simulator. A green CI result verifies compilation/linking only; SIP registration and real call audio must still be tested against a controlled SIP server and device.
