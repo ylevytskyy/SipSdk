@@ -19,7 +19,7 @@ concurrency:
 
 jobs:
   build:
-    name: Build TareSIPDemo (iOS Simulator)
+    name: Build TareSIPDemo
     runs-on: macos-14
     timeout-minutes: 30
 
@@ -27,7 +27,7 @@ jobs:
       - name: Check out source
         uses: actions/checkout@v6
 
-      - name: Select Xcode
+      - name: Show Xcode version
         run: |
           xcodebuild -version
           xcode-select -p
@@ -46,7 +46,9 @@ jobs:
       - name: List workspace schemes
         run: xcodebuild -list -workspace TareSIPDemo.xcworkspace
 
-      - name: Build for iOS Simulator
+      # taresip 0.1.1 ships x86_64 Simulator and arm64 device objects,
+      # but does not ship an arm64 iOS Simulator slice.
+      - name: Build for iOS Simulator (x86_64 legacy slice)
         run: >-
           xcodebuild
           -workspace TareSIPDemo.xcworkspace
@@ -54,5 +56,20 @@ jobs:
           -configuration Debug
           -sdk iphonesimulator
           -destination 'generic/platform=iOS Simulator'
+          ARCHS=x86_64
+          ONLY_ACTIVE_ARCH=YES
+          CODE_SIGNING_ALLOWED=NO
+          build
+
+      - name: Build for iOS device (arm64)
+        run: >-
+          xcodebuild
+          -workspace TareSIPDemo.xcworkspace
+          -scheme TareSIPDemo
+          -configuration Debug
+          -sdk iphoneos
+          -destination 'generic/platform=iOS'
+          ARCHS=arm64
+          ONLY_ACTIVE_ARCH=YES
           CODE_SIGNING_ALLOWED=NO
           build
