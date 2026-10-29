@@ -95,13 +95,19 @@ build_slice() {
     -DSTATIC=ON \
     "-DMODULES=g711;audiounit;account;stun;turn;ice;srtp" \
     -DAPP_MODULES=
-  cmake --build "$baresip_build" --target baresip_exe --parallel
+  cmake --build "$baresip_build" --target baresip --parallel
 
-  # CMake keeps selected module objects separate from libbaresip.a. Merge
-  # those objects and both core archives into one self-contained archive.
-  local -a module_objects=()
+  # CMake may already add selected object-library modules to libbaresip.a.
+  # Add only modules whose export symbol is not defined in the archive.
+  local archive_symbols
+  archive_symbols="$(xcrun nm -g "$baresip_build/libbaresip.a")"
+  local -a missing_module_objects=()
   local module
   for module in "${MODULES[@]}"; do
+    if grep -Eq "[[:space:]][A-TV-Z][[:space:]]_?exports_${module}$" <<< "$archive_symbols"; then
+      continue
+    fi
+
     local -a found=()
     while IFS= read -r -d '' object; do
       found+=("$object")
@@ -111,7 +117,7 @@ build_slice() {
     )
 
     (("${#found[@]}" > 0)) || die "No compiled objects found for module '$module' ($sdk/$arch)"
-    module_objects+=("${found[@]}")
+    missing_module_objects+=("${found[@]}")
   done
 
   [[ -f "$baresip_build/libbaresip.a" ]] || die "libbaresip.a was not produced"
@@ -119,7 +125,7 @@ build_slice() {
 
   mkdir -p "$slice/output"
   xcrun libtool -static -o "$slice/output/libBaresipCore.a" \
-    "$baresip_build/libbaresip.a" "$prefix/lib/libre.a" "${module_objects[@]}"
+    "$baresip_build/libbaresip.a" "$prefix/lib/libre.a" "${missing_module_objects[@]}"
 
   xcrun lipo -verify_arch "$arch" "$slice/output/libBaresipCore.a"
 }
