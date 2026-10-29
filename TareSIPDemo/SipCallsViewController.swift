@@ -13,7 +13,7 @@ class SipCallsViewController: UIViewController {
     @IBOutlet weak var callsTableView: UITableView!
     @IBOutlet weak var logsTextView: UITextView!
     
-    private var client = SipClient(username: "tiger333", domain: "iptel.org")
+    private var client = SipClient(username: "YOUR_SIP_USERNAME", domain: "YOUR_SIP_DOMAIN")
     private var calls = Set<SipCall>()
     
     @IBAction func connect(_ sender: Any) {
@@ -36,7 +36,7 @@ class SipCallsViewController: UIViewController {
         callsTableView.dataSource = self
         
         client.delegate = self
-        client.password = "popup"
+        client.password = "YOUR_SIP_PASSWORD"
         client.start()
     }
     
