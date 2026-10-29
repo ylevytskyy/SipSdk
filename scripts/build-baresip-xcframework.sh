@@ -70,6 +70,7 @@ build_slice() {
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_INSTALL_PREFIX="$prefix" \
     -DUSE_OPENSSL=OFF \
+    -DCMAKE_DISABLE_FIND_PACKAGE_OpenSSL=TRUE \
     -DUSE_UNIXSOCK=OFF \
     -DUSE_TRACE=OFF \
     -DUSE_REM=ON \
