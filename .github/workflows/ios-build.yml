@@ -41,7 +41,7 @@ jobs:
         run: gem install cocoapods --version 1.17.0 --no-document
 
       - name: Install iOS dependencies
-        run: pod install --repo-update
+        run: pod install --deployment --repo-update
 
       - name: List workspace schemes
         run: xcodebuild -list -workspace TareSIPDemo.xcworkspace
