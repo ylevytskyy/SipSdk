@@ -48,6 +48,33 @@ clone_pinned_tag \
 clone_pinned_tag \
   "https://github.com/baresip/baresip.git" "v$BARESIP_VERSION" "$BARESIP_COMMIT" "$SOURCE_DIR/baresip"
 
+# Upstream's Apple CMake branch selects the Apple AES/HMAC implementations
+# but omits tls/stub.c when OpenSSL is disabled. Baresip still references
+# tls_add_certf during UA allocation, so include the no-TLS API stubs explicitly.
+python3 - "$SOURCE_DIR/re/CMakeLists.txt" <<'PATCH_TLS_STUB'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+source = path.read_text()
+needle = """elseif(APPLE)
+  list(APPEND SRCS
+    src/aes/apple/aes.c
+    src/hmac/apple/hmac.c
+  )
+"""
+replacement = """elseif(APPLE)
+  list(APPEND SRCS
+    src/aes/apple/aes.c
+    src/hmac/apple/hmac.c
+    src/tls/stub.c
+  )
+"""
+if needle not in source:
+    raise SystemExit("Pinned libre CMake Apple branch changed; review TLS stub patch")
+path.write_text(source.replace(needle, replacement, 1))
+PATCH_TLS_STUB
+
 build_slice() {
   local sdk="$1"
   local arch="$2"
@@ -70,6 +97,7 @@ build_slice() {
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_INSTALL_PREFIX="$prefix" \
     -DUSE_OPENSSL=OFF \
+    -DHAVE_RESOLV=OFF \
     -DCMAKE_DISABLE_FIND_PACKAGE_OpenSSL=TRUE \
     -DUSE_UNIXSOCK=OFF \
     -DUSE_TRACE=OFF \
