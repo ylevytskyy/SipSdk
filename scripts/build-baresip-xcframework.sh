@@ -180,6 +180,64 @@ xcodebuild -create-xcframework \
   -headers "$OUTPUT_DIR/headers" \
   -output "$OUTPUT_DIR/BaresipCore.xcframework"
 
+# Link the public startup/call APIs for both Apple platforms. This catches
+# missing transitive system-framework dependencies before publishing an archive
+# that compiles but cannot be consumed by an application.
+cat > "$BUILD_DIR/link-smoke.c" <<'SMOKE'
+#include <baresip.h>
+#include <re.h>
+
+#define KEEP_SYMBOL(symbol) __typeof__(&symbol) volatile keep_##symbol = &symbol
+KEEP_SYMBOL(libre_init);
+KEEP_SYMBOL(libre_close);
+KEEP_SYMBOL(conf_configure);
+KEEP_SYMBOL(conf_modules);
+KEEP_SYMBOL(conf_close);
+KEEP_SYMBOL(baresip_init);
+KEEP_SYMBOL(baresip_close);
+KEEP_SYMBOL(ua_init);
+KEEP_SYMBOL(ua_close);
+KEEP_SYMBOL(ua_connect);
+KEEP_SYMBOL(ua_answer);
+KEEP_SYMBOL(ua_hold_answer);
+KEEP_SYMBOL(bevent_register);
+KEEP_SYMBOL(bevent_unregister);
+
+int main(void)
+{
+    return keep_libre_init == 0;
+}
+SMOKE
+
+link_smoke() {
+  local sdk="$1"
+  local target="$2"
+  local library="$3"
+  local sdk_path
+  local label="$4"
+
+  sdk_path="$(xcrun --sdk "$sdk" --show-sdk-path)"
+  echo "==> Link smoke test for $label ($target)"
+  xcrun --sdk "$sdk" clang \
+    -target "$target" \
+    -isysroot "$sdk_path" \
+    -miphoneos-version-min="$IOS_DEPLOYMENT_TARGET" \
+    -I "$OUTPUT_DIR/headers" \
+    "$BUILD_DIR/link-smoke.c" \
+    "$library" \
+    -framework CoreAudio \
+    -framework AudioToolbox \
+    -framework SystemConfiguration \
+    -framework CoreFoundation \
+    -lz -lm \
+    -o "$BUILD_DIR/link-smoke-$label"
+}
+
+link_smoke iphoneos "arm64-apple-ios$IOS_DEPLOYMENT_TARGET" \
+  "$BUILD_DIR/iphoneos-arm64/output/libBaresipCore.a" device-arm64
+link_smoke iphonesimulator "arm64-apple-ios$IOS_DEPLOYMENT_TARGET-simulator" \
+  "$OUTPUT_DIR/simulator/libBaresipCore.a" simulator-arm64
+
 cat > "$OUTPUT_DIR/build-metadata.txt" <<METADATA
 Baresip version: $BARESIP_VERSION
 Baresip commit: $BARESIP_COMMIT
