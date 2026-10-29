@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-OUTPUT_DIR="$1"
-if [[ -z "$OUTPUT_DIR" ]]; then
+if [[ $# -lt 1 || -z "$1" ]]; then
   echo "usage: check-baresip-adapter.sh <build-output-dir>" >&2
   exit 2
 fi
+
+ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+OUTPUT_DIR="$1"
 HEADER_DIR="$OUTPUT_DIR/headers"
 SOURCE="$ROOT_DIR/TareSIPDemo/SipClientBaresipV4.mm"
 SDK_PATH="$(xcrun --sdk iphoneos --show-sdk-path)"
