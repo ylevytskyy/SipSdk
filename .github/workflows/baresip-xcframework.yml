@@ -6,6 +6,7 @@ on:
       - master
     paths:
       - ".github/workflows/baresip-xcframework.yml"
+      - ".github/workflows/publish-baresip-xcframework.yml"
       - "scripts/build-baresip-xcframework.sh"
       - "docs/SPM_MIGRATION.md"
   workflow_dispatch:
