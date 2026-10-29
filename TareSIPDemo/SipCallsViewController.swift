@@ -17,7 +17,13 @@ class SipCallsViewController: UIViewController {
     private var calls = Set<SipCall>()
     
     @IBAction func connect(_ sender: Any) {
-        let sipCall = client.makeCall(remoteUri.text!)
+        guard let uri = remoteUri.text?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !uri.isEmpty else {
+            logsTextView.text += "Enter a SIP URI before starting a call.\n"
+            return
+        }
+
+        let sipCall = client.makeCall(uri)
         calls.insert(sipCall)
         callsTableView.reloadData()
     }
@@ -37,7 +43,10 @@ class SipCallsViewController: UIViewController {
         
         client.delegate = self
         client.password = "YOUR_SIP_PASSWORD"
-        client.start()
+        let result = client.start()
+        if result != 0 {
+            logsTextView.text += "Failed to start SIP client (code \(result)). Check the local SIP configuration.\n"
+        }
     }
     
     override func prepare(for segue: UIStoryboardSegue, sender: Any?) {
