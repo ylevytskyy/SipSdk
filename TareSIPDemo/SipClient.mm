@@ -21,8 +21,6 @@ static const int kDefaultPort = 5060;
 @interface SipCall ()
 @property (nonatomic) struct ua *ua;
 @property (nonatomic) struct call* call;
-@property (nonatomic) int baresipResultCode;
-
 @property (nonatomic) NSString* cachedRemoteUri;
 @end
 
@@ -332,7 +330,16 @@ static void ua_event_handler(struct ua *ua, enum ua_event ev,
     if (!self.ua) {
         return;
     }
-    
+
+    NSMutableDictionary<NSValue *, SipCall *> *cache = sipCallsCache();
+    @synchronized (cache) {
+        for (SipCall *sipCall in cache.allValues) {
+            sipCall.call = nullptr;
+            sipCall.ua = nullptr;
+        }
+        [cache removeAllObjects];
+    }
+
     mem_deref(self.ua);
     self.ua = nil;
     
@@ -372,28 +379,27 @@ static void ua_event_handler(struct ua *ua, enum ua_event ev,
     return self.ua ? ua_isregistered(self.ua) : false;
 }
 
-- (SipCall*)makeCall:(NSString*)uri {
-    SipCall* sipCall = [[SipCall alloc] init];
+- (SipCall * _Nullable)makeCall:(NSString *)uri {
+    if (!self.ua) {
+        NSLog(@"Cannot place a SIP call before the SIP client starts successfully.");
+        return nil;
+    }
+
+    SipCall *sipCall = [[SipCall alloc] init];
     sipCall.ua = self.ua;
     sipCall.cachedRemoteUri = uri;
 
-    if (!self.ua) {
-        sipCall.baresipResultCode = -1;
-        return sipCall;
-    }
-
     struct call *call = nullptr;
     int result = ua_connect(self.ua, &call, nil, [uri cStringUsingEncoding:NSUTF8StringEncoding], nil, VIDMODE_OFF);
-    if (result != 0) {
-        sipCall.baresipResultCode = result;
-    } else {
-        sipCall.call = call;
-        if (call != nullptr) {
-            NSMutableDictionary<NSValue *, SipCall *> *cache = sipCallsCache();
-            @synchronized (cache) {
-                cache[sipCallCacheKey(call)] = sipCall;
-            }
-        }
+    if (result != 0 || call == nullptr) {
+        NSLog(@"Failed to create SIP call (result %d).", result);
+        return nil;
+    }
+
+    sipCall.call = call;
+    NSMutableDictionary<NSValue *, SipCall *> *cache = sipCallsCache();
+    @synchronized (cache) {
+        cache[sipCallCacheKey(call)] = sipCall;
     }
 
     return sipCall;
