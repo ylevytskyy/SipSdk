@@ -43,6 +43,9 @@ jobs:
       - name: Install iOS dependencies
         run: pod install --repo-update
 
+      - name: Show generated dependency lockfile
+        run: cat Podfile.lock
+
       - name: List workspace schemes
         run: xcodebuild -list -workspace TareSIPDemo.xcworkspace
 
