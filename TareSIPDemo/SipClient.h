@@ -51,7 +51,7 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)unregister;
 - (bool)isRegistered;
 
-- (SipCall*)makeCall:(NSString*)uri;
+- (nullable SipCall *)makeCall:(NSString *)uri;
 @end
 
 /// SIP Call
