@@ -70,7 +70,7 @@ Configure a test SIP account in `TareSIPDemo/SipCallsViewController.swift` befor
 - The `taresip` 0.1.1 pod is old and has no automated tests published on CocoaPods. Its bundled static libraries include an x86_64 iOS Simulator slice and an arm64 device slice, but no arm64 iOS Simulator slice. CI therefore builds the legacy x86_64 Simulator architecture and arm64 device architecture separately. Supporting the native arm64 Simulator requires rebuilding the native dependencies as an XCFramework with a proper Simulator slice.
 - `Podfile.lock` is committed to record the resolved dependency and its checksums. CI uses CocoaPods deployment mode so accidental lockfile drift fails the build.
 - The sample app still uses legacy Swift / Xcode project settings. Replace the placeholder SIP username, domain, and password in `SipCallsViewController.swift` with a dedicated local configuration mechanism before running it. Do not commit real credentials.
-- The repository is a demonstration client; production VoIP behavior, background audio/call handling, security, and runtime error handling need separate validation.
+- The app copies the bundled BareSIP `config` file into Documents on first launch so it can be edited without modifying the app bundle. Runtime SIP registration, audio, background call handling, and recovery from stack errors still need testing against a controlled SIP server and device.
 
 ## CI
 
