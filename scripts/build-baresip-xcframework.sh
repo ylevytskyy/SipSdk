@@ -90,6 +90,7 @@ build_slice() {
     -DCMAKE_OSX_DEPLOYMENT_TARGET="$IOS_DEPLOYMENT_TARGET" \
     -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY \
     -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_DISABLE_FIND_PACKAGE_OpenSSL=TRUE \
     -DCMAKE_PREFIX_PATH="$prefix" \
     -DRE_INCLUDE_DIR="$prefix/include/re" \
     -DRE_LIBRARY="$prefix/lib/libre.a" \
