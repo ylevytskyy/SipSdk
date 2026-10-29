@@ -19,7 +19,7 @@ The tag-triggered workflow .github/workflows/publish-baresip-xcframework.yml reb
 
 TareSIPDemo/SipClientBaresipV4.mm ports the existing SipClientDelegate contract to the Baresip v4 event/call API. It is intentionally not added to TareSIPDemo.xcodeproj yet: the current CocoaPods app still compiles against the old API, and that working path must remain intact until the release-backed SwiftPM dependency is available.
 
-The native-build workflow runs scripts/check-baresip-adapter.sh, which syntax-checks the new Objective-C++ source against the freshly built Baresip v4 headers. This catches API mismatch and Objective-C++ compile errors, but it does not prove successful linking of the app or functional SIP/audio behavior.
+The native-build workflow runs scripts/check-baresip-adapter.sh, which syntax-checks the new Objective-C++ source and compiles/links it against the freshly built XCFramework for iOS device arm64 and iOS Simulator arm64/x86_64. This catches API mismatch and unresolved native symbols, but it does not prove successful integration into the full demo app or functional SIP/audio behavior.
 
 The paired TareSIPDemo/config.baresip-v4 is a minimal configuration for the modules included in the current XCFramework build: g711, audiounit, account, stun, turn, ice, and srtp. The adapter stores the v4 config under a separate Documents/baresip-v4 directory so an older Documents/config left by the CocoaPods app is not accidentally reused.
 
