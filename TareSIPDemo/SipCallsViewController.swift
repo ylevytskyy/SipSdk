@@ -23,13 +23,20 @@ class SipCallsViewController: UIViewController {
             return
         }
 
-        let sipCall = client.makeCall(uri)
+        guard let sipCall = client.makeCall(uri) else {
+            logsTextView.text += "Failed to create call. Check SIP registration and the destination URI.\n"
+            return
+        }
+
         calls.insert(sipCall)
         callsTableView.reloadData()
     }
 
     @IBAction func register(_ sender: Any) {
-        client.registry()
+        let result = client.registry()
+        if result != 0 {
+            logsTextView.text += "Unable to register SIP client (code \(result)).\n"
+        }
     }
     
     @IBAction func unregister(_ sender: Any) {
