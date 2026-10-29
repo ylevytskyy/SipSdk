@@ -35,7 +35,7 @@ The paired Sources/SipSdk/Resources/config.baresip-v4 is a minimal configuration
 ## Next steps
 
 1. Create and push the annotated baresip-core-v4.12.0 tag on the verified master commit so the release workflow can publish the XCFramework ZIP, checksum, metadata and license assets.
-2. After the release exists, run `scripts/generate-spm-package.sh 4.12.0`. The script downloads the published ZIP and checksum sidecar, computes SHA-256 independently, checks the archive contents, and only then generates `Package.swift` with the real URL/checksum. Do not hand-write or guess the checksum.
+2. After the release exists, run `bash scripts/generate-spm-package.sh 4.12.0`. The script downloads the published ZIP and checksum sidecar, computes SHA-256 independently, checks the archive contents, and only then generates `Package.swift` with the real URL/checksum. Do not hand-write or guess the checksum.
 3. Run `swift package resolve` and build the package for iOS device and Simulator. Then migrate the demo target to the generated SwiftPM package in a separate change and stop compiling the legacy `SipClient.mm` when compiling the v4 adapter.
 4. Test on a physical iPhone against a controlled SIP server/account: registration success/failure, incoming and outgoing calls, answer/hangup, DTMF, audio both ways, repeated start/stop, and cleanup after failed initialization. Only then remove Podfile / Podfile.lock.
 
