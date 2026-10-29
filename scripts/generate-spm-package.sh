@@ -55,7 +55,7 @@ if ! unzip -Z1 "$WORK_DIR/$ZIP_NAME" | grep -q '^BaresipCore\.xcframework/'; the
   exit 1
 fi
 
-REPOSITORY_ROOT="$(cd "$(dirname "\${BASH_SOURCE[0]}")/.." && pwd)"
+REPOSITORY_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cat > "$REPOSITORY_ROOT/Package.swift" <<MANIFEST
 // swift-tools-version: 5.9
 import PackageDescription
@@ -79,6 +79,7 @@ let package = Package(
             dependencies: ["BaresipCore"],
             path: "Sources/SipSdk",
             publicHeadersPath: "include",
+            resources: [.copy("Resources/config.baresip-v4")],
             linkerSettings: [
                 .linkedFramework("Foundation"),
                 .linkedFramework("CoreFoundation"),
