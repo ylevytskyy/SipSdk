@@ -53,6 +53,8 @@ xcodebuild \
   -configuration Debug \
   -sdk iphonesimulator \
   -destination 'generic/platform=iOS Simulator' \
+  ARCHS=x86_64 \
+  ONLY_ACTIVE_ARCH=YES \
   CODE_SIGNING_ALLOWED=NO \
   build
 ```
@@ -65,11 +67,11 @@ Configure a test SIP account in `TareSIPDemo/SipCallsViewController.swift` befor
 
 ## Known limitations / next steps
 
-- The `taresip` 0.1.1 pod is old and has no automated tests published on CocoaPods. Validate dependency installation and the simulator build before planning further modernization.
+- The `taresip` 0.1.1 pod is old and has no automated tests published on CocoaPods. Its bundled static libraries include an x86_64 iOS Simulator slice and an arm64 device slice, but no arm64 iOS Simulator slice. CI therefore builds the legacy x86_64 Simulator architecture and arm64 device architecture separately. Supporting the native arm64 Simulator requires rebuilding the native dependencies as an XCFramework with a proper Simulator slice.
 - The repository does not yet commit a generated `Podfile.lock`; after a successful install, commit the lockfile so local and CI dependency resolution remain reproducible.
 - The sample app still uses legacy Swift / Xcode project settings and hard-coded demo account values. Move account configuration into a non-committed local configuration mechanism before using non-demo credentials.
 - The repository is a demonstration client; production VoIP behavior, background audio/call handling, security, and runtime error handling need separate validation.
 
 ## CI
 
-The `iOS Build` GitHub Actions workflow installs the pinned CocoaPods version, resolves the pinned `taresip` dependency, lists the Xcode workspace schemes, and builds the app for the iOS Simulator. A green CI result verifies compilation/linking only; SIP registration and real call audio must still be tested against a controlled SIP server and device.
+The `iOS Build` GitHub Actions workflow installs the pinned CocoaPods version, resolves the pinned `taresip` dependency, lists the Xcode workspace schemes, and builds both the legacy x86_64 Simulator slice and the arm64 iOS-device slice. A green CI result verifies compilation/linking only; SIP registration and real call audio must still be tested against a controlled SIP server and device.
