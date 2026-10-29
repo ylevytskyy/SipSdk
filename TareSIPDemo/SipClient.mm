@@ -192,6 +192,10 @@ static void ua_event_handler(struct ua *ua, enum ua_event ev,
             });
         }
             break;
+
+        default:
+            // Ignore engine events that this wrapper does not expose.
+            break;
     }
 }
 
