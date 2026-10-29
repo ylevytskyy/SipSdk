@@ -221,7 +221,6 @@ link_smoke() {
   xcrun --sdk "$sdk" clang \
     -target "$target" \
     -isysroot "$sdk_path" \
-    -miphoneos-version-min="$IOS_DEPLOYMENT_TARGET" \
     -I "$OUTPUT_DIR/headers" \
     "$BUILD_DIR/link-smoke.c" \
     "$library" \
