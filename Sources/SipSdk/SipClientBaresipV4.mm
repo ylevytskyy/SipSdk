@@ -333,8 +333,19 @@ static void ua_event_handler(enum bevent_ev ev, struct bevent *event, void *arg)
         NSString *configDestination =
             [documentDirectory stringByAppendingPathComponent:@"config"];
         if (![fileManager fileExistsAtPath:configDestination]) {
+            NSBundle *mainBundle = [NSBundle mainBundle];
             NSString *bundledConfigPath =
-                [[NSBundle mainBundle] pathForResource:@"config.baresip-v4" ofType:nil];
+                [mainBundle pathForResource:@"config" ofType:@"baresip-v4"];
+            if (bundledConfigPath == nil) {
+                // SwiftPM places target resources in SipSdk_SipSdk.bundle.
+                NSURL *resourceBundleURL =
+                    [mainBundle URLForResource:@"SipSdk_SipSdk" withExtension:@"bundle"];
+                NSBundle *resourceBundle = resourceBundleURL
+                    ? [NSBundle bundleWithURL:resourceBundleURL]
+                    : nil;
+                bundledConfigPath =
+                    [resourceBundle pathForResource:@"config" ofType:@"baresip-v4"];
+            }
             if (bundledConfigPath == nil) {
                 NSLog(@"Baresip v4 config resource is missing from the app bundle.");
                 [self cleanupEngine];
