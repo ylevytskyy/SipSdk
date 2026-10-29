@@ -139,7 +139,7 @@ build_slice() {
       "$baresip_build/libbaresip.a" "$prefix/lib/libre.a"
   fi
 
-  xcrun lipo -verify_arch "$arch" "$slice/output/libBaresipCore.a"
+  xcrun lipo "$slice/output/libBaresipCore.a" -verify_arch "$arch"
 }
 
 rm -rf "$OUTPUT_DIR"
