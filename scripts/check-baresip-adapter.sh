@@ -113,7 +113,7 @@ xcrun --sdk iphoneos clang++ \
   -target arm64-apple-ios12.1 \
   -isysroot "$SDK_PATH" \
   -I "$HEADER_DIR" \
-  -I "$ROOT_DIR/TareSIPDemo" \
+  -I "$ROOT_DIR/Sources/SipSdk/include" \
   "$SOURCE"
 
 link_adapter iphoneos "arm64-apple-ios12.1" "$DEVICE_LIBRARY" device-arm64
