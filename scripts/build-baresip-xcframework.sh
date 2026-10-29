@@ -92,6 +92,7 @@ build_slice() {
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_DISABLE_FIND_PACKAGE_OpenSSL=TRUE \
     -DCMAKE_PREFIX_PATH="$prefix" \
+    -Dre_DIR="$prefix/lib/cmake/re" \
     -DRE_INCLUDE_DIR="$prefix/include/re" \
     -DRE_LIBRARY="$prefix/lib/libre.a" \
     -DSTATIC=ON \
