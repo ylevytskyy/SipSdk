@@ -47,5 +47,7 @@ jobs:
             ${{ runner.temp }}/baresip-output/BaresipCore.xcframework.zip
             ${{ runner.temp }}/baresip-output/BaresipCore.xcframework.zip.sha256
             ${{ runner.temp }}/baresip-output/build-metadata.txt
+            ${{ runner.temp }}/baresip-output/LICENSE-Baresip.txt
+            ${{ runner.temp }}/baresip-output/LICENSE-libRE.txt
           if-no-files-found: error
           retention-days: 14

@@ -11,7 +11,7 @@ The first migration milestone is a reproducible `BaresipCore.xcframework` build.
 | [baresip](https://github.com/baresip/baresip) | v4.12.0 | `9cfab81550acc4bd38d6580d79b45cc6eea65cd6` |
 | [re](https://github.com/baresip/re) | v4.12.0 | `65555dad439de9d6a81b3ee6092b9c096585249b` |
 
-The script builds a static core for iOS device arm64 and iOS Simulator arm64 + x86_64, creates an XCFramework, and generates a ZIP and SHA-256 checksum. The GitHub Actions workflow uploads the build output as an artifact. The pull-request workflow uploads the output as a short-lived build artifact for validation. A separate tag-triggered workflow in `.github/workflows/publish-baresip-xcframework.yml` rebuilds the same pinned sources and publishes a versioned GitHub Release containing the XCFramework ZIP, its generated SHA-256 file, and build metadata. Use a real published release asset and its exact checksum when defining the SwiftPM binary target; do not use a temporary Actions artifact URL.
+The script builds a static core for iOS device arm64 and iOS Simulator arm64 + x86_64, creates an XCFramework, and generates a ZIP and SHA-256 checksum. It performs link smoke tests against the public startup/call APIs for device arm64 and both Simulator architectures, and includes the upstream Baresip and libre license texts in the ZIP. The pinned libre checkout receives two deterministic iOS build adjustments: its Apple/OpenSSL-disabled build includes the TLS API stubs required by UA allocation, and its legacy `HAVE_RESOLV` resolver path is disabled because the required resolver symbols are unavailable in the iOS SDK. The pull-request workflow uploads the output as a short-lived build artifact for validation. A separate tag-triggered workflow in `.github/workflows/publish-baresip-xcframework.yml` rebuilds the same pinned sources and publishes a versioned GitHub Release containing the XCFramework ZIP, its generated SHA-256 file, build metadata, and standalone license files. Use a real published release asset and its exact checksum when defining the SwiftPM binary target; do not use a temporary Actions artifact URL.
 
 ## Why the app adapter cannot be carried over unchanged
 
@@ -27,7 +27,7 @@ The adapter migration must preserve the existing public `SipClientDelegate` cont
 
 ## Planned sequence
 
-1. Build and inspect the XCFramework artifact from CI; confirm the device and Simulator slices and link it in a small smoke target.
+1. Build and inspect the XCFramework artifact from CI; verify device arm64 and Simulator arm64/x86_64, and pass the device plus both Simulator link smoke tests.
 2. Port `SipClient.mm` to the current Baresip event/call API and trim/update the demo config to match selected modules.
 3. Add focused adapter tests and document runtime test prerequisites (SIP server/account and a physical iOS device).
 4. After the native-build CI is green and the artifact has been inspected, create a `baresip-core-v*` tag on a commit containing the build and release workflows. The tag workflow rebuilds the framework and publishes the ZIP, checksum, and metadata as a GitHub Release. Only after that release exists, add a SwiftPM `binaryTarget` using the published asset URL and exact generated checksum; then migrate the demo project from CocoaPods and remove `Podfile` / `Podfile.lock`.
@@ -49,4 +49,4 @@ By default, output is written to `.build/baresip-xcframework`. To choose another
 
 ### Current scope limitation
 
-TLS is disabled in this first reproducible build (`USE_OPENSSL=OFF`) to avoid linking a host-built OpenSSL into iOS. This enables an initial SIP UDP/TCP audio baseline. Decide on an iOS-compatible TLS implementation and package/link it separately before claiming SIP-over-TLS support. The CI build proves native compilation/linking, not functional registration or media behavior.
+TLS is disabled in this first reproducible build (`USE_OPENSSL=OFF`) to avoid linking a host-built OpenSSL into iOS. This enables an initial SIP UDP/TCP audio baseline. Decide on an iOS-compatible TLS implementation and package/link it separately before claiming SIP-over-TLS support. The CI compile/link smoke tests prove native API linkage and expected system-library dependencies, not functional registration or media behavior.

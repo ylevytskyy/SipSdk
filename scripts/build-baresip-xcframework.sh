@@ -25,6 +25,7 @@ command -v git >/dev/null || die "git is required"
 command -v cmake >/dev/null || die "cmake is required"
 command -v xcrun >/dev/null || die "Xcode command line tools are required"
 command -v xcodebuild >/dev/null || die "xcodebuild is required"
+command -v zip >/dev/null || die "zip is required"
 
 mkdir -p "$SOURCE_DIR" "$BUILD_DIR" "$OUTPUT_DIR"
 trap 'rm -rf "$WORK_ROOT"' EXIT
@@ -264,6 +265,12 @@ link_smoke iphoneos "arm64-apple-ios$IOS_DEPLOYMENT_TARGET" \
 link_smoke iphonesimulator "arm64-apple-ios$IOS_DEPLOYMENT_TARGET-simulator" \
   "$OUTPUT_DIR/simulator/libBaresipCore.a" simulator-arm64
 
+link_smoke iphonesimulator "x86_64-apple-ios$IOS_DEPLOYMENT_TARGET-simulator" \
+  "$OUTPUT_DIR/simulator/libBaresipCore.a" simulator-x86_64
+
+cp "$SOURCE_DIR/baresip/LICENSE" "$OUTPUT_DIR/LICENSE-Baresip.txt"
+cp "$SOURCE_DIR/re/LICENSE" "$OUTPUT_DIR/LICENSE-libRE.txt"
+
 cat > "$OUTPUT_DIR/build-metadata.txt" <<METADATA
 Baresip version: $BARESIP_VERSION
 Baresip commit: $BARESIP_COMMIT
@@ -273,12 +280,21 @@ iOS deployment target: $IOS_DEPLOYMENT_TARGET
 Baresip modules: ${MODULES[*]}
 Device architectures: arm64
 Simulator architectures: arm64, x86_64
+libre iOS compatibility: adds src/tls/stub.c when OpenSSL is disabled and disables legacy HAVE_RESOLV symbols.
+Licenses: BSD-style upstream license texts included in the ZIP.
 TLS: disabled (USE_OPENSSL=OFF); SIP UDP/TCP is available, SIP TLS needs a separate Apple-compatible TLS decision.
 METADATA
 
+mkdir -p "$BUILD_DIR/distribution"
+cp -R "$OUTPUT_DIR/BaresipCore.xcframework" "$BUILD_DIR/distribution/"
+cp "$OUTPUT_DIR/LICENSE-Baresip.txt" "$OUTPUT_DIR/LICENSE-libRE.txt" "$BUILD_DIR/distribution/"
+(
+  cd "$BUILD_DIR/distribution"
+  zip -qr "$OUTPUT_DIR/BaresipCore.xcframework.zip" \
+    BaresipCore.xcframework LICENSE-Baresip.txt LICENSE-libRE.txt
+)
 (
   cd "$OUTPUT_DIR"
-  ditto -c -k --sequesterRsrc --keepParent BaresipCore.xcframework BaresipCore.xcframework.zip
   shasum -a 256 BaresipCore.xcframework.zip > BaresipCore.xcframework.zip.sha256
 )
 
@@ -286,5 +302,7 @@ echo "==> Produced:"
 echo "    $OUTPUT_DIR/BaresipCore.xcframework"
 echo "    $OUTPUT_DIR/BaresipCore.xcframework.zip"
 echo "    $OUTPUT_DIR/BaresipCore.xcframework.zip.sha256"
+echo "    $OUTPUT_DIR/LICENSE-Baresip.txt"
+echo "    $OUTPUT_DIR/LICENSE-libRE.txt"
 echo "==> Simulator architectures:"
 xcrun lipo -archs "$OUTPUT_DIR/simulator/libBaresipCore.a"

@@ -40,6 +40,8 @@ jobs:
             "$RUNNER_TEMP/baresip-output/BaresipCore.xcframework.zip" \
             "$RUNNER_TEMP/baresip-output/BaresipCore.xcframework.zip.sha256" \
             "$RUNNER_TEMP/baresip-output/build-metadata.txt" \
+            "$RUNNER_TEMP/baresip-output/LICENSE-Baresip.txt" \
+            "$RUNNER_TEMP/baresip-output/LICENSE-libRE.txt" \
             --verify-tag \
             --title "Baresip Core XCFramework ${GITHUB_REF_NAME}" \
             --notes "Reproducible static Baresip XCFramework built from the pinned upstream commits recorded in build-metadata.txt. Includes iOS device arm64 and iOS Simulator arm64/x86_64. TLS is disabled in this release; SIP over TLS is not supported by this build."
