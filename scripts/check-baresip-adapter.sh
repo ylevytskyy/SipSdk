@@ -10,7 +10,7 @@ ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 OUTPUT_DIR="$1"
 HEADER_DIR="$OUTPUT_DIR/headers"
 FRAMEWORK_DIR="$OUTPUT_DIR/BaresipCore.xcframework"
-SOURCE="$ROOT_DIR/TareSIPDemo/SipClientBaresipV4.mm"
+SOURCE="$ROOT_DIR/Sources/SipSdk/SipClientBaresipV4.mm"
 SDK_PATH="$(xcrun --sdk iphoneos --show-sdk-path)"
 
 [[ -f "$HEADER_DIR/BaresipCore.h" ]] || {
@@ -87,7 +87,7 @@ link_adapter() {
     -target "$target" \
     -isysroot "$sdk_path" \
     -I "$HEADER_DIR" \
-    -I "$ROOT_DIR/TareSIPDemo" \
+    -I "$ROOT_DIR/Sources/SipSdk/include" \
     "$SOURCE" \
     "$OUTPUT_DIR/adapter-link-main.mm" \
     -x none "$library" \
