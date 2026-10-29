@@ -8,6 +8,9 @@ on:
       - ".github/workflows/baresip-xcframework.yml"
       - ".github/workflows/publish-baresip-xcframework.yml"
       - "scripts/build-baresip-xcframework.sh"
+      - "scripts/check-baresip-adapter.sh"
+      - "TareSIPDemo/SipClientBaresipV4.mm"
+      - "TareSIPDemo/config.baresip-v4"
       - "docs/SPM_MIGRATION.md"
   workflow_dispatch:
 
@@ -37,6 +40,9 @@ jobs:
 
       - name: Build pinned Baresip and libre slices
         run: ./scripts/build-baresip-xcframework.sh "$RUNNER_TEMP/baresip-output"
+
+      - name: Compile-check Baresip v4 adapter
+        run: bash ./scripts/check-baresip-adapter.sh "$RUNNER_TEMP/baresip-output"
 
       - name: Upload XCFramework and checksum
         uses: actions/upload-artifact@v6

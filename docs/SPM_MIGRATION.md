@@ -2,51 +2,53 @@
 
 ## Current state
 
-The merged default branch remains on `taresip 0.1.1` and CocoaPods. This is intentional until the new native engine is built and the Objective-C++ adapter is ported and tested. Do not point a SwiftPM binary target at a placeholder URL or remove the working legacy build before the replacement exists.
+The default branch remains on the working taresip 0.1.1 CocoaPods integration. The native-build pipeline has been merged, but the app must not switch dependencies until the current Baresip adapter, package integration, and SIP runtime behavior have been validated.
 
-The first migration milestone is a reproducible `BaresipCore.xcframework` build. `scripts/build-baresip-xcframework.sh` pins and verifies these upstream revisions:
+The scripts/build-baresip-xcframework.sh script pins and verifies these upstream revisions:
 
 | Component | Release | Pinned commit |
 |---|---|---|
-| [baresip](https://github.com/baresip/baresip) | v4.12.0 | `9cfab81550acc4bd38d6580d79b45cc6eea65cd6` |
-| [re](https://github.com/baresip/re) | v4.12.0 | `65555dad439de9d6a81b3ee6092b9c096585249b` |
+| [baresip](https://github.com/baresip/baresip) | v4.12.0 | 9cfab81550acc4bd38d6580d79b45cc6eea65cd6 |
+| [re](https://github.com/baresip/re) | v4.12.0 | 65555dad439de9d6a81b3ee6092b9c096585249b |
 
-The script builds a static core for iOS device arm64 and iOS Simulator arm64 + x86_64, creates an XCFramework, and generates a ZIP and SHA-256 checksum. It performs link smoke tests against the public startup/call APIs for device arm64 and both Simulator architectures, and includes the upstream Baresip and libre license texts in the ZIP. The pinned libre checkout receives two deterministic iOS build adjustments: its Apple/OpenSSL-disabled build includes the TLS API stubs required by UA allocation, and its legacy `HAVE_RESOLV` resolver path is disabled because the required resolver symbols are unavailable in the iOS SDK. The pull-request workflow uploads the output as a short-lived build artifact for validation. A separate tag-triggered workflow in `.github/workflows/publish-baresip-xcframework.yml` rebuilds the same pinned sources and publishes a versioned GitHub Release containing the XCFramework ZIP, its generated SHA-256 file, build metadata, and standalone license files. Use a real published release asset and its exact checksum when defining the SwiftPM binary target; do not use a temporary Actions artifact URL.
+The script builds a static core for iOS device arm64 and iOS Simulator arm64 + x86_64, creates an XCFramework, and generates a ZIP and SHA-256 checksum. CI performs link smoke tests against the public startup/call APIs for device arm64 and both Simulator architectures. The distribution ZIP includes the upstream Baresip and libre license texts. The pinned libre checkout receives two deterministic iOS build adjustments: its Apple/OpenSSL-disabled build includes the TLS API stubs required by UA allocation, and its legacy HAVE_RESOLV resolver path is disabled because the required resolver symbols are unavailable in the iOS SDK.
 
-## Why the app adapter cannot be carried over unchanged
+The tag-triggered workflow .github/workflows/publish-baresip-xcframework.yml rebuilds the pinned sources and publishes a GitHub Release containing the XCFramework ZIP, generated SHA-256 file, build metadata, and standalone license files. Use the exact checksum from the published release when defining the SwiftPM binary target; never use a temporary Actions artifact URL.
 
-The old wrapper targets a 2016 API. Current Baresip v4.12.0 has source-level incompatibilities, not just a packaging difference:
+## Adapter port staged for validation
 
-- `ua_init` now takes four parameters (`software, udp, tcp, tls`); the old wrapper passes five.
-- `uag_event_register` / `UA_EVENT_*` were replaced by `bevent_register` / `BEVENT_*`. The callback now receives `enum bevent_ev`, `struct bevent *`, and the callback context. Calls and event text must be extracted using the current event accessors.
-- `ua_connect` now takes five parameters; the old wrapper passes six.
-- `ua_answer` and `ua_hold_answer` require an explicit `enum vidmode`.
-- The current iOS audio driver is `audiounit`; the old bundled config names `coreaudio`. The legacy config also lists many codec/app modules that are not selected in the minimal current build.
+TareSIPDemo/SipClientBaresipV4.mm ports the existing SipClientDelegate contract to the Baresip v4 event/call API. It is intentionally not added to TareSIPDemo.xcodeproj yet: the current CocoaPods app still compiles against the old API, and that working path must remain intact until the release-backed SwiftPM dependency is available.
 
-The adapter migration must preserve the existing public `SipClientDelegate` contract while mapping current Baresip events and call references correctly. It should be compiled against the generated XCFramework headers, then tested for registration, incoming/outgoing calls, call closure, DTMF, and audio on a physical device.
+The native-build workflow runs scripts/check-baresip-adapter.sh, which syntax-checks the new Objective-C++ source and compiles/links it against the freshly built XCFramework for iOS device arm64 and iOS Simulator arm64/x86_64. This catches API mismatch and unresolved native symbols, but it does not prove successful integration into the full demo app or functional SIP/audio behavior.
 
-## Planned sequence
+The paired TareSIPDemo/config.baresip-v4 is a minimal configuration for the modules included in the current XCFramework build: g711, audiounit, account, stun, turn, ice, and srtp. The adapter stores the v4 config under a separate Documents/baresip-v4 directory so an older Documents/config left by the CocoaPods app is not accidentally reused.
 
-1. Build and inspect the XCFramework artifact from CI; verify device arm64 and Simulator arm64/x86_64, and pass the device plus both Simulator link smoke tests.
-2. Port `SipClient.mm` to the current Baresip event/call API and trim/update the demo config to match selected modules.
-3. Add focused adapter tests and document runtime test prerequisites (SIP server/account and a physical iOS device).
-4. After the native-build CI is green and the artifact has been inspected, create a `baresip-core-v*` tag on a commit containing the build and release workflows. The tag workflow rebuilds the framework and publishes the ZIP, checksum, and metadata as a GitHub Release. Only after that release exists, add a SwiftPM `binaryTarget` using the published asset URL and exact generated checksum; then migrate the demo project from CocoaPods and remove `Podfile` / `Podfile.lock`.
-5. Keep the legacy build available until the new package builds and a real SIP audio call passes.
+### API differences handled by the adapter
+
+- ua_init takes four parameters (software, udp, tcp, tls); this build passes tls=false because TLS is disabled in the packaged engine.
+- uag_event_register / UA_EVENT_* have been replaced by bevent_register / BEVENT_*. The callback reads the call and remote URI using current Baresip accessors.
+- ua_connect takes five parameters.
+- ua_answer and ua_hold_answer require an explicit enum vidmode.
+- The AOR is built without embedding the password in the SIP URI; authentication credentials are set on the allocated account.
+- The event loop is cancelled and awaited before stack teardown, rather than closing the engine while re_main may still be active.
+
+## Next steps
+
+1. Review and merge the adapter compile-check PR only when both the existing CocoaPods app build and the Baresip v4 build/syntax check pass.
+2. Publish the XCFramework with a baresip-core-v* tag after the build and release workflows are present on the tagged commit. Confirm the release ZIP, checksum, metadata and license assets.
+3. Add a SwiftPM binaryTarget using the real release URL and exact generated checksum. Migrate the demo target to SwiftPM in a separate change and stop compiling the legacy SipClient.mm when compiling the v4 adapter.
+4. Test on a physical iPhone against a controlled SIP server/account: registration success/failure, incoming and outgoing calls, answer/hangup, DTMF, audio both ways, repeated start/stop, and cleanup after failed initialization. Only then remove Podfile / Podfile.lock.
 
 ## Build locally
 
 On macOS with Xcode and CMake installed:
 
-```bash
-./scripts/build-baresip-xcframework.sh
-```
+    ./scripts/build-baresip-xcframework.sh
 
-By default, output is written to `.build/baresip-xcframework`. To choose another destination:
+By default, output is written to .build/baresip-xcframework. To choose another destination:
 
-```bash
-./scripts/build-baresip-xcframework.sh "$PWD/dist/baresip"
-```
+    ./scripts/build-baresip-xcframework.sh "$PWD/dist/baresip"
 
 ### Current scope limitation
 
-TLS is disabled in this first reproducible build (`USE_OPENSSL=OFF`) to avoid linking a host-built OpenSSL into iOS. This enables an initial SIP UDP/TCP audio baseline. Decide on an iOS-compatible TLS implementation and package/link it separately before claiming SIP-over-TLS support. The CI compile/link smoke tests prove native API linkage and expected system-library dependencies, not functional registration or media behavior.
+TLS is disabled (USE_OPENSSL=OFF) to avoid linking a host-built OpenSSL into iOS. The current build is an initial SIP UDP/TCP baseline and does not support SIP-over-TLS. CI compile/link smoke tests prove native API linkage and expected system-library dependencies, not registration or media behavior.
