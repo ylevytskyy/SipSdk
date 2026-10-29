@@ -90,7 +90,7 @@ link_adapter() {
     -I "$ROOT_DIR/TareSIPDemo" \
     "$SOURCE" \
     "$OUTPUT_DIR/adapter-link-main.mm" \
-    "$library" \
+    -x none "$library" \
     -framework Foundation \
     -framework CoreFoundation \
     -framework SystemConfiguration \
