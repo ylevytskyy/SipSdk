@@ -1,0 +1,53 @@
+name: Build modern Baresip XCFramework
+
+on:
+  pull_request:
+    branches:
+      - master
+    paths:
+      - ".github/workflows/baresip-xcframework.yml"
+      - ".github/workflows/publish-baresip-xcframework.yml"
+      - "scripts/build-baresip-xcframework.sh"
+      - "docs/SPM_MIGRATION.md"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: baresip-xcframework-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build BaresipCore.xcframework
+    runs-on: macos-14
+    timeout-minutes: 60
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Show Apple build tools
+        run: |
+          xcodebuild -version
+          cmake --version
+          xcrun --sdk iphoneos --show-sdk-version
+          xcrun --sdk iphonesimulator --show-sdk-version
+
+      - name: Build pinned Baresip and libre slices
+        run: ./scripts/build-baresip-xcframework.sh "$RUNNER_TEMP/baresip-output"
+
+      - name: Upload XCFramework and checksum
+        uses: actions/upload-artifact@v6
+        with:
+          name: BaresipCore-xcframework-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/baresip-output/BaresipCore.xcframework
+            ${{ runner.temp }}/baresip-output/BaresipCore.xcframework.zip
+            ${{ runner.temp }}/baresip-output/BaresipCore.xcframework.zip.sha256
+            ${{ runner.temp }}/baresip-output/build-metadata.txt
+            ${{ runner.temp }}/baresip-output/LICENSE-Baresip.txt
+            ${{ runner.temp }}/baresip-output/LICENSE-libRE.txt
+          if-no-files-found: error
+          retention-days: 14

@@ -5,9 +5,21 @@ on:
     branches:
       - master
       - "maintenance/**"
+    paths:
+      - "Podfile"
+      - "Podfile.lock"
+      - "TareSIPDemo/**"
+      - "TareSIPDemo.xcodeproj/**"
+      - "TareSIPDemo.xcworkspace/**"
   pull_request:
     branches:
       - master
+    paths:
+      - "Podfile"
+      - "Podfile.lock"
+      - "TareSIPDemo/**"
+      - "TareSIPDemo.xcodeproj/**"
+      - "TareSIPDemo.xcworkspace/**"
   workflow_dispatch:
 
 permissions:
