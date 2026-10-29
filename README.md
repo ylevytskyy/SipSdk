@@ -40,7 +40,7 @@ From the repository root:
 
 ```bash
 gem install cocoapods --version 1.17.0
-pod install --repo-update
+pod install --deployment --repo-update
 open TareSIPDemo.xcworkspace
 ```
 
@@ -68,7 +68,7 @@ Configure a test SIP account in `TareSIPDemo/SipCallsViewController.swift` befor
 ## Known limitations / next steps
 
 - The `taresip` 0.1.1 pod is old and has no automated tests published on CocoaPods. Its bundled static libraries include an x86_64 iOS Simulator slice and an arm64 device slice, but no arm64 iOS Simulator slice. CI therefore builds the legacy x86_64 Simulator architecture and arm64 device architecture separately. Supporting the native arm64 Simulator requires rebuilding the native dependencies as an XCFramework with a proper Simulator slice.
-- The repository does not yet commit a generated `Podfile.lock`. Although `taresip` is pinned to an exact version, the lockfile should still be committed as part of the next dependency-management pass.
+- `Podfile.lock` is committed to record the resolved dependency and its checksums. CI uses CocoaPods deployment mode so accidental lockfile drift fails the build.
 - The sample app still uses legacy Swift / Xcode project settings. Replace the placeholder SIP username, domain, and password in `SipCallsViewController.swift` with a dedicated local configuration mechanism before running it. Do not commit real credentials.
 - The repository is a demonstration client; production VoIP behavior, background audio/call handling, security, and runtime error handling need separate validation.
 
