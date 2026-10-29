@@ -1,0 +1,58 @@
+name: iOS Build
+
+on:
+  push:
+    branches:
+      - master
+      - "maintenance/**"
+  pull_request:
+    branches:
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build TareSIPDemo (iOS Simulator)
+    runs-on: macos-14
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Select Xcode
+        run: |
+          xcodebuild -version
+          xcode-select -p
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+
+      - name: Install CocoaPods
+        run: gem install cocoapods --version 1.17.0 --no-document
+
+      - name: Install iOS dependencies
+        run: pod install --repo-update
+
+      - name: List workspace schemes
+        run: xcodebuild -list -workspace TareSIPDemo.xcworkspace
+
+      - name: Build for iOS Simulator
+        run: >-
+          xcodebuild
+          -workspace TareSIPDemo.xcworkspace
+          -scheme TareSIPDemo
+          -configuration Debug
+          -sdk iphonesimulator
+          -destination 'generic/platform=iOS Simulator'
+          CODE_SIGNING_ALLOWED=NO
+          build
