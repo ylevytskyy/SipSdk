@@ -399,7 +399,15 @@ static void ua_event_handler(struct ua *ua, enum ua_event ev,
     sipCall.call = call;
     NSMutableDictionary<NSValue *, SipCall *> *cache = sipCallsCache();
     @synchronized (cache) {
-        cache[sipCallCacheKey(call)] = sipCall;
+        NSValue *key = sipCallCacheKey(call);
+        SipCall *existingCall = cache[key];
+        if (existingCall != nil) {
+            existingCall.ua = self.ua;
+            existingCall.call = call;
+            sipCall = existingCall;
+        } else {
+            cache[key] = sipCall;
+        }
     }
 
     return sipCall;
