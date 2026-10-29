@@ -11,7 +11,7 @@ The first migration milestone is a reproducible `BaresipCore.xcframework` build.
 | [baresip](https://github.com/baresip/baresip) | v4.12.0 | `9cfab81550acc4bd38d6580d79b45cc6eea65cd6` |
 | [re](https://github.com/baresip/re) | v4.12.0 | `65555dad439de9d6a81b3ee6092b9c096585249b` |
 
-The script builds a static core for iOS device arm64 and iOS Simulator arm64 + x86_64, creates an XCFramework, and generates a ZIP and SHA-256 checksum. The GitHub Actions workflow uploads the build output as an artifact. The artifact is a build result for validation; it is not yet a published SwiftPM dependency.
+The script builds a static core for iOS device arm64 and iOS Simulator arm64 + x86_64, creates an XCFramework, and generates a ZIP and SHA-256 checksum. The GitHub Actions workflow uploads the build output as an artifact. The pull-request workflow uploads the output as a short-lived build artifact for validation. A separate tag-triggered workflow in `.github/workflows/publish-baresip-xcframework.yml` rebuilds the same pinned sources and publishes a versioned GitHub Release containing the XCFramework ZIP, its generated SHA-256 file, and build metadata. Use a real published release asset and its exact checksum when defining the SwiftPM binary target; do not use a temporary Actions artifact URL.
 
 ## Why the app adapter cannot be carried over unchanged
 
@@ -30,7 +30,7 @@ The adapter migration must preserve the existing public `SipClientDelegate` cont
 1. Build and inspect the XCFramework artifact from CI; confirm the device and Simulator slices and link it in a small smoke target.
 2. Port `SipClient.mm` to the current Baresip event/call API and trim/update the demo config to match selected modules.
 3. Add focused adapter tests and document runtime test prerequisites (SIP server/account and a physical iOS device).
-4. Publish a versioned ZIP asset and compute its checksum. Only then add a SwiftPM `binaryTarget` and wrapper target, migrate the demo project from CocoaPods, and remove `Podfile` / `Podfile.lock`.
+4. After the native-build CI is green and the artifact has been inspected, create a `baresip-core-v*` tag on a commit containing the build and release workflows. The tag workflow rebuilds the framework and publishes the ZIP, checksum, and metadata as a GitHub Release. Only after that release exists, add a SwiftPM `binaryTarget` using the published asset URL and exact generated checksum; then migrate the demo project from CocoaPods and remove `Podfile` / `Podfile.lock`.
 5. Keep the legacy build available until the new package builds and a real SIP audio call passes.
 
 ## Build locally
