@@ -103,7 +103,7 @@ static void ua_event_handler(enum bevent_ev ev, struct bevent *event, void *arg)
     NSLog(@"Baresip event %@ peer=%@", @(ev), remoteUri);
 
     switch (ev) {
-        case BEVENT_REGISTERING:
+        case BEVENT_REGISTERING: {
             dispatch_async(dispatch_get_main_queue(), ^{
                 id<SipClientDelegate> delegate = sipSdk.delegate;
                 if ([delegate respondsToSelector:@selector(onWillRegister:)]) {
@@ -111,8 +111,9 @@ static void ua_event_handler(enum bevent_ev ev, struct bevent *event, void *arg)
                 }
             });
             break;
+        }
 
-        case BEVENT_REGISTER_OK:
+        case BEVENT_REGISTER_OK: {
             dispatch_async(dispatch_get_main_queue(), ^{
                 id<SipClientDelegate> delegate = sipSdk.delegate;
                 if ([delegate respondsToSelector:@selector(onDidRegister:)]) {
@@ -120,8 +121,9 @@ static void ua_event_handler(enum bevent_ev ev, struct bevent *event, void *arg)
                 }
             });
             break;
+        }
 
-        case BEVENT_REGISTER_FAIL:
+        case BEVENT_REGISTER_FAIL: {
             dispatch_async(dispatch_get_main_queue(), ^{
                 id<SipClientDelegate> delegate = sipSdk.delegate;
                 if ([delegate respondsToSelector:@selector(onFailedRegister:)]) {
@@ -129,8 +131,9 @@ static void ua_event_handler(enum bevent_ev ev, struct bevent *event, void *arg)
                 }
             });
             break;
+        }
 
-        case BEVENT_UNREGISTERING:
+        case BEVENT_UNREGISTERING: {
             dispatch_async(dispatch_get_main_queue(), ^{
                 id<SipClientDelegate> delegate = sipSdk.delegate;
                 if ([delegate respondsToSelector:@selector(onWillUnRegister:)]) {
@@ -138,8 +141,9 @@ static void ua_event_handler(enum bevent_ev ev, struct bevent *event, void *arg)
                 }
             });
             break;
+        }
 
-        case BEVENT_CALL_INCOMING:
+        case BEVENT_CALL_INCOMING: {
             dispatch_async(dispatch_get_main_queue(), ^{
                 id<SipClientDelegate> delegate = sipSdk.delegate;
                 if ([delegate respondsToSelector:@selector(onCallIncoming:)]) {
@@ -147,8 +151,9 @@ static void ua_event_handler(enum bevent_ev ev, struct bevent *event, void *arg)
                 }
             });
             break;
+        }
 
-        case BEVENT_CALL_RINGING:
+        case BEVENT_CALL_RINGING: {
             dispatch_async(dispatch_get_main_queue(), ^{
                 id<SipClientDelegate> delegate = sipSdk.delegate;
                 if ([delegate respondsToSelector:@selector(onCallRinging:)]) {
@@ -156,8 +161,9 @@ static void ua_event_handler(enum bevent_ev ev, struct bevent *event, void *arg)
                 }
             });
             break;
+        }
 
-        case BEVENT_CALL_PROGRESS:
+        case BEVENT_CALL_PROGRESS: {
             dispatch_async(dispatch_get_main_queue(), ^{
                 id<SipClientDelegate> delegate = sipSdk.delegate;
                 if ([delegate respondsToSelector:@selector(onCallProcess:)]) {
@@ -165,8 +171,9 @@ static void ua_event_handler(enum bevent_ev ev, struct bevent *event, void *arg)
                 }
             });
             break;
+        }
 
-        case BEVENT_CALL_ESTABLISHED:
+        case BEVENT_CALL_ESTABLISHED: {
             dispatch_async(dispatch_get_main_queue(), ^{
                 id<SipClientDelegate> delegate = sipSdk.delegate;
                 if ([delegate respondsToSelector:@selector(onCallEstablished:)]) {
@@ -174,8 +181,9 @@ static void ua_event_handler(enum bevent_ev ev, struct bevent *event, void *arg)
                 }
             });
             break;
+        }
 
-        case BEVENT_CALL_CLOSED:
+        case BEVENT_CALL_CLOSED: {
             dispatch_async(dispatch_get_main_queue(), ^{
                 id<SipClientDelegate> delegate = sipSdk.delegate;
                 if ([delegate respondsToSelector:@selector(onCallClosed:)]) {
@@ -192,8 +200,9 @@ static void ua_event_handler(enum bevent_ev ev, struct bevent *event, void *arg)
             sipCall.call = nullptr;
             sipCall.ua = nullptr;
             break;
+        }
 
-        case BEVENT_CALL_TRANSFER_FAILED:
+        case BEVENT_CALL_TRANSFER_FAILED: {
             dispatch_async(dispatch_get_main_queue(), ^{
                 id<SipClientDelegate> delegate = sipSdk.delegate;
                 if ([delegate respondsToSelector:@selector(onCallTransferFailed:)]) {
@@ -201,8 +210,9 @@ static void ua_event_handler(enum bevent_ev ev, struct bevent *event, void *arg)
                 }
             });
             break;
+        }
 
-        case BEVENT_CALL_DTMF_START:
+        case BEVENT_CALL_DTMF_START: {
             dispatch_async(dispatch_get_main_queue(), ^{
                 id<SipClientDelegate> delegate = sipSdk.delegate;
                 if ([delegate respondsToSelector:@selector(onCallDtmfStart:)]) {
@@ -210,8 +220,9 @@ static void ua_event_handler(enum bevent_ev ev, struct bevent *event, void *arg)
                 }
             });
             break;
+        }
 
-        case BEVENT_CALL_DTMF_END:
+        case BEVENT_CALL_DTMF_END: {
             dispatch_async(dispatch_get_main_queue(), ^{
                 id<SipClientDelegate> delegate = sipSdk.delegate;
                 if ([delegate respondsToSelector:@selector(onCallDtmfEnd:)]) {
@@ -219,10 +230,12 @@ static void ua_event_handler(enum bevent_ev ev, struct bevent *event, void *arg)
                 }
             });
             break;
+        }
 
-        default:
+        default: {
             // Ignore events not represented by the legacy public delegate.
             break;
+        }
     }
 }
 
