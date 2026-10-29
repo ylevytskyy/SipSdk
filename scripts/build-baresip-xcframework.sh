@@ -184,8 +184,7 @@ xcodebuild -create-xcframework \
 # missing transitive system-framework dependencies before publishing an archive
 # that compiles but cannot be consumed by an application.
 cat > "$BUILD_DIR/link-smoke.c" <<'SMOKE'
-#include <baresip.h>
-#include <re.h>
+#include <BaresipCore.h>
 
 #define KEEP_SYMBOL(symbol) __typeof__(&symbol) volatile keep_##symbol = &symbol
 KEEP_SYMBOL(libre_init);
