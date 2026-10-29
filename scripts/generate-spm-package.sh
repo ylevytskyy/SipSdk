@@ -50,10 +50,18 @@ if [[ "$ACTUAL_CHECKSUM" != "$EXPECTED_CHECKSUM" ]]; then
   exit 1
 fi
 
-if ! unzip -Z1 "$WORK_DIR/$ZIP_NAME" | grep -q '^BaresipCore\.xcframework/'; then
-  echo "ERROR: release ZIP does not contain BaresipCore.xcframework/" >&2
+unzip -tq "$WORK_DIR/$ZIP_NAME" >/dev/null
+unzip -Z1 "$WORK_DIR/$ZIP_NAME" > "$WORK_DIR/archive-list.txt"
+if ! grep -Fqx 'BaresipCore.xcframework/Info.plist' "$WORK_DIR/archive-list.txt"; then
+  echo "ERROR: release ZIP does not contain BaresipCore.xcframework/Info.plist" >&2
   exit 1
 fi
+for license in LICENSE-Baresip.txt LICENSE-libRE.txt; do
+  if ! grep -Fqx "$license" "$WORK_DIR/archive-list.txt"; then
+    echo "ERROR: release ZIP is missing $license" >&2
+    exit 1
+  fi
+done
 
 REPOSITORY_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cat > "$REPOSITORY_ROOT/Package.swift" <<MANIFEST
