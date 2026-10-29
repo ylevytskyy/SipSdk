@@ -1,0 +1,45 @@
+name: Publish Baresip Core XCFramework
+
+on:
+  push:
+    tags:
+      - "baresip-core-v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: baresip-core-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Build and publish pinned Baresip XCFramework
+    runs-on: macos-14
+    timeout-minutes: 60
+
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@v6
+
+      - name: Show Apple build tools
+        run: |
+          xcodebuild -version
+          cmake --version
+          xcrun --sdk iphoneos --show-sdk-version
+          xcrun --sdk iphonesimulator --show-sdk-version
+
+      - name: Build XCFramework and checksum
+        run: ./scripts/build-baresip-xcframework.sh "$RUNNER_TEMP/baresip-output"
+
+      - name: Publish versioned GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            "$RUNNER_TEMP/baresip-output/BaresipCore.xcframework.zip" \
+            "$RUNNER_TEMP/baresip-output/BaresipCore.xcframework.zip.sha256" \
+            "$RUNNER_TEMP/baresip-output/build-metadata.txt" \
+            --verify-tag \
+            --title "Baresip Core XCFramework ${GITHUB_REF_NAME}" \
+            --notes "Reproducible static Baresip XCFramework built from the pinned upstream commits recorded in build-metadata.txt. Includes iOS device arm64 and iOS Simulator arm64/x86_64. TLS is disabled in this release; SIP over TLS is not supported by this build."
