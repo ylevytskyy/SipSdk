@@ -14,7 +14,7 @@ class SipCallsViewController: UIViewController {
     @IBOutlet weak var logsTextView: UITextView!
     
     private var client = SipClient(username: "YOUR_SIP_USERNAME", domain: "YOUR_SIP_DOMAIN")
-    private var calls = Set<SipCall>()
+    private var calls: [SipCall] = []
     
     @IBAction func connect(_ sender: Any) {
         guard let uri = remoteUri.text?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -28,7 +28,7 @@ class SipCallsViewController: UIViewController {
             return
         }
 
-        calls.insert(sipCall)
+        calls.append(sipCall)
         callsTableView.reloadData()
     }
 
@@ -58,7 +58,6 @@ class SipCallsViewController: UIViewController {
     
     override func prepare(for segue: UIStoryboardSegue, sender: Any?) {
         if segue.identifier == "sipCallDetailsSegue" {
-            let calls = Array(self.calls)
             let path = callsTableView.indexPathForSelectedRow!
             let destination = segue.destination as! SipCallDetailsViewController
             destination.sipCall = calls[path.row]
@@ -96,7 +95,9 @@ extension SipCallsViewController : SipClientDelegate {
         
         self.present(alertController, animated: true, completion: nil)
         
-        calls.insert(sipCall)
+        if !calls.contains(where: { $0 === sipCall }) {
+            calls.append(sipCall)
+        }
         callsTableView.reloadData()
     }
     
@@ -115,7 +116,7 @@ extension SipCallsViewController : SipClientDelegate {
     func onCallClosed(_ sipCall: SipCall) {
         logsTextView.text += "Call closed from \(sipCall.remoteUri)...\n";
         
-        calls.remove(sipCall)
+        calls.removeAll(where: { $0 === sipCall })
         callsTableView.reloadData()
     }
 }
@@ -127,7 +128,6 @@ extension SipCallsViewController : UITableViewDataSource {
     
     func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
         let cell = tableView.dequeueReusableCell(withIdentifier: "CellId", for: indexPath) as! CallCell
-        let calls = Array(self.calls)
         let sipCall = calls[indexPath.row]
         cell.remoteUriLabel.text = sipCall.remoteUri
         return cell
