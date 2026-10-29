@@ -4,6 +4,13 @@ on:
   push:
     tags:
       - "baresip-core-v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version without the v prefix"
+        required: true
+        default: "4.12.0"
+        type: string
 
 permissions:
   contents: write
@@ -19,8 +26,70 @@ jobs:
     timeout-minutes: 60
 
     steps:
-      - name: Check out tagged source
+      - name: Check out source
         uses: actions/checkout@v6
+
+      - name: Create annotated version tag for manual release
+        id: manual_tag
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+
+          [[ "$GITHUB_REF" == "refs/heads/master" ]] || {
+            echo "Manual releases must be dispatched from master." >&2
+            exit 1
+          }
+
+          [[ "$RELEASE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+            echo "Version must use MAJOR.MINOR.PATCH format, for example 4.12.0." >&2
+            exit 1
+          }
+
+          TAG="baresip-core-v$RELEASE_VERSION"
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG already exists; refusing to overwrite or republish it." >&2
+            exit 1
+          fi
+
+          TAG_OBJECT="$(gh api --method POST "repos/$GITHUB_REPOSITORY/git/tags" \
+            -f "tag=$TAG" \
+            -f "message=Baresip Core XCFramework $RELEASE_VERSION" \
+            -f "object=$GITHUB_SHA" \
+            -f "type=commit" \
+            --jq .sha)"
+
+          gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" \
+            -f "ref=refs/tags/$TAG" \
+            -f "sha=$TAG_OBJECT" >/dev/null
+
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve release tag
+        id: release
+        env:
+          MANUAL_TAG: ${{ steps.manual_tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            [[ -n "$MANUAL_TAG" ]] || {
+              echo "Manual release tag was not created." >&2
+              exit 1
+            }
+            TAG="$MANUAL_TAG"
+          else
+            TAG="$GITHUB_REF_NAME"
+          fi
+
+          [[ "$TAG" =~ ^baresip-core-v[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+            echo "Unexpected release tag: $TAG" >&2
+            exit 1
+          }
+
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
       - name: Show Apple build tools
         run: |
@@ -35,13 +104,14 @@ jobs:
       - name: Publish versioned GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
         run: |
-          gh release create "$GITHUB_REF_NAME" \
+          gh release create "$RELEASE_TAG" \
             "$RUNNER_TEMP/baresip-output/BaresipCore.xcframework.zip" \
             "$RUNNER_TEMP/baresip-output/BaresipCore.xcframework.zip.sha256" \
             "$RUNNER_TEMP/baresip-output/build-metadata.txt" \
             "$RUNNER_TEMP/baresip-output/LICENSE-Baresip.txt" \
             "$RUNNER_TEMP/baresip-output/LICENSE-libRE.txt" \
             --verify-tag \
-            --title "Baresip Core XCFramework ${GITHUB_REF_NAME}" \
+            --title "Baresip Core XCFramework $RELEASE_TAG" \
             --notes "Reproducible static Baresip XCFramework built from the pinned upstream commits recorded in build-metadata.txt. Includes iOS device arm64 and iOS Simulator arm64/x86_64. TLS is disabled in this release; SIP over TLS is not supported by this build."
