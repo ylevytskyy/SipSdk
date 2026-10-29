@@ -13,11 +13,7 @@
 #import <re.h>
 #import <baresip.h>
 
-#include <unordered_map>
-
 static const int kDefaultPort = 5060;
-
-static std::unordered_map<call*, SipCall*> sipCallsCache;
 
 //static dispatch_once_t eventDispatchQueueToken;
 //static dispatch_queue_t eventDispatchQueue;
@@ -36,24 +32,26 @@ static std::unordered_map<call*, SipCall*> sipCallsCache;
     return self;
 }
 
-- (void)deinit {
-    sipCallsCache.erase(self.call);
-}
-
 - (NSString*)remoteUri {
     return self.cachedRemoteUri;
 }
 
 - (void)answer {
-    ua_answer(self.ua, self.call);
+    if (self.ua && self.call) {
+        ua_answer(self.ua, self.call);
+    }
 }
 
 - (void)hangup:(unsigned short)statusCode reason:(NSString*)reason {
-    ua_hangup(self.ua, self.call, statusCode, [reason cStringUsingEncoding:NSUTF8StringEncoding]);
+    if (self.ua && self.call) {
+        ua_hangup(self.ua, self.call, statusCode, [reason cStringUsingEncoding:NSUTF8StringEncoding]);
+    }
 }
 
 - (void)holdAnswer {
-    ua_hold_answer(self.ua, self.call);
+    if (self.ua && self.call) {
+        ua_hold_answer(self.ua, self.call);
+    }
 }
 @end
 
@@ -61,28 +59,48 @@ static std::unordered_map<call*, SipCall*> sipCallsCache;
 @property (nonatomic) struct ua *ua;
 @end
 
-static SipCall* getSipCall(struct call *call, SipClient* sipSdk, NSString* remoteUri) {
-    SipCall* sipCall;
-    auto sipCallCache = sipCallsCache.find(call);
-    if (sipCallCache == sipCallsCache.end()) {
-        sipCall = [[SipCall alloc] init];
-        sipCall.ua = sipSdk.ua;
-        sipCall.call = call;
-        sipCall.cachedRemoteUri = remoteUri;
-    } else {
-        sipCall = sipCallCache->second;
+static NSMutableDictionary<NSValue *, SipCall *> *sipCallsCache(void) {
+    static NSMutableDictionary<NSValue *, SipCall *> *cache;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        cache = [[NSMutableDictionary alloc] init];
+    });
+    return cache;
+}
+
+static NSValue *sipCallCacheKey(struct call *call) {
+    return [NSValue valueWithPointer:call];
+}
+
+static SipCall *getSipCall(struct call *call, SipClient *sipSdk, NSString *remoteUri) {
+    if (call == nullptr) {
+        return nil;
     }
-    
-    return sipCall;
+
+    NSMutableDictionary<NSValue *, SipCall *> *cache = sipCallsCache();
+    NSValue *key = sipCallCacheKey(call);
+
+    @synchronized (cache) {
+        SipCall *sipCall = cache[key];
+        if (sipCall == nil) {
+            sipCall = [[SipCall alloc] init];
+            sipCall.ua = sipSdk.ua;
+            sipCall.call = call;
+            sipCall.cachedRemoteUri = remoteUri ?: @"";
+            cache[key] = sipCall;
+        }
+        return sipCall;
+    }
 }
 
 static void ua_event_handler(struct ua *ua, enum ua_event ev,
     struct call *call, const char *prm, void *arg)
 {
-    NSLog(@"ua_event_handler %@ %@", @(ev), @(prm));
-    
-    SipClient* sipSdk = (__bridge SipClient*)arg;
-    SipCall* sipCall = getSipCall(call, sipSdk, @(prm));
+    NSString *eventParameter = prm ? [NSString stringWithUTF8String:prm] : @"";
+    NSLog(@"ua_event_handler %@ %@", @(ev), eventParameter);
+
+    SipClient *sipSdk = (__bridge SipClient *)arg;
+    SipCall *sipCall = getSipCall(call, sipSdk, eventParameter);
     
     switch (ev) {
         case UA_EVENT_REGISTERING: {
@@ -163,6 +181,15 @@ static void ua_event_handler(struct ua *ua, enum ua_event ev,
                     [sipSdk.delegate onCallClosed:sipCall];
                 }
             });
+
+            if (call != nullptr) {
+                NSMutableDictionary<NSValue *, SipCall *> *cache = sipCallsCache();
+                @synchronized (cache) {
+                    [cache removeObjectForKey:sipCallCacheKey(call)];
+                }
+            }
+            sipCall.call = nullptr;
+            sipCall.ua = nullptr;
         }
             break;
             
@@ -231,10 +258,34 @@ static void ua_event_handler(struct ua *ua, enum ua_event ev,
     mod_init();
     
     NSString *documentDirectory = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
-    if (documentDirectory != nil) {
-        conf_path_set([documentDirectory cStringUsingEncoding:NSUTF8StringEncoding]);
+    if (documentDirectory == nil) {
+        mod_close();
+        libre_close();
+        return -1;
     }
-    
+
+    NSFileManager *fileManager = [NSFileManager defaultManager];
+    NSString *configDestination = [documentDirectory stringByAppendingPathComponent:@"config"];
+    if (![fileManager fileExistsAtPath:configDestination]) {
+        NSString *bundledConfigPath = [[NSBundle mainBundle] pathForResource:@"config" ofType:nil];
+        if (bundledConfigPath == nil) {
+            NSLog(@"BareSIP config resource is missing from the app bundle.");
+            mod_close();
+            libre_close();
+            return -1;
+        }
+
+        NSError *copyError = nil;
+        if (![fileManager copyItemAtPath:bundledConfigPath toPath:configDestination error:&copyError]) {
+            NSLog(@"Failed to copy BareSIP config into Documents: %@", copyError);
+            mod_close();
+            libre_close();
+            return -1;
+        }
+    }
+
+    conf_path_set([documentDirectory cStringUsingEncoding:NSUTF8StringEncoding]);
+
     result = conf_configure();
     if (result != 0) {
         return result;
@@ -300,6 +351,10 @@ static void ua_event_handler(struct ua *ua, enum ua_event ev,
 }
 
 - (int)registry {
+    if (!self.ua) {
+        return -1;
+    }
+
     int result = ua_register(self.ua);
     if (result != 0) {
         return result;
@@ -308,11 +363,13 @@ static void ua_event_handler(struct ua *ua, enum ua_event ev,
 }
 
 - (void)unregister {
-    ua_unregister(self.ua);
+    if (self.ua) {
+        ua_unregister(self.ua);
+    }
 }
 
 - (bool)isRegistered {
-    return ua_isregistered(self.ua);
+    return self.ua ? ua_isregistered(self.ua) : false;
 }
 
 - (SipCall*)makeCall:(NSString*)uri {
@@ -320,12 +377,23 @@ static void ua_event_handler(struct ua *ua, enum ua_event ev,
     sipCall.ua = self.ua;
     sipCall.cachedRemoteUri = uri;
 
-    struct call *call;
+    if (!self.ua) {
+        sipCall.baresipResultCode = -1;
+        return sipCall;
+    }
+
+    struct call *call = nullptr;
     int result = ua_connect(self.ua, &call, nil, [uri cStringUsingEncoding:NSUTF8StringEncoding], nil, VIDMODE_OFF);
     if (result != 0) {
         sipCall.baresipResultCode = result;
     } else {
         sipCall.call = call;
+        if (call != nullptr) {
+            NSMutableDictionary<NSValue *, SipCall *> *cache = sipCallsCache();
+            @synchronized (cache) {
+                cache[sipCallCacheKey(call)] = sipCall;
+            }
+        }
     }
 
     return sipCall;
