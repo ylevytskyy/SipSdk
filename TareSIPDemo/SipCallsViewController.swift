@@ -13,17 +13,30 @@ class SipCallsViewController: UIViewController {
     @IBOutlet weak var callsTableView: UITableView!
     @IBOutlet weak var logsTextView: UITextView!
     
-    private var client = SipClient(username: "tiger333", domain: "iptel.org")
-    private var calls = Set<SipCall>()
+    private var client = SipClient(username: "YOUR_SIP_USERNAME", domain: "YOUR_SIP_DOMAIN")
+    private var calls: [SipCall] = []
     
     @IBAction func connect(_ sender: Any) {
-        let sipCall = client.makeCall(remoteUri.text!)
-        calls.insert(sipCall)
+        guard let uri = remoteUri.text?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !uri.isEmpty else {
+            logsTextView.text += "Enter a SIP URI before starting a call.\n"
+            return
+        }
+
+        guard let sipCall = client.makeCall(uri) else {
+            logsTextView.text += "Failed to create call. Check SIP registration and the destination URI.\n"
+            return
+        }
+
+        calls.append(sipCall)
         callsTableView.reloadData()
     }
 
     @IBAction func register(_ sender: Any) {
-        client.registry()
+        let result = client.registry()
+        if result != 0 {
+            logsTextView.text += "Unable to register SIP client (code \(result)).\n"
+        }
     }
     
     @IBAction func unregister(_ sender: Any) {
@@ -36,13 +49,15 @@ class SipCallsViewController: UIViewController {
         callsTableView.dataSource = self
         
         client.delegate = self
-        client.password = "popup"
-        client.start()
+        client.password = "YOUR_SIP_PASSWORD"
+        let result = client.start()
+        if result != 0 {
+            logsTextView.text += "Failed to start SIP client (code \(result)). Check the local SIP configuration.\n"
+        }
     }
     
     override func prepare(for segue: UIStoryboardSegue, sender: Any?) {
         if segue.identifier == "sipCallDetailsSegue" {
-            let calls = Array(self.calls)
             let path = callsTableView.indexPathForSelectedRow!
             let destination = segue.destination as! SipCallDetailsViewController
             destination.sipCall = calls[path.row]
@@ -80,7 +95,9 @@ extension SipCallsViewController : SipClientDelegate {
         
         self.present(alertController, animated: true, completion: nil)
         
-        calls.insert(sipCall)
+        if !calls.contains(where: { $0 === sipCall }) {
+            calls.append(sipCall)
+        }
         callsTableView.reloadData()
     }
     
@@ -99,7 +116,7 @@ extension SipCallsViewController : SipClientDelegate {
     func onCallClosed(_ sipCall: SipCall) {
         logsTextView.text += "Call closed from \(sipCall.remoteUri)...\n";
         
-        calls.remove(sipCall)
+        calls.removeAll(where: { $0 === sipCall })
         callsTableView.reloadData()
     }
 }
@@ -111,7 +128,6 @@ extension SipCallsViewController : UITableViewDataSource {
     
     func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
         let cell = tableView.dequeueReusableCell(withIdentifier: "CellId", for: indexPath) as! CallCell
-        let calls = Array(self.calls)
         let sipCall = calls[indexPath.row]
         cell.remoteUriLabel.text = sipCall.remoteUri
         return cell

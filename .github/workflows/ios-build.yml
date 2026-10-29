@@ -1,0 +1,75 @@
+name: iOS Build
+
+on:
+  push:
+    branches:
+      - master
+      - "maintenance/**"
+  pull_request:
+    branches:
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build TareSIPDemo
+    runs-on: macos-14
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Show Xcode version
+        run: |
+          xcodebuild -version
+          xcode-select -p
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+
+      - name: Install CocoaPods
+        run: gem install cocoapods --version 1.17.0 --no-document
+
+      - name: Install iOS dependencies
+        run: pod install --deployment --repo-update
+
+      - name: List workspace schemes
+        run: xcodebuild -list -workspace TareSIPDemo.xcworkspace
+
+      # taresip 0.1.1 ships x86_64 Simulator and arm64 device objects,
+      # but does not ship an arm64 iOS Simulator slice.
+      - name: Build for iOS Simulator (x86_64 legacy slice)
+        run: >-
+          xcodebuild
+          -workspace TareSIPDemo.xcworkspace
+          -scheme TareSIPDemo
+          -configuration Debug
+          -sdk iphonesimulator
+          -destination 'generic/platform=iOS Simulator'
+          ARCHS=x86_64
+          ONLY_ACTIVE_ARCH=YES
+          CODE_SIGNING_ALLOWED=NO
+          build
+
+      - name: Build for iOS device (arm64)
+        run: >-
+          xcodebuild
+          -workspace TareSIPDemo.xcworkspace
+          -scheme TareSIPDemo
+          -configuration Debug
+          -sdk iphoneos
+          -destination 'generic/platform=iOS'
+          ARCHS=arm64
+          ONLY_ACTIVE_ARCH=YES
+          CODE_SIGNING_ALLOWED=NO
+          build
