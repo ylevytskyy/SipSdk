@@ -2,7 +2,7 @@
 
 An iOS SIP SDK and demo application built around the modular [Baresip](https://github.com/baresip/baresip) engine.
 
-The repository is in a staged migration from the legacy `taresip 0.1.1` CocoaPods integration to a version-pinned Baresip v4 XCFramework distributed through Swift Package Manager (SwiftPM). The modern package is now defined in `Package.swift`; the existing demo app remains on the legacy integration until the new adapter passes device-level SIP and audio validation.
+The repository is in a staged migration from the legacy `taresip 0.1.1` CocoaPods integration to a version-pinned Baresip v4 XCFramework distributed through Swift Package Manager (SwiftPM). The modern package is defined in `Package.swift`; the existing demo app remains on the legacy integration until the new adapter passes device-level SIP and audio validation.
 
 ## Architecture
 
@@ -20,7 +20,7 @@ Swift / Objective-C application
        (Baresip + libre, static)
 ```
 
-The SwiftPM target includes the Objective-C++ adapter and the `config.baresip-v4` resource. Its binary dependency is pinned to the `baresip-core-v4.12.0` GitHub Release and a SHA-256 checksum.
+The `SipSdk` SwiftPM product includes the Objective-C++ adapter, the pinned BaresipCore binary dependency, and a small resource target that copies `config.baresip-v4` into the app.
 
 ### Legacy demo (kept for compatibility)
 
