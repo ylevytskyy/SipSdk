@@ -17,7 +17,7 @@ The published [Baresip Core XCFramework release](https://github.com/ylevytskyy/S
 
 `TareSIPDemo.xcodeproj` references the repository root as a local Swift package and links the `SipSdk` library product. The Swift bridging header imports the package's public Objective-C API:
 
-    #import <SipSdk/SipClient.h>
+    @import SipSdk;
 
 The active app target no longer compiles `TareSIPDemo/SipClient.mm`, links the CocoaPods-generated `Pods_TareSIPDemo.framework`, or copies the legacy `TareSIPDemo/config` resource. The old `SipClient.mm`, `SipClient.h` and config are grouped in Xcode as legacy files and remain tracked alongside `Podfile` and `Podfile.lock`.
 
