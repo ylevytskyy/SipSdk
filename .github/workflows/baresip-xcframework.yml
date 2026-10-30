@@ -12,7 +12,9 @@ on:
       - "scripts/generate-spm-package.sh"
       - "Package.swift"
       - "Sources/SipSdk/**"
+      - "Sources/SipSdkResources/**"
       - "docs/SPM_MIGRATION.md"
+      - "README.md"
   workflow_dispatch:
 
 permissions:
@@ -44,6 +46,11 @@ jobs:
 
       - name: Check SwiftPM manifest generator syntax
         run: bash -n ./scripts/generate-spm-package.sh
+
+      - name: Validate SwiftPM manifest and release checksum
+        run: |
+          swift package dump-package
+          swift package resolve
 
       - name: Compile-check Baresip v4 adapter
         run: bash ./scripts/check-baresip-adapter.sh "$RUNNER_TEMP/baresip-output"

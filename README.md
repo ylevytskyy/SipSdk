@@ -1,42 +1,74 @@
-# SipSdk (TareSIP Demo for iOS)
+# SipSdk
 
-> Objective-C++ and Swift demo client for the BareSIP modular SIP engine, integrated through the legacy `taresip` CocoaPod.
+An iOS SIP SDK and demo application built around the modular [Baresip](https://github.com/baresip/baresip) engine.
 
-This repository currently contains an iOS demo application and a thin Objective-C++ wrapper around the native SIP API. It is not yet a standalone, versioned binary SDK.
+The repository is in a staged migration from the legacy `taresip 0.1.1` CocoaPods integration to a version-pinned Baresip v4 XCFramework distributed through Swift Package Manager (SwiftPM). The modern package is defined in `Package.swift`; the existing demo app remains on the legacy integration until the new adapter passes device-level SIP and audio validation.
 
 ## Architecture
 
+### Modern SwiftPM package
+
 ```text
-Swift UIKit application
-        |
-        | Objective-C bridging header
-        v
-Objective-C++ wrapper (SipClient.mm)
-        |
-        | native C API
-        v
-TareSIP / BareSIP libraries (SIP, RTP, audio and codecs)
+Swift / Objective-C application
+             |
+             v
+      SipSdk public API
+   Objective-C++ Baresip v4 adapter
+             |
+             v
+       BaresipCore XCFramework
+       (Baresip + libre, static)
 ```
 
-## Features
+The `SipSdk` SwiftPM product includes the Objective-C++ adapter, the pinned BaresipCore binary dependency, and a small resource target that copies `config.baresip-v4` into the app.
 
-- SIP registration and deregistration.
-- Incoming and outgoing audio calls.
-- Call lifecycle callbacks exposed through `SipClientDelegate`.
-- DTMF start/end events.
-- Swift interoperability through `SipClient.h`.
+### Legacy demo (kept for compatibility)
+
+```text
+Swift UIKit demo
+       |
+       v
+Legacy Objective-C++ wrapper (SipClient.mm)
+       |
+       v
+taresip 0.1.1 CocoaPod
+```
+
+The demo is intentionally not switched to the new adapter yet. Keeping the known legacy build available provides a rollback path while SIP behavior is validated on real devices.
 
 ## Requirements
 
-- macOS with Xcode and the iOS Simulator SDK.
-- Ruby and CocoaPods.
-- An SIP account and server that you are authorized to use for testing.
+- macOS with Xcode and the iOS SDK.
+- Swift tools 5.9 or newer.
+- For the legacy demo only: Ruby and CocoaPods.
+- A SIP account and server that you are authorized to use for testing.
 
-The app was originally created with Swift 4.2 and an iOS deployment target of 12.1. It relies on `taresip 0.1.1`, whose CocoaPods release dates to 2016. This native dependency is the primary compatibility risk; do not blindly upgrade it or swap it for current BareSIP libraries without checking the C API and binary/linking compatibility.
+The package and demo retain an iOS deployment target of 12.1.
 
-## Build
+## Build the SwiftPM package
 
-From the repository root:
+From the repository root on macOS:
+
+```bash
+swift package dump-package
+swift package resolve
+```
+
+Open `Package.swift` in Xcode to build the `SipSdk` package for a generic iOS device or iOS Simulator destination.
+
+The first resolution downloads the versioned XCFramework from the GitHub Release. SwiftPM verifies the archive against the checksum in `Package.swift`. The release contains static slices for iOS device arm64 and iOS Simulator arm64/x86_64.
+
+To regenerate the manifest from the published release rather than editing the checksum manually:
+
+```bash
+bash scripts/generate-spm-package.sh 4.12.0
+```
+
+The script downloads the release checksum sidecar and archive, independently verifies SHA-256, checks the ZIP contents and license files, and then writes `Package.swift`.
+
+## Build the legacy demo
+
+The current `TareSIPDemo` Xcode project still uses CocoaPods:
 
 ```bash
 gem install cocoapods --version 1.17.0
@@ -44,34 +76,19 @@ pod install --deployment --repo-update
 open TareSIPDemo.xcworkspace
 ```
 
-In Xcode, select the `TareSIPDemo` scheme and an iOS Simulator or connected device, then build. For a command-line simulator build:
+Configure a test SIP account in `TareSIPDemo/SipCallsViewController.swift` before running the app. Do not commit real account credentials. The bundled legacy `TareSIPDemo/config` file contains Baresip module and audio settings; it is not a secrets store.
 
-```bash
-xcodebuild \
-  -workspace TareSIPDemo.xcworkspace \
-  -scheme TareSIPDemo \
-  -configuration Debug \
-  -sdk iphonesimulator \
-  -destination 'generic/platform=iOS Simulator' \
-  ARCHS=x86_64 \
-  ONLY_ACTIVE_ARCH=YES \
-  CODE_SIGNING_ALLOWED=NO \
-  build
-```
+## Current status and limitations
 
-A GitHub Actions workflow runs the same dependency installation and simulator build on pushes and pull requests.
+- The Baresip v4.12.0 XCFramework release is published and pinned by the SwiftPM manifest.
+- CI builds and compile/links the modern adapter for iOS device arm64 and iOS Simulator arm64/x86_64.
+- The legacy demo remains on `taresip 0.1.1`; migration of the Xcode project is deliberately deferred.
+- Real SIP registration, incoming/outgoing calls, two-way audio, DTMF, repeated start/stop and network transitions still require device-level testing against a controlled SIP server.
+- TLS is disabled in the current native build (`USE_OPENSSL=OFF`), so SIP over TLS is not supported by this release.
+- A green compile/link job does not prove SIP signaling or media behavior.
 
-## SIP configuration
-
-Configure a test SIP account in `TareSIPDemo/SipCallsViewController.swift` before running the app. Do not commit real account credentials. The bundled `TareSIPDemo/config` file contains BareSIP module and audio settings; it is not a secrets store.
-
-## Known limitations / next steps
-
-- The `taresip` 0.1.1 pod is old and has no automated tests published on CocoaPods. Its bundled static libraries include an x86_64 iOS Simulator slice and an arm64 device slice, but no arm64 iOS Simulator slice. CI therefore builds the legacy x86_64 Simulator architecture and arm64 device architecture separately. Supporting the native arm64 Simulator requires rebuilding the native dependencies as an XCFramework with a proper Simulator slice.
-- `Podfile.lock` is committed to record the resolved dependency and its checksums. CI uses CocoaPods deployment mode so accidental lockfile drift fails the build.
-- The sample app still uses legacy Swift / Xcode project settings. Replace the placeholder SIP username, domain, and password in `SipCallsViewController.swift` with a dedicated local configuration mechanism before running it. Do not commit real credentials.
-- The app copies the bundled BareSIP `config` file into Documents on first launch so it can be edited without modifying the app bundle. Runtime SIP registration, audio, background call handling, and recovery from stack errors still need testing against a controlled SIP server and device.
+See [docs/SPM_MIGRATION.md](docs/SPM_MIGRATION.md) for migration details and the remaining validation checklist.
 
 ## CI
 
-The `iOS Build` GitHub Actions workflow installs the pinned CocoaPods version, resolves the pinned `taresip` dependency, lists the Xcode workspace schemes, and builds both the legacy x86_64 Simulator slice and the arm64 iOS-device slice. CI also emits warnings from the legacy native headers and mixed Objective-C ABI metadata. A green result verifies compilation/linking only; SIP registration and real call audio must still be tested against a controlled SIP server and device.
+The repository has separate legacy app-build and modern Baresip XCFramework workflows. The modern workflow builds the pinned native dependency, checks the Objective-C++ adapter against device and Simulator architectures, and validates SwiftPM manifest resolution and the release binary checksum. These checks are compile/package validation only; runtime SIP and audio tests remain outstanding.
