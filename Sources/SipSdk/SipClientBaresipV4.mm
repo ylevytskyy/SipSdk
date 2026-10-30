@@ -337,16 +337,22 @@ static void ua_event_handler(enum bevent_ev ev, struct bevent *event, void *arg)
             NSString *bundledConfigPath =
                 [mainBundle pathForResource:@"config" ofType:@"baresip-v4"];
             if (bundledConfigPath == nil) {
-                // SwiftPM resource-only target is bundled separately from the
-                // Objective-C++ target as SipSdk_SipSdkResources.bundle.
-                NSURL *resourceBundleURL =
-                    [mainBundle URLForResource:@"SipSdk_SipSdkResources"
-                                  withExtension:@"bundle"];
-                NSBundle *resourceBundle = resourceBundleURL
-                    ? [NSBundle bundleWithURL:resourceBundleURL]
-                    : nil;
-                bundledConfigPath =
-                    [resourceBundle pathForResource:@"config" ofType:@"baresip-v4"];
+                // The resource target is packaged in a separate SwiftPM bundle.
+                // Discover it by contents rather than relying on SwiftPM's
+                // implementation-defined generated bundle name.
+                NSArray<NSURL *> *resourceBundleURLs =
+                    [mainBundle URLsForResourcesWithExtension:@"bundle"
+                                                subdirectory:nil];
+                for (NSURL *resourceBundleURL in resourceBundleURLs) {
+                    NSBundle *resourceBundle =
+                        [NSBundle bundleWithURL:resourceBundleURL];
+                    bundledConfigPath =
+                        [resourceBundle pathForResource:@"config"
+                                                  ofType:@"baresip-v4"];
+                    if (bundledConfigPath != nil) {
+                        break;
+                    }
+                }
             }
             if (bundledConfigPath == nil) {
                 NSLog(@"Baresip v4 config resource is missing from the app bundle.");
