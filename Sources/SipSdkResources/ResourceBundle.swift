@@ -1,4 +1,4 @@
 // This SwiftPM target exists to package resources for the Objective-C++
-// SipSdk target. SwiftPM resource bundles are supported on Swift targets;
-// keep config.baresip-v4 in this target rather than the Clang target.
+// SipSdk target. SwiftPM's generated resource-bundle name is an
+// implementation detail, so the Objective-C++ adapter discovers it by file.
 enum SipSdkResourcesMarker {}
