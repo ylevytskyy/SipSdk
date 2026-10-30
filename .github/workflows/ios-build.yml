@@ -6,20 +6,24 @@ on:
       - master
       - "maintenance/**"
     paths:
-      - "Podfile"
-      - "Podfile.lock"
+      - "Package.swift"
+      - "Sources/SipSdk/**"
+      - "Sources/SipSdkResources/**"
       - "TareSIPDemo/**"
       - "TareSIPDemo.xcodeproj/**"
       - "TareSIPDemo.xcworkspace/**"
+      - ".github/workflows/ios-build.yml"
   pull_request:
     branches:
       - master
     paths:
-      - "Podfile"
-      - "Podfile.lock"
+      - "Package.swift"
+      - "Sources/SipSdk/**"
+      - "Sources/SipSdkResources/**"
       - "TareSIPDemo/**"
       - "TareSIPDemo.xcodeproj/**"
       - "TareSIPDemo.xcworkspace/**"
+      - ".github/workflows/ios-build.yml"
   workflow_dispatch:
 
 permissions:
@@ -31,7 +35,7 @@ concurrency:
 
 jobs:
   build:
-    name: Build TareSIPDemo
+    name: Build TareSIPDemo with SwiftPM
     runs-on: macos-14
     timeout-minutes: 30
 
@@ -44,26 +48,32 @@ jobs:
           xcodebuild -version
           xcode-select -p
 
-      - name: Set up Ruby
-        uses: ruby/setup-ruby@v1
-        with:
-          ruby-version: "3.3"
+      - name: Validate package manifest
+        run: swift package dump-package
 
-      - name: Install CocoaPods
-        run: gem install cocoapods --version 1.17.0 --no-document
+      - name: Resolve local SwiftPM package and binary XCFramework
+        run: xcodebuild -resolvePackageDependencies -project TareSIPDemo.xcodeproj -scheme TareSIPDemo
 
-      - name: Install iOS dependencies
-        run: pod install --deployment --repo-update
+      - name: List project schemes
+        run: xcodebuild -list -project TareSIPDemo.xcodeproj
 
-      - name: List workspace schemes
-        run: xcodebuild -list -workspace TareSIPDemo.xcworkspace
-
-      # taresip 0.1.1 ships x86_64 Simulator and arm64 device objects,
-      # but does not ship an arm64 iOS Simulator slice.
-      - name: Build for iOS Simulator (x86_64 legacy slice)
+      - name: Build for iOS Simulator (arm64)
         run: >-
           xcodebuild
-          -workspace TareSIPDemo.xcworkspace
+          -project TareSIPDemo.xcodeproj
+          -scheme TareSIPDemo
+          -configuration Debug
+          -sdk iphonesimulator
+          -destination 'generic/platform=iOS Simulator'
+          ARCHS=arm64
+          ONLY_ACTIVE_ARCH=YES
+          CODE_SIGNING_ALLOWED=NO
+          build
+
+      - name: Build for iOS Simulator (x86_64)
+        run: >-
+          xcodebuild
+          -project TareSIPDemo.xcodeproj
           -scheme TareSIPDemo
           -configuration Debug
           -sdk iphonesimulator
@@ -76,7 +86,7 @@ jobs:
       - name: Build for iOS device (arm64)
         run: >-
           xcodebuild
-          -workspace TareSIPDemo.xcworkspace
+          -project TareSIPDemo.xcodeproj
           -scheme TareSIPDemo
           -configuration Debug
           -sdk iphoneos
