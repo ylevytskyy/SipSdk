@@ -12,6 +12,7 @@ on:
       - "scripts/generate-spm-package.sh"
       - "Package.swift"
       - "Sources/SipSdk/**"
+      - "Sources/SipSdkResources/**"
       - "docs/SPM_MIGRATION.md"
       - "README.md"
   workflow_dispatch:
