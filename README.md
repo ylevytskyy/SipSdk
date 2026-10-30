@@ -19,7 +19,7 @@ SipSdk Objective-C++ Baresip v4 adapter
 BaresipCore XCFramework (Baresip + libre)
 ```
 
-The SwiftPM package pins BaresipCore to the published `baresip-core-v4.12.0` release and its SHA-256 checksum. The Xcode project references the repository root as a local package and links its `SipSdk` library product.
+The SwiftPM package pins BaresipCore to the published `baresip-core-v4.12.0` release and its SHA-256 checksum. The Xcode project references the repository root as a local package and links its `SipSdk` library product. The bridging header imports the generated Clang module with `@import SipSdk;`.
 
 ## Requirements
 
