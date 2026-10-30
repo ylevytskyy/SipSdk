@@ -74,7 +74,7 @@ let package = Package(
         .iOS("12.1")
     ],
     products: [
-        .library(name: "SipSdk", targets: ["SipSdk"])
+        .library(name: "SipSdk", targets: ["SipSdk", "SipSdkResources"])
     ],
     targets: [
         .binaryTarget(
@@ -83,11 +83,15 @@ let package = Package(
             checksum: "$EXPECTED_CHECKSUM"
         ),
         .target(
+            name: "SipSdkResources",
+            path: "Sources/SipSdkResources",
+            resources: [.copy("Resources/config.baresip-v4")]
+        ),
+        .target(
             name: "SipSdk",
             dependencies: ["BaresipCore"],
             path: "Sources/SipSdk",
             publicHeadersPath: "include",
-            resources: [.copy("Resources/config.baresip-v4")],
             linkerSettings: [
                 .linkedFramework("Foundation"),
                 .linkedFramework("CoreFoundation"),
