@@ -21,13 +21,14 @@ Do not hand-write or guess a checksum. The generator verifies the sidecar format
 
 ## Package contents
 
-The SwiftPM package:
+The SwiftPM package exposes one `SipSdk` library product containing two targets:
 
-- exposes the `SipSdk` library product;
-- builds `Sources/SipSdk/SipClientBaresipV4.mm` and its public header;
-- links the pinned `BaresipCore` binary target and required Apple frameworks/system libraries;
-- copies `Resources/config.baresip-v4` into the SwiftPM resource bundle;
-- declares iOS 12.1 as its minimum deployment target.
+- `SipSdk`: the Objective-C++ adapter in `Sources/SipSdk`, with its public header and the pinned `BaresipCore` binary dependency.
+- `SipSdkResources`: a small Swift resource target that copies `Resources/config.baresip-v4` into its generated resource bundle. The Objective-C++ adapter loads `SipSdk_SipSdkResources.bundle` from the app bundle.
+
+The resource is kept in a separate Swift target because SwiftPM does not expose the `resources` parameter for the Clang/Objective-C++ target initializer. The resource target is part of the same library product, so consumers add only the `SipSdk` package product.
+
+The package links the required Apple frameworks/system libraries and declares iOS 12.1 as its minimum deployment target.
 
 On macOS with Xcode:
 
@@ -47,8 +48,6 @@ The modern-build workflow:
 - syntax-checks and compiles/links the adapter for iOS device arm64 and iOS Simulator arm64/x86_64.
 
 These checks catch API mismatches, missing native symbols and package/archive integrity issues. They do not prove successful integration into the full demo app or functional SIP/audio behavior.
-
-The paired `Sources/SipSdk/Resources/config.baresip-v4` is a minimal configuration for the modules included in the current XCFramework build: g711, audiounit, account, stun, turn, ice and srtp. The adapter stores the v4 config under a separate `Documents/baresip-v4` directory so an older `Documents/config` left by the CocoaPods app is not accidentally reused. SwiftPM places the copied resource in the generated `SipSdk_SipSdk.bundle`.
 
 ### API differences handled by the adapter
 
