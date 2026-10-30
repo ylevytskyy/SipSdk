@@ -26,7 +26,7 @@ The SwiftPM package exposes one `SipSdk` library product containing two targets:
 - `SipSdk`: the Objective-C++ adapter in `Sources/SipSdk`, with its public header and the pinned `BaresipCore` binary dependency.
 - `SipSdkResources`: a small Swift resource target that copies `Resources/config.baresip-v4` into its generated resource bundle. The Objective-C++ adapter loads `SipSdk_SipSdkResources.bundle` from the app bundle.
 
-The resource is kept in a separate Swift target because SwiftPM does not expose the `resources` parameter for the Clang/Objective-C++ target initializer. The resource target is part of the same library product, so consumers add only the `SipSdk` package product.
+The resource is kept in a separate Swift target because the SwiftPM 5.9 manifest API used by the Xcode 15.4 toolchain does not expose the `resources` parameter for the Clang/Objective-C++ target initializer. The resource target is part of the same library product, so consumers add only the `SipSdk` package product.
 
 The package links the required Apple frameworks/system libraries and declares iOS 12.1 as its minimum deployment target.
 
