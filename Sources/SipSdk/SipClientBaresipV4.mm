@@ -337,9 +337,11 @@ static void ua_event_handler(enum bevent_ev ev, struct bevent *event, void *arg)
             NSString *bundledConfigPath =
                 [mainBundle pathForResource:@"config" ofType:@"baresip-v4"];
             if (bundledConfigPath == nil) {
-                // SwiftPM places target resources in SipSdk_SipSdk.bundle.
+                // SwiftPM resource-only target is bundled separately from the
+                // Objective-C++ target as SipSdk_SipSdkResources.bundle.
                 NSURL *resourceBundleURL =
-                    [mainBundle URLForResource:@"SipSdk_SipSdk" withExtension:@"bundle"];
+                    [mainBundle URLForResource:@"SipSdk_SipSdkResources"
+                                  withExtension:@"bundle"];
                 NSBundle *resourceBundle = resourceBundleURL
                     ? [NSBundle bundleWithURL:resourceBundleURL]
                     : nil;
