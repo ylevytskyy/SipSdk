@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		34F01D8FE98C4D4835DA052F /* SipCredentials.plist in Resources */ = {isa = PBXBuildFile; fileRef = 428EDE54086CF385F3C93E72 /* SipCredentials.plist */; };
 		A2FABC62F71736D19A40C9AC /* Pods_TareSIPDemo.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 3E50DF2FF5588800EBD8D873 /* Pods_TareSIPDemo.framework */; };
 		B41B7A122226C2800078B9F7 /* SipClient.mm in Sources */ = {isa = PBXBuildFile; fileRef = B41B7A112226C2800078B9F7 /* SipClient.mm */; };
 		B41E9BBC2227EE9200647A38 /* SipCallDetailsViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = B41E9BBB2227EE9200647A38 /* SipCallDetailsViewController.swift */; };
@@ -27,6 +28,7 @@
 /* Begin PBXFileReference section */
 		14C9236464D4178464561B4F /* Pods-TareSIPDemo.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-TareSIPDemo.release.xcconfig"; path = "Target Support Files/Pods-TareSIPDemo/Pods-TareSIPDemo.release.xcconfig"; sourceTree = "<group>"; };
 		3E50DF2FF5588800EBD8D873 /* Pods_TareSIPDemo.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_TareSIPDemo.framework; sourceTree = BUILT_PRODUCTS_DIR; };
+		428EDE54086CF385F3C93E72 /* SipCredentials.plist */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.xml; name = SipCredentials.plist; path = TareSIPDemo/SipCredentials.plist; sourceTree = "<group>"; };
 		B41B7A102226C2800078B9F7 /* SipClient.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = SipClient.h; sourceTree = "<group>"; };
 		B41B7A112226C2800078B9F7 /* SipClient.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = SipClient.mm; sourceTree = "<group>"; };
 		B41E9BBB2227EE9200647A38 /* SipCallDetailsViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SipCallDetailsViewController.swift; sourceTree = "<group>"; };
@@ -120,6 +122,7 @@
 				B44A573A2225A67600570604 /* config */,
 				B41B7A102226C2800078B9F7 /* SipClient.h */,
 				B41B7A112226C2800078B9F7 /* SipClient.mm */,
+				428EDE54086CF385F3C93E72 /* SipCredentials.plist */,
 			);
 			path = TareSIPDemo;
 			sourceTree = "<group>";
@@ -188,6 +191,7 @@
 				B4E342C522259C9400D70E9A /* LaunchScreen.storyboard in Resources */,
 				B4E342C222259C9300D70E9A /* Assets.xcassets in Resources */,
 				B4E342C022259C9200D70E9A /* Main.storyboard in Resources */,
+				34F01D8FE98C4D4835DA052F /* SipCredentials.plist in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

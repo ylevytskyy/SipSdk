@@ -22,3 +22,4 @@ Pods/
 # Editor / local tooling
 .idea/
 .vscode/
+TareSIPDemo/SipCredentials.plist
