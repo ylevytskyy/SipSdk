@@ -43,7 +43,7 @@ The demo is intentionally not switched to the new adapter yet. Keeping the known
 - For the legacy demo only: Ruby and CocoaPods.
 - A SIP account and server that you are authorized to use for testing.
 
-The package and demo retain an iOS deployment target of 12.1.
+The package retains an iOS deployment target of 12.1. The demo targets iOS 15.0, the lowest deployment target current Xcode accepts. On Apple Silicon the demo's simulator build requires `ARCHS=x86_64` because the `taresip` pod ships no arm64-simulator slice.
 
 ## Build the SwiftPM package
 

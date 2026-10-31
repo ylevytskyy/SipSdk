@@ -1,4 +1,4 @@
-platform :ios, '12.1'
+platform :ios, '15.0'
 
 target 'TareSIPDemo' do
   use_frameworks!
@@ -11,7 +11,7 @@ end
 # target to avoid building the pod with a deployment target unsupported by
 # current Xcode versions.
 post_install do |installer|
-  minimum_deployment_target = Gem::Version.new('12.1')
+  minimum_deployment_target = Gem::Version.new('15.0')
 
   installer.pods_project.targets.each do |target|
     target.build_configurations.each do |config|
