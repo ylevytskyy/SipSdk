@@ -1,0 +1,24 @@
+{
+  "schema": 1,
+  "source": "c792bf0560e1994ba6743e5d5a335bb2c374be77aef8c847dbb57c03620a7bbc",
+  "contract": "a8e9683930bb34c933436ab86eb6efb3a63e3e13a48ae753cdcd6dec5b2afe22",
+  "proof": "eb6f336c0f92ce30da2a3e665ee49c66e5d8397afb278a213723bf0eb5775fca",
+  "covered": [
+    "D1",
+    "D2",
+    "D3",
+    "D4",
+    "R1"
+  ],
+  "verdict": "approved",
+  "reviewer": "devin (author)",
+  "independent": false,
+  "findings": [],
+  "attacks": [
+    "D1: e1-serve.log \u2014 first line is the criterion command verbatim, count 2, exit 0 \u2014 bar met",
+    "D2: e2-page.log \u2014 12 assertions PASS incl. zero console errors and boot log \u2014 bar met",
+    "D3: e4-wss.log \u2014 UA connected + Registration failed: Not Found (SIP 404 from iptel.org) \u2014 proves ws->sip path, not auth \u2014 bar met",
+    "D4: not claimed \u2014 open as O1, needs user credentials",
+    "inventory: e3-diffstat.log \u2014 only additions and doc edits \u2014 claim holds"
+  ]
+}

@@ -1,0 +1,4 @@
+$ curl -s http://localhost:5101/ -o /tmp/sipsdk-page.html && grep -c 'SipSdk test client' /tmp/sipsdk-page.html
+2
+
+exit: 0

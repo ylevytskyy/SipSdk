@@ -50,6 +50,14 @@ current native build (`USE_OPENSSL=OFF`): no SIP over TLS.
     so an arm64 sim build cannot link; x86_64 links the pod's sim slice.
   - `TareSIPDemo/SipCredentials.plist` must exist (copy from `SipCredentials.example.plist`)
     — it is a build resource; the app runs without it but the build needs the file.
+- Web test page (`web/index.html` + vendored `web/jssip-3.13.9.min.js` — jssip 3.13.9
+  ships no UMD bundle, so it is esbuild-bundled as an IIFE global; rebuild with
+  `npx esbuild node_modules/jssip/lib/JsSIP.js --bundle --minify --format=iife --global-name=JsSIP`).
+  SIP over `wss://sip.iptel.org:8081`, audio only:
+  serve with `python3 -m http.server 5101 --directory web`, open `http://localhost:5101`
+  (localhost is a secure context, so mic access works over plain HTTP). Test targets:
+  `sip:echo@iptel.org`, `sip:music@iptel.org`, or the app's own iptel.org AOR. Video phase
+  is deferred — the SDK has no video codec and the adapter pins `VIDMODE_OFF`.
 
 ## Repo layout & gotchas
 - `Sources/SipSdk/SipClientBaresipV4.mm` — ObjC++ Baresip v4 adapter; `include/SipClient.h` — public API.

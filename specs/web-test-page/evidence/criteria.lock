@@ -1,0 +1,49 @@
+{
+  "schema": 2,
+  "contract": {
+    "Template": "Template: full",
+    "Lane": "Lane: feature",
+    "Modules": "Modules: none (standalone static test page; no backend, no design frame)",
+    "Design": "Design: none",
+    "goal": [
+      "Build a simple test web page for testing calls between the mobile app and the page.",
+      "> \"\u0440\u0435\u0430\u043b\u0456\u0437\u043e\u0432\u0443\u0432\u0430\u0442\u0438 \u0442\u0435\u0441\u0442\u043e\u0432\u0443 \u0432\u0435\u0431\u0441\u0442\u043e\u0440\u0456\u043d\u043a\u0443 \u0434\u043b\u044f \u0442\u043e\u0433\u043e, \u0449\u043e\u0431 \u043c\u043e\u0436\u043d\u0430 \u0431\u0443\u043b\u043e \u0442\u0435\u0441\u0442\u0443\u0432\u0430\u0442\u0438 \u0432\u0456\u0434\u0435\u043e\u0434\u0437\u0432\u0456\u043d\u043a\u0438 \u043c\u0456\u0436 \u043c\u043e\u0431\u0456\u043b\u044c\u043d\u043e\u044e \u0430\u043f\u043a\u043e\u044e \u0456 \u0446\u0456\u0454\u044e \u043f\u0440\u043e\u0441\u0442\u043e\u044e \u0432\u0435\u0431\u0441\u0442\u043e\u0440\u0456\u043d\u043a\u043e\u044e\"",
+      "> Clarified: \"\u043d\u0456, \u043b\u0438\u0448\u0435 \u0432\u0435\u0431\u0441\u0442\u043e\u0440\u0456\u043d\u043a\u0430, \u0431\u0443\u0434\u0435\u043c\u043e \u0432\u0438\u043a\u043e\u0440\u0438\u0441\u0442\u043e\u0432\u0443\u0432\u0430\u0442\u0438 iptel.org \u0434\u043b\u044f \u0442\u0435\u0441\u0442\u0443\u0432\u0430\u043d\u043d\u044f. \u0441\u043f\u043e\u0447\u0430\u0442\u043a\u0443 \u0440\u043e\u0431\u0438\u043c\u043e \u0441\u0442\u043e\u0440\u0456\u043d\u043a\u0443 \u0456 \u0432\u0430\u043b\u0456\u0434\u0443\u0454\u043c\u043e \u0430\u0443\u0434\u0456\u043e, \u0430 \u0432\u0456\u0434\u0435\u043e \u043e\u043a\u0440\u0435\u043c\u043e. \u0421\u0442\u043e\u0440\u0456\u043d\u043a\u0430 \u043f\u043e\u0442\u0440\u0456\u0431\u043d\u0430 \u0442\u0456\u043b\u044c\u043a\u0438 \u043d\u0430 \u0446\u044c\u043e\u043c\u0443 Mac\""
+    ],
+    "scope": [
+      "- In: `web/index.html` \u2014 a single-file JsSIP client (register, call/answer/hangup, mute, hold, DTMF, remote audio, log) against iptel.org's WSS endpoint; `projects.yaml` run/port entries; `AGENTS.md` command notes; `.gitignore` specs evidence.",
+      "- Out: video (separate phase \u2014 SDK has no video codec anyway), SIP server infrastructure (iptel.org used as-is), mobile-app changes, publishing/deploy."
+    ],
+    "R1": [
+      "R1",
+      "Test web page to call between mobile app and the page via iptel.org, audio first, localhost only",
+      "Given the page is served on localhost and a real iptel.org account, when the user registers and dials a SIP URI (e.g. the app's AOR or echo@iptel.org), then a SIP session with audio is established and remote audio plays",
+      "D1, D2, D3, D4"
+    ],
+    "D1": [
+      "D1",
+      "Page serves on localhost",
+      "`curl -s http://localhost:5101/ \\| grep -c 'SipSdk test client'`",
+      "exit 0, count >= 1"
+    ],
+    "D2": [
+      "D2",
+      "Page initializes: JsSIP global present, zero console errors, all controls rendered",
+      "`node specs/web-test-page/verify-page.mjs` (Playwright: load, console capture, DOM check)",
+      "exit 0 \u2014 script asserts and exits non-zero on failure"
+    ],
+    "D3": [
+      "D3",
+      "WSS transport to iptel.org works: page logs \"WebSocket connected\" and a SIP-level response after Register click",
+      "`node specs/web-test-page/verify-wss.mjs` (Playwright: fill dummy creds, click Register, read #log)",
+      "log contains \"WebSocket connected\" and \"Registration failed\" or \"Registered\" (a SIP auth response proves the ws\u2192SIP path; real auth needs real creds \u2014 O1)"
+    ],
+    "D4": [
+      "D4",
+      "Live audio call with a real iptel.org account",
+      "user-driven: register + call sip:echo@iptel.org",
+      "user confirms audio \u2014 open item, needs user's account (O1)"
+    ],
+    "states": null
+  }
+}

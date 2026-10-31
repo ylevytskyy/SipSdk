@@ -1,0 +1,16 @@
+$ node specs/web-test-page/verify-page.mjs
+PASS JsSIP global + UA ctor
+PASS no console errors
+PASS #sipUri present
+PASS #sipPass present
+PASS #wsUri default — wss://sip.iptel.org:8081
+PASS Register enabled
+PASS Call disabled pre-register
+PASS target default echo — sip:echo@iptel.org
+PASS 2 quick-dial buttons — 2
+PASS 12 DTMF keys — 12
+PASS remoteAudio element
+PASS boot log line — "[14:17:04] Page ready. Enter iptel.org credentials and press Register.\n"
+ALL PASS
+
+exit: 0

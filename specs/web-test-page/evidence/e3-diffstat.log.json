@@ -1,0 +1,11 @@
+{
+  "schema": 1,
+  "command": "git diff master --stat",
+  "cwd": "/Users/lion/Documents/Projects/mine/SipSdk",
+  "root": "/Users/lion/Documents/Projects/mine/SipSdk",
+  "before": "c792bf0560e1994ba6743e5d5a335bb2c374be77aef8c847dbb57c03620a7bbc",
+  "after": "c792bf0560e1994ba6743e5d5a335bb2c374be77aef8c847dbb57c03620a7bbc",
+  "exit_code": 0,
+  "log_sha256": "5c6a4eb32e08703a663a7f05af10e3d1b86f57391a9140b0453184c7e0e96f63",
+  "artifacts": {}
+}

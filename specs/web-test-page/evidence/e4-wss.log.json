@@ -1,0 +1,11 @@
+{
+  "schema": 1,
+  "command": "node specs/web-test-page/verify-wss.mjs",
+  "cwd": "/Users/lion/Documents/Projects/mine/SipSdk",
+  "root": "/Users/lion/Documents/Projects/mine/SipSdk",
+  "before": "c792bf0560e1994ba6743e5d5a335bb2c374be77aef8c847dbb57c03620a7bbc",
+  "after": "c792bf0560e1994ba6743e5d5a335bb2c374be77aef8c847dbb57c03620a7bbc",
+  "exit_code": 0,
+  "log_sha256": "ca96ff74b1173f212b1f2c6792884c328c0f5a79d89434b59c4bed95536c3a1c",
+  "artifacts": {}
+}

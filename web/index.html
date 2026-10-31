@@ -1,0 +1,269 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SipSdk test client</title>
+<link rel="icon" href="data:,">
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, system-ui, sans-serif; margin: 0; background: #f5f5f7; color: #1d1d1f; }
+  main { max-width: 720px; margin: 0 auto; padding: 24px 16px; }
+  h1 { font-size: 20px; margin: 0 0 16px; }
+  section { background: #fff; border: 1px solid #d2d2d7; border-radius: 12px; padding: 16px; margin-bottom: 16px; }
+  h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .04em; color: #6e6e73; margin: 0 0 12px; }
+  label { display: block; font-size: 12px; color: #6e6e73; margin: 8px 0 2px; }
+  input[type=text], input[type=password] { width: 100%; padding: 8px 10px; border: 1px solid #d2d2d7; border-radius: 8px; font: inherit; font-size: 14px; }
+  button { font: inherit; font-size: 14px; padding: 8px 14px; border: 0; border-radius: 8px; background: #0071e3; color: #fff; cursor: pointer; margin: 4px 4px 4px 0; }
+  button.secondary { background: #e8e8ed; color: #1d1d1f; }
+  button.danger { background: #ff3b30; }
+  button:disabled { opacity: .4; cursor: default; }
+  .row { display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; }
+  .row > div { flex: 1; min-width: 160px; }
+  .status { font-weight: 600; }
+  .status.ok { color: #248a3d; }
+  .status.err { color: #ff3b30; }
+  .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: #86868b; margin-right: 6px; }
+  .dot.on { background: #248a3d; }
+  .dot.busy { background: #ff9f0a; }
+  #log { background: #1d1d1f; color: #d2d2d7; border-radius: 8px; padding: 10px 12px; height: 220px; overflow-y: auto; font: 12px/1.5 ui-monospace, Menlo, monospace; white-space: pre-wrap; }
+  .dtmf button { width: 44px; }
+  #incoming { display: none; border-color: #ff9f0a; }
+  #incall { display: none; }
+  audio { width: 100%; margin-top: 8px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>SipSdk test client <span style="font-weight:400;color:#6e6e73">— SIP over WebSocket (iptel.org), audio only</span></h1>
+
+  <section>
+    <h2>Account</h2>
+    <div class="row">
+      <div><label for="sipUri">SIP URI</label><input id="sipUri" type="text" placeholder="you@iptel.org" autocomplete="off"></div>
+      <div><label for="sipPass">Password</label><input id="sipPass" type="password" autocomplete="off"></div>
+    </div>
+    <div class="row">
+      <div><label for="wsUri">WebSocket server</label><input id="wsUri" type="text" value="wss://sip.iptel.org:8081" autocomplete="off"></div>
+      <div><label for="displayName">Display name (optional)</label><input id="displayName" type="text" autocomplete="off"></div>
+    </div>
+    <div style="margin-top:10px">
+      <button id="btnRegister">Register</button>
+      <button id="btnUnregister" class="secondary" disabled>Unregister</button>
+      <span class="status" id="regStatus"><span class="dot" id="regDot"></span>Not registered</span>
+    </div>
+  </section>
+
+  <section>
+    <h2>Call</h2>
+    <div class="row">
+      <div><label for="target">Target SIP URI</label><input id="target" type="text" value="sip:echo@iptel.org" autocomplete="off"></div>
+      <div style="flex:0"><button id="btnCall" disabled>Call</button></div>
+    </div>
+    <button class="secondary" data-dial="sip:echo@iptel.org">echo@iptel.org</button>
+    <button class="secondary" data-dial="sip:music@iptel.org">music@iptel.org</button>
+  </section>
+
+  <section id="incoming">
+    <h2>Incoming call</h2>
+    <p id="incomingFrom" style="margin:0 0 8px"></p>
+    <button id="btnAnswer">Answer</button>
+    <button id="btnReject" class="danger">Reject</button>
+  </section>
+
+  <section id="incall">
+    <h2>In call</h2>
+    <p class="status" id="callStatus">—</p>
+    <button id="btnHangup" class="danger">Hang up</button>
+    <button id="btnMute" class="secondary">Mute</button>
+    <button id="btnHold" class="secondary">Hold</button>
+    <div class="dtmf" style="margin-top:10px">
+      <label>DTMF</label>
+      <button class="secondary" data-dtmf="1">1</button><button class="secondary" data-dtmf="2">2</button><button class="secondary" data-dtmf="3">3</button>
+      <button class="secondary" data-dtmf="4">4</button><button class="secondary" data-dtmf="5">5</button><button class="secondary" data-dtmf="6">6</button>
+      <button class="secondary" data-dtmf="7">7</button><button class="secondary" data-dtmf="8">8</button><button class="secondary" data-dtmf="9">9</button>
+      <button class="secondary" data-dtmf="*">*</button><button class="secondary" data-dtmf="0">0</button><button class="secondary" data-dtmf="#">#</button>
+    </div>
+    <audio id="remoteAudio" autoplay></audio>
+  </section>
+
+  <section>
+    <h2>Log</h2>
+    <div id="log"></div>
+    <button class="secondary" id="btnClearLog">Clear</button>
+  </section>
+</main>
+
+<script src="jssip-3.13.9.min.js"></script>
+<script>
+(() => {
+  'use strict';
+
+  const $ = (id) => document.getElementById(id);
+  const logEl = $('log');
+  const log = (msg) => {
+    const time = new Date().toLocaleTimeString();
+    logEl.textContent += `[${time}] ${msg}\n`;
+    logEl.scrollTop = logEl.scrollHeight;
+  };
+
+  let ua = null;
+  let session = null;
+  let muted = false;
+  let held = false;
+
+  const setRegStatus = (state) => {
+    const dot = $('regDot');
+    const el = $('regStatus');
+    el.className = 'status' + (state === 'ok' ? ' ok' : state === 'err' ? ' err' : '');
+    dot.className = 'dot' + (state === 'ok' ? ' on' : state === 'busy' ? ' busy' : '');
+    $('btnCall').disabled = state !== 'ok';
+    $('btnUnregister').disabled = state !== 'ok';
+    $('btnRegister').disabled = state === 'ok' || state === 'busy';
+  };
+
+  const setCallUI = (inCall) => {
+    $('incall').style.display = inCall ? '' : 'none';
+    $('btnCall').disabled = inCall || !ua;
+    if (!inCall) {
+      $('remoteAudio').srcObject = null;
+      muted = held = false;
+      $('btnMute').textContent = 'Mute';
+      $('btnHold').textContent = 'Hold';
+    }
+  };
+
+  const attachRemoteAudio = (s) => {
+    const pc = s.connection;
+    const onTrack = (e) => {
+      const stream = e.streams && e.streams[0] ? e.streams[0] : new MediaStream([e.track]);
+      $('remoteAudio').srcObject = stream;
+      log('Remote audio attached');
+    };
+    if ('ontrack' in pc) {
+      pc.addEventListener('track', onTrack);
+    } else {
+      pc.onaddstream = (e) => { $('remoteAudio').srcObject = e.stream; log('Remote audio attached'); };
+    }
+  };
+
+  const wireSession = (s) => {
+    session = s;
+    attachRemoteAudio(s);
+    const remote = s.remote_identity ? s.remote_identity.uri.toString() : 'unknown';
+
+    s.on('progress', () => { $('callStatus').textContent = `Ringing ${remote}…`; log(`Call progress: ${remote}`); });
+    s.on('accepted', () => { $('callStatus').textContent = `Connected: ${remote}`; log('Call accepted'); });
+    s.on('confirmed', () => log('Call confirmed (ACK)'));
+    s.on('ended', (e) => { log(`Call ended (${e.cause})`); cleanup(); });
+    s.on('failed', (e) => { log(`Call failed: ${e.cause}${e.message ? ' — ' + e.message.status_code + ' ' + e.message.reason_phrase : ''}`); cleanup(); });
+    s.on('muted', () => log('Session muted'));
+    s.on('unmuted', () => log('Session unmuted'));
+    s.on('hold', () => log('Session on hold'));
+    s.on('unhold', () => log('Session resumed'));
+  };
+
+  const cleanup = () => { session = null; setCallUI(false); $('callStatus').textContent = '—'; };
+
+  const startUa = () => {
+    const sipUri = $('sipUri').value.trim();
+    const password = $('sipPass').value;
+    const wsUri = $('wsUri').value.trim();
+    if (!sipUri || !wsUri) { log('SIP URI and WebSocket server are required'); return; }
+
+    const uri = sipUri.startsWith('sip:') ? sipUri : `sip:${sipUri}`;
+    const socket = new JsSIP.WebSocketInterface(wsUri);
+    socket.onconnect = () => log('WebSocket connected');
+    socket.ondisconnect = () => log('WebSocket disconnected');
+    socket.onerror = () => log('WebSocket error');
+
+    ua = new JsSIP.UA({
+      sockets: [socket],
+      uri,
+      password: password || undefined,
+      display_name: $('displayName').value.trim() || undefined,
+      session_timers: true,
+      register: true,
+    });
+
+    ua.on('connected', () => log('UA connected'));
+    ua.on('disconnected', () => { log('UA disconnected'); setRegStatus('idle'); });
+    ua.on('registered', () => { $('regStatus').childNodes[1].textContent = `Registered as ${uri}`; setRegStatus('ok'); log(`Registered: ${uri}`); });
+    ua.on('unregistered', () => { setRegStatus('idle'); $('regStatus').childNodes[1].textContent = 'Not registered'; log('Unregistered'); });
+    ua.on('registrationFailed', (e) => { setRegStatus('err'); $('regStatus').childNodes[1].textContent = `Registration failed: ${e.cause}`; log(`Registration failed: ${e.cause}`); });
+    ua.on('newRTCSession', (e) => {
+      const s = e.session;
+      if (s.direction === 'incoming') {
+        if (session) { s.terminate({ status_code: 486 }); return; }
+        const from = s.remote_identity ? s.remote_identity.uri.toString() : 'unknown';
+        $('incomingFrom').textContent = `From: ${from}`;
+        $('incoming').style.display = '';
+        log(`Incoming call from ${from}`);
+        wireSession(s);
+        s.on('failed', () => { $('incoming').style.display = 'none'; });
+        s.on('ended', () => { $('incoming').style.display = 'none'; });
+      }
+    });
+
+    setRegStatus('busy');
+    ua.start();
+    localStorage.setItem('sip.uri', sipUri);
+    localStorage.setItem('sip.ws', wsUri);
+    localStorage.setItem('sip.name', $('displayName').value.trim());
+  };
+
+  const call = (target) => {
+    if (!ua || session) return;
+    const uri = target.startsWith('sip:') ? target : `sip:${target}`;
+    log(`Calling ${uri}…`);
+    const s = ua.call(uri, {
+      mediaConstraints: { audio: true, video: false },
+      pcConfig: { iceServers: [] },
+    });
+    wireSession(s);
+    setCallUI(true);
+    $('callStatus').textContent = `Calling ${uri}…`;
+  };
+
+  $('btnRegister').onclick = startUa;
+  $('btnUnregister').onclick = () => { if (ua) { ua.unregister({ all: true }); ua.stop(); ua = null; } };
+  $('btnCall').onclick = () => call($('target').value.trim());
+  $('btnHangup').onclick = () => { if (session) session.terminate(); };
+  $('btnAnswer').onclick = () => {
+    $('incoming').style.display = 'none';
+    if (session) {
+      session.answer({ mediaConstraints: { audio: true, video: false }, pcConfig: { iceServers: [] } });
+      setCallUI(true);
+      $('callStatus').textContent = 'Answering…';
+    }
+  };
+  $('btnReject').onclick = () => { $('incoming').style.display = 'none'; if (session) session.terminate({ status_code: 486 }); };
+  $('btnMute').onclick = () => {
+    if (!session) return;
+    muted = !muted;
+    muted ? session.mute({ audio: true }) : session.unmute({ audio: true });
+    $('btnMute').textContent = muted ? 'Unmute' : 'Mute';
+  };
+  $('btnHold').onclick = () => {
+    if (!session) return;
+    held = !held;
+    held ? session.hold() : session.unhold();
+    $('btnHold').textContent = held ? 'Resume' : 'Hold';
+  };
+  $('btnClearLog').onclick = () => { logEl.textContent = ''; };
+
+  document.querySelectorAll('[data-dial]').forEach((b) => { b.onclick = () => { $('target').value = b.dataset.dial; }; });
+  document.querySelectorAll('[data-dtmf]').forEach((b) => {
+    b.onclick = () => { if (session && session.isEstablished()) { session.sendDTMF(b.dataset.dtmf); log(`DTMF ${b.dataset.dtmf}`); } };
+  });
+
+  $('sipUri').value = localStorage.getItem('sip.uri') || '';
+  $('wsUri').value = localStorage.getItem('sip.ws') || 'wss://sip.iptel.org:8081';
+  $('displayName').value = localStorage.getItem('sip.name') || '';
+
+  window.addEventListener('beforeunload', () => { if (session) session.terminate(); if (ua) ua.stop(); });
+  log('Page ready. Enter iptel.org credentials and press Register.');
+})();
+</script>
+</body>
+</html>

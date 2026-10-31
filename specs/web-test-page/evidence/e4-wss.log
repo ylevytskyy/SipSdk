@@ -1,0 +1,11 @@
+$ node specs/web-test-page/verify-wss.mjs
+--- page log ---
+[14:17:06] Page ready. Enter iptel.org credentials and press Register.
+[14:17:07] UA connected
+[14:17:07] Registration failed: Not Found
+
+----------------
+PASS transport connected to wss://sip.iptel.org:8081
+PASS SIP-level response (registered or auth challenge)
+
+exit: 0
