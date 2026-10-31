@@ -55,6 +55,7 @@ static const int kDefaultPort = 5060;
 
 @interface SipClient()
 @property (nonatomic) struct ua *ua;
+@property (nonatomic) BOOL started;
 @end
 
 static NSMutableDictionary<NSValue *, SipCall *> *sipCallsCache(void) {
@@ -251,6 +252,7 @@ static void ua_event_handler(struct ua *ua, enum ua_event ev,
     if (result != 0) {
         return result;
     }
+    self.started = YES;
     
     // Initialize dynamic modules.
     mod_init();
@@ -327,9 +329,10 @@ static void ua_event_handler(struct ua *ua, enum ua_event ev,
 }
 
 - (void)stop {
-    if (!self.ua) {
+    if (!self.started) {
         return;
     }
+    self.started = NO;
 
     NSMutableDictionary<NSValue *, SipCall *> *cache = sipCallsCache();
     @synchronized (cache) {
@@ -340,8 +343,10 @@ static void ua_event_handler(struct ua *ua, enum ua_event ev,
         [cache removeAllObjects];
     }
 
-    mem_deref(self.ua);
-    self.ua = nil;
+    if (self.ua) {
+        mem_deref(self.ua);
+        self.ua = nil;
+    }
     
     ua_close();
     
