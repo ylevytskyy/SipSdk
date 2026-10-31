@@ -135,17 +135,25 @@
   };
 
   const attachRemoteAudio = (s) => {
-    const pc = s.connection;
     const onTrack = (e) => {
       const stream = e.streams && e.streams[0] ? e.streams[0] : new MediaStream([e.track]);
-      $('remoteAudio').srcObject = stream;
+      const el = $('remoteAudio');
+      el.srcObject = stream;
+      el.play().catch(() => {});
       log('Remote audio attached');
     };
-    if ('ontrack' in pc) {
-      pc.addEventListener('track', onTrack);
-    } else {
-      pc.onaddstream = (e) => { $('remoteAudio').srcObject = e.stream; log('Remote audio attached'); };
-    }
+    // For incoming calls JsSIP creates the RTCPeerConnection only inside answer(),
+    // so wait for the 'peerconnection' event if it does not exist yet.
+    const wire = () => {
+      const pc = s.connection;
+      if ('ontrack' in pc) {
+        pc.addEventListener('track', onTrack);
+      } else {
+        pc.onaddstream = (e) => { $('remoteAudio').srcObject = e.stream; $('remoteAudio').play().catch(() => {}); log('Remote audio attached'); };
+      }
+    };
+    if (s.connection) wire();
+    else s.on('peerconnection', wire);
   };
 
   const wireSession = (s) => {
@@ -157,7 +165,7 @@
     s.on('accepted', () => { $('callStatus').textContent = `Connected: ${remote}`; log('Call accepted'); });
     s.on('confirmed', () => log('Call confirmed (ACK)'));
     s.on('ended', (e) => { log(`Call ended (${e.cause})`); cleanup(); });
-    s.on('failed', (e) => { log(`Call failed: ${e.cause}${e.message ? ' — ' + e.message.status_code + ' ' + e.message.reason_phrase : ''}`); cleanup(); });
+    s.on('failed', (e) => { const st = e.message && e.message.status_code; log(`Call failed: ${e.cause}${st ? ` — ${st} ${e.message.reason_phrase || ''}` : ''}`); cleanup(); });
     s.on('muted', () => log('Session muted'));
     s.on('unmuted', () => log('Session unmuted'));
     s.on('hold', () => log('Session on hold'));
