@@ -8,7 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		34F01D8FE98C4D4835DA052F /* SipCredentials.plist in Resources */ = {isa = PBXBuildFile; fileRef = 428EDE54086CF385F3C93E72 /* SipCredentials.plist */; };
-		A2FABC62F71736D19A40C9AC /* Pods_TareSIPDemo.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 3E50DF2FF5588800EBD8D873 /* Pods_TareSIPDemo.framework */; };
+		A2FABC62F71736D19A40C9AC /* Pods_SipSdk.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 3E50DF2FF5588800EBD8D873 /* Pods_SipSdk.framework */; };
 		B41B7A122226C2800078B9F7 /* SipClient.mm in Sources */ = {isa = PBXBuildFile; fileRef = B41B7A112226C2800078B9F7 /* SipClient.mm */; };
 		B41E9BBC2227EE9200647A38 /* SipCallDetailsViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = B41E9BBB2227EE9200647A38 /* SipCallDetailsViewController.swift */; };
 		B44A572B2225A0F100570604 /* CFNetwork.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B44A572A2225A0F100570604 /* CFNetwork.framework */; };
@@ -26,8 +26,8 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
-		14C9236464D4178464561B4F /* Pods-TareSIPDemo.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-TareSIPDemo.release.xcconfig"; path = "Target Support Files/Pods-TareSIPDemo/Pods-TareSIPDemo.release.xcconfig"; sourceTree = "<group>"; };
-		3E50DF2FF5588800EBD8D873 /* Pods_TareSIPDemo.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_TareSIPDemo.framework; sourceTree = BUILT_PRODUCTS_DIR; };
+		14C9236464D4178464561B4F /* Pods-SipSdk.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-SipSdk.release.xcconfig"; path = "Target Support Files/Pods-SipSdk/Pods-SipSdk.release.xcconfig"; sourceTree = "<group>"; };
+		3E50DF2FF5588800EBD8D873 /* Pods_SipSdk.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_SipSdk.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		428EDE54086CF385F3C93E72 /* SipCredentials.plist */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.xml; name = SipCredentials.plist; path = SipCredentials.plist; sourceTree = "<group>"; };
 		B41B7A102226C2800078B9F7 /* SipClient.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = SipClient.h; sourceTree = "<group>"; };
 		B41B7A112226C2800078B9F7 /* SipClient.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = SipClient.mm; sourceTree = "<group>"; };
@@ -37,17 +37,17 @@
 		B44A572E2225A10400570604 /* AVFoundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AVFoundation.framework; path = System/Library/Frameworks/AVFoundation.framework; sourceTree = SDKROOT; };
 		B44A57302225A10F00570604 /* SystemConfiguration.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SystemConfiguration.framework; path = System/Library/Frameworks/SystemConfiguration.framework; sourceTree = SDKROOT; };
 		B44A57322225A11A00570604 /* CoreMedia.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreMedia.framework; path = System/Library/Frameworks/CoreMedia.framework; sourceTree = SDKROOT; };
-		B44A57342225A17700570604 /* TareSIPDemo-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "TareSIPDemo-Bridging-Header.h"; sourceTree = "<group>"; };
+		B44A57342225A17700570604 /* SipSdk-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "SipSdk-Bridging-Header.h"; sourceTree = "<group>"; };
 		B44A573A2225A67600570604 /* config */ = {isa = PBXFileReference; lastKnownFileType = text; path = config; sourceTree = "<group>"; };
 		B49EE8562227EA7E00B8F170 /* CallCell.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallCell.swift; sourceTree = "<group>"; };
-		B4E342B722259C9200D70E9A /* TareSIPDemo.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = TareSIPDemo.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		B4E342B722259C9200D70E9A /* SipSdk.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SipSdk.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		B4E342BA22259C9200D70E9A /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		B4E342BC22259C9200D70E9A /* SipCallsViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SipCallsViewController.swift; sourceTree = "<group>"; };
 		B4E342BF22259C9200D70E9A /* Base */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; name = Base; path = Base.lproj/Main.storyboard; sourceTree = "<group>"; };
 		B4E342C122259C9300D70E9A /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		B4E342C422259C9400D70E9A /* Base */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; name = Base; path = Base.lproj/LaunchScreen.storyboard; sourceTree = "<group>"; };
 		B4E342C622259C9400D70E9A /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
-		FCCBAAA2E8ED7CACA559530A /* Pods-TareSIPDemo.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-TareSIPDemo.debug.xcconfig"; path = "Target Support Files/Pods-TareSIPDemo/Pods-TareSIPDemo.debug.xcconfig"; sourceTree = "<group>"; };
+		FCCBAAA2E8ED7CACA559530A /* Pods-SipSdk.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-SipSdk.debug.xcconfig"; path = "Target Support Files/Pods-SipSdk/Pods-SipSdk.debug.xcconfig"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -60,7 +60,7 @@
 				B44A572F2225A10500570604 /* AVFoundation.framework in Frameworks */,
 				B44A572D2225A0FE00570604 /* AudioToolbox.framework in Frameworks */,
 				B44A572B2225A0F100570604 /* CFNetwork.framework in Frameworks */,
-				A2FABC62F71736D19A40C9AC /* Pods_TareSIPDemo.framework in Frameworks */,
+				A2FABC62F71736D19A40C9AC /* Pods_SipSdk.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -75,7 +75,7 @@
 				B44A572E2225A10400570604 /* AVFoundation.framework */,
 				B44A572C2225A0FE00570604 /* AudioToolbox.framework */,
 				B44A572A2225A0F100570604 /* CFNetwork.framework */,
-				3E50DF2FF5588800EBD8D873 /* Pods_TareSIPDemo.framework */,
+				3E50DF2FF5588800EBD8D873 /* Pods_SipSdk.framework */,
 			);
 			name = Frameworks;
 			sourceTree = "<group>";
@@ -83,8 +83,8 @@
 		4C3F58970C4FEB62622C2895 /* Pods */ = {
 			isa = PBXGroup;
 			children = (
-				FCCBAAA2E8ED7CACA559530A /* Pods-TareSIPDemo.debug.xcconfig */,
-				14C9236464D4178464561B4F /* Pods-TareSIPDemo.release.xcconfig */,
+				FCCBAAA2E8ED7CACA559530A /* Pods-SipSdk.debug.xcconfig */,
+				14C9236464D4178464561B4F /* Pods-SipSdk.release.xcconfig */,
 			);
 			path = Pods;
 			sourceTree = "<group>";
@@ -92,7 +92,7 @@
 		B4E342AE22259C9200D70E9A = {
 			isa = PBXGroup;
 			children = (
-				B4E342B922259C9200D70E9A /* TareSIPDemo */,
+				B4E342B922259C9200D70E9A /* SipSdk */,
 				B4E342B822259C9200D70E9A /* Products */,
 				4C3F58970C4FEB62622C2895 /* Pods */,
 				193ED1425638EE209F25F16F /* Frameworks */,
@@ -102,12 +102,12 @@
 		B4E342B822259C9200D70E9A /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				B4E342B722259C9200D70E9A /* TareSIPDemo.app */,
+				B4E342B722259C9200D70E9A /* SipSdk.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
 		};
-		B4E342B922259C9200D70E9A /* TareSIPDemo */ = {
+		B4E342B922259C9200D70E9A /* SipSdk */ = {
 			isa = PBXGroup;
 			children = (
 				B4E342BA22259C9200D70E9A /* AppDelegate.swift */,
@@ -118,21 +118,21 @@
 				B4E342C122259C9300D70E9A /* Assets.xcassets */,
 				B4E342C322259C9400D70E9A /* LaunchScreen.storyboard */,
 				B4E342C622259C9400D70E9A /* Info.plist */,
-				B44A57342225A17700570604 /* TareSIPDemo-Bridging-Header.h */,
+				B44A57342225A17700570604 /* SipSdk-Bridging-Header.h */,
 				B44A573A2225A67600570604 /* config */,
 				B41B7A102226C2800078B9F7 /* SipClient.h */,
 				B41B7A112226C2800078B9F7 /* SipClient.mm */,
 				428EDE54086CF385F3C93E72 /* SipCredentials.plist */,
 			);
-			path = TareSIPDemo;
+			path = SipSdk;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		B4E342B622259C9200D70E9A /* TareSIPDemo */ = {
+		B4E342B622259C9200D70E9A /* SipSdk */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = B4E342C922259C9400D70E9A /* Build configuration list for PBXNativeTarget "TareSIPDemo" */;
+			buildConfigurationList = B4E342C922259C9400D70E9A /* Build configuration list for PBXNativeTarget "SipSdk" */;
 			buildPhases = (
 				DEE5C4AB5921F325AE749C3B /* [CP] Check Pods Manifest.lock */,
 				B4E342B322259C9200D70E9A /* Sources */,
@@ -143,9 +143,9 @@
 			);
 			dependencies = (
 			);
-			name = TareSIPDemo;
-			productName = TareSIPDemo;
-			productReference = B4E342B722259C9200D70E9A /* TareSIPDemo.app */;
+			name = SipSdk;
+			productName = SipSdk;
+			productReference = B4E342B722259C9200D70E9A /* SipSdk.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -164,7 +164,7 @@
 					};
 				};
 			};
-			buildConfigurationList = B4E342B222259C9200D70E9A /* Build configuration list for PBXProject "TareSIPDemo" */;
+			buildConfigurationList = B4E342B222259C9200D70E9A /* Build configuration list for PBXProject "SipSdk" */;
 			compatibilityVersion = "Xcode 9.3";
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
@@ -177,7 +177,7 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				B4E342B622259C9200D70E9A /* TareSIPDemo */,
+				B4E342B622259C9200D70E9A /* SipSdk */,
 			);
 		};
 /* End PBXProject section */
@@ -213,7 +213,7 @@
 			outputFileListPaths = (
 			);
 			outputPaths = (
-				"$(DERIVED_FILE_DIR)/Pods-TareSIPDemo-checkManifestLockResult.txt",
+				"$(DERIVED_FILE_DIR)/Pods-SipSdk-checkManifestLockResult.txt",
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
@@ -375,21 +375,21 @@
 		};
 		B4E342CA22259C9400D70E9A /* Debug */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = FCCBAAA2E8ED7CACA559530A /* Pods-TareSIPDemo.debug.xcconfig */;
+			baseConfigurationReference = FCCBAAA2E8ED7CACA559530A /* Pods-SipSdk.debug.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = GFN9SKWLAD;
+				DEVELOPMENT_TEAM = Y3KQN6X8VW;
 				ENABLE_BITCODE = NO;
-				INFOPLIST_FILE = TareSIPDemo/Info.plist;
+				INFOPLIST_FILE = SipSdk/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.wiseland.TareSIPDemo;
+				PRODUCT_BUNDLE_IDENTIFIER = com.wiseland.SipSdk;
 				PRODUCT_NAME = "$(TARGET_NAME)";
-				SWIFT_OBJC_BRIDGING_HEADER = "TareSIPDemo/TareSIPDemo-Bridging-Header.h";
+				SWIFT_OBJC_BRIDGING_HEADER = "SipSdk/SipSdk-Bridging-Header.h";
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_VERSION = 4.2;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -398,21 +398,21 @@
 		};
 		B4E342CB22259C9400D70E9A /* Release */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = 14C9236464D4178464561B4F /* Pods-TareSIPDemo.release.xcconfig */;
+			baseConfigurationReference = 14C9236464D4178464561B4F /* Pods-SipSdk.release.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = GFN9SKWLAD;
+				DEVELOPMENT_TEAM = Y3KQN6X8VW;
 				ENABLE_BITCODE = NO;
-				INFOPLIST_FILE = TareSIPDemo/Info.plist;
+				INFOPLIST_FILE = SipSdk/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.wiseland.TareSIPDemo;
+				PRODUCT_BUNDLE_IDENTIFIER = com.wiseland.SipSdk;
 				PRODUCT_NAME = "$(TARGET_NAME)";
-				SWIFT_OBJC_BRIDGING_HEADER = "TareSIPDemo/TareSIPDemo-Bridging-Header.h";
+				SWIFT_OBJC_BRIDGING_HEADER = "SipSdk/SipSdk-Bridging-Header.h";
 				SWIFT_VERSION = 4.2;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
@@ -421,7 +421,7 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		B4E342B222259C9200D70E9A /* Build configuration list for PBXProject "TareSIPDemo" */ = {
+		B4E342B222259C9200D70E9A /* Build configuration list for PBXProject "SipSdk" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				B4E342C722259C9400D70E9A /* Debug */,
@@ -430,7 +430,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		B4E342C922259C9400D70E9A /* Build configuration list for PBXNativeTarget "TareSIPDemo" */ = {
+		B4E342C922259C9400D70E9A /* Build configuration list for PBXNativeTarget "SipSdk" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				B4E342CA22259C9400D70E9A /* Debug */,

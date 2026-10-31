@@ -1,6 +1,6 @@
 //
 //  SipCallsViewController.swift
-//  TareSIPDemo
+//  SipSdk
 //
 //  Created by Yuriy Levytskyy on 2/26/19.
 //  Copyright © 2019 Yuriy Levytskyy. All rights reserved.
@@ -80,7 +80,7 @@ class SipCallsViewController: UIViewController {
 
     private func startSipClient() {
         guard let credentials = Self.sipCredentials() else {
-            log("SipCredentials.plist is missing — copy TareSIPDemo/SipCredentials.example.plist to TareSIPDemo/SipCredentials.plist and fill in your SIP account.")
+            log("SipCredentials.plist is missing — copy SipSdk/SipCredentials.example.plist to SipSdk/SipCredentials.plist and fill in your SIP account.")
             return
         }
         client.stop()
@@ -152,7 +152,7 @@ class SipCallsViewController: UIViewController {
         }
         let alert = UIAlertController(
             title: "Wireless Data Off",
-            message: "Wireless data is disabled for this app, so SIP registration cannot reach the server. Enable WLAN & Cellular data for TareSIPDemo in Settings.",
+            message: "Wireless data is disabled for this app, so SIP registration cannot reach the server. Enable WLAN & Cellular data for SipSdk in Settings.",
             preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: "Open Settings", style: .default) { action in
             dismiss(action)

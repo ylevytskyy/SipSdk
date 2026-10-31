@@ -1,4 +1,4 @@
-# AGENTS.md — sipsdk · iOS SIP SDK (SwiftPM + Baresip v4 XCFramework) + legacy TareSIPDemo app
+# AGENTS.md — sipsdk · iOS SIP SDK (SwiftPM + Baresip v4 XCFramework) + legacy SipSdk app
 
 Instructions for any coding agent working in this repo, in any harness. This is the project
 layer; the shared engineering core and task pipeline live in the workspace library.
@@ -25,11 +25,11 @@ current native build (`USE_OPENSSL=OFF`): no SIP over TLS.
   pinned by checksum.
 - iOS deployment target: package 12.1; demo 15.0 (bumped from 12.1 — Xcode 27 will not
   build targets below 15.0).
-- Demo app `TareSIPDemo.xcodeproj` + `TareSIPDemo.xcworkspace` on CocoaPods
+- Demo app `SipSdk.xcodeproj` + `SipSdk.xcworkspace` on CocoaPods
   (`taresip 0.1.1`). Do NOT migrate it to the new adapter until device validation passes.
 - Never commit real SIP credentials; the demo configures a test account in
-  `TareSIPDemo/SipCallsViewController.swift` (`TareSIPDemo/SipCredentials.plist` is
-  gitignored). `TareSIPDemo/config` holds Baresip module/audio settings, not secrets.
+  `SipSdk/SipCallsViewController.swift` (`SipSdk/SipCredentials.plist` is
+  gitignored). `SipSdk/config` holds Baresip module/audio settings, not secrets.
 
 ## Commands
 - Verify (compile package for iOS Simulator): 
@@ -42,13 +42,13 @@ current native build (`USE_OPENSSL=OFF`): no SIP over TLS.
   needs a locally built XCFramework from `scripts/build-baresip-xcframework.sh` (CI runs
   this; local run is heavy).
 - Legacy demo: `pod install --deployment --repo-update`, then build
-  `TareSIPDemo.xcworkspace` / scheme `TareSIPDemo` in Xcode. Verified commands
+  `SipSdk.xcworkspace` / scheme `SipSdk` in Xcode. Verified commands
   (2026-10-31, Xcode 27):
-  - Device: `xcodebuild build -workspace TareSIPDemo.xcworkspace -scheme TareSIPDemo -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO`
+  - Device: `xcodebuild build -workspace SipSdk.xcworkspace -scheme SipSdk -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO`
   - Simulator (x86_64 only): same with `-destination 'generic/platform=iOS Simulator' ARCHS=x86_64`
     — the taresip pod's fat libs have no arm64-simulator slice (arm64 is device-tagged),
     so an arm64 sim build cannot link; x86_64 links the pod's sim slice.
-  - `TareSIPDemo/SipCredentials.plist` must exist (copy from `SipCredentials.example.plist`)
+  - `SipSdk/SipCredentials.plist` must exist (copy from `SipCredentials.example.plist`)
     — it is a build resource; the app runs without it but the build needs the file.
 - Web test page (`web/index.html` + vendored `web/jssip-3.13.9.min.js` — jssip 3.13.9
   ships no UMD bundle, so it is esbuild-bundled as an IIFE global; rebuild with
@@ -58,14 +58,17 @@ current native build (`USE_OPENSSL=OFF`): no SIP over TLS.
   (localhost is a secure context, so mic access works over plain HTTP). Test targets:
   `sip:echo@iptel.org`, `sip:music@iptel.org`, or the app's own iptel.org AOR. Video phase
   is deferred — the SDK has no video codec and the adapter pins `VIDMODE_OFF`.
+  Incoming-call check (no real creds needed): `node specs/web-test-page/verify-incoming.mjs`
+  — self-contained: stubs a SIP-over-WebSocket server (REGISTER→INVITE→answer/reject/CANCEL/BYE)
+  and drives the page with Playwright; exits non-zero on failure.
 
 ## Repo layout & gotchas
 - `Sources/SipSdk/SipClientBaresipV4.mm` — ObjC++ Baresip v4 adapter; `include/SipClient.h` — public API.
 - `Sources/SipSdkResources/` — resource bundle + `Resources/config.baresip-v4`.
-- `TareSIPDemo/` — legacy UIKit demo (Swift) on the taresip pod.
+- `SipSdk/` — legacy UIKit demo (Swift) on the taresip pod.
 - `.github/workflows/` — `ios-build.yml` (legacy demo CI), `baresip-xcframework.yml` +
   `publish-baresip-xcframework.yml` (modern XCFramework build/check/publish).
-- `xcodebuild` at the repo root resolves `TareSIPDemo.xcodeproj`, not the package — use
+- `xcodebuild` at the repo root resolves `SipSdk.xcodeproj`, not the package — use
   `swift build`/`swift package` for the modern side.
 - No test targets exist in the package or the demo — verification is compile/link only.
 
@@ -86,5 +89,5 @@ current native build (`USE_OPENSSL=OFF`): no SIP over TLS.
 - Deploy target: library consumed via SwiftPM; demo installed to a device via Xcode.
 - Environments: unknown (single local machine + GitHub).
 - Secrets location: none used; SIP test credentials must not be committed
-  (`TareSIPDemo/SipCredentials.plist` gitignored).
+  (`SipSdk/SipCredentials.plist` gitignored).
 - Monitoring: unknown (none).

@@ -1,6 +1,6 @@
 platform :ios, '15.0'
 
-target 'TareSIPDemo' do
+target 'SipSdk' do
   use_frameworks!
 
   # Keep the legacy native SIP engine explicit until a replacement is validated.

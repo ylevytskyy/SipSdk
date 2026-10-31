@@ -1,6 +1,6 @@
 //
 //  AppDelegate.swift
-//  TareSIPDemo
+//  SipSdk
 //
 //  Created by Yuriy Levytskyy on 2/26/19.
 //  Copyright © 2019 Yuriy Levytskyy. All rights reserved.

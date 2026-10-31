@@ -8,18 +8,18 @@ on:
     paths:
       - "Podfile"
       - "Podfile.lock"
-      - "TareSIPDemo/**"
-      - "TareSIPDemo.xcodeproj/**"
-      - "TareSIPDemo.xcworkspace/**"
+      - "SipSdk/**"
+      - "SipSdk.xcodeproj/**"
+      - "SipSdk.xcworkspace/**"
   pull_request:
     branches:
       - master
     paths:
       - "Podfile"
       - "Podfile.lock"
-      - "TareSIPDemo/**"
-      - "TareSIPDemo.xcodeproj/**"
-      - "TareSIPDemo.xcworkspace/**"
+      - "SipSdk/**"
+      - "SipSdk.xcodeproj/**"
+      - "SipSdk.xcworkspace/**"
   workflow_dispatch:
 
 permissions:
@@ -31,7 +31,7 @@ concurrency:
 
 jobs:
   build:
-    name: Build TareSIPDemo
+    name: Build SipSdk
     runs-on: macos-14
     timeout-minutes: 30
 
@@ -56,15 +56,15 @@ jobs:
         run: pod install --deployment --repo-update
 
       - name: List workspace schemes
-        run: xcodebuild -list -workspace TareSIPDemo.xcworkspace
+        run: xcodebuild -list -workspace SipSdk.xcworkspace
 
       # taresip 0.1.1 ships x86_64 Simulator and arm64 device objects,
       # but does not ship an arm64 iOS Simulator slice.
       - name: Build for iOS Simulator (x86_64 legacy slice)
         run: >-
           xcodebuild
-          -workspace TareSIPDemo.xcworkspace
-          -scheme TareSIPDemo
+          -workspace SipSdk.xcworkspace
+          -scheme SipSdk
           -configuration Debug
           -sdk iphonesimulator
           -destination 'generic/platform=iOS Simulator'
@@ -76,8 +76,8 @@ jobs:
       - name: Build for iOS device (arm64)
         run: >-
           xcodebuild
-          -workspace TareSIPDemo.xcworkspace
-          -scheme TareSIPDemo
+          -workspace SipSdk.xcworkspace
+          -scheme SipSdk
           -configuration Debug
           -sdk iphoneos
           -destination 'generic/platform=iOS'

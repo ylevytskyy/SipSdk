@@ -39,7 +39,7 @@ Open `Package.swift` in Xcode to build for generic iOS device and iOS Simulator 
 
 ## Adapter port staged for validation
 
-`Sources/SipSdk/SipClientBaresipV4.mm` ports the existing `SipClientDelegate` contract to the Baresip v4 event/call API. It is intentionally not added to `TareSIPDemo.xcodeproj` yet: the current CocoaPods app still compiles against the old API, and that working path must remain intact until the new package is validated.
+`Sources/SipSdk/SipClientBaresipV4.mm` ports the existing `SipClientDelegate` contract to the Baresip v4 event/call API. It is intentionally not added to `SipSdk.xcodeproj` yet: the current CocoaPods app still compiles against the old API, and that working path must remain intact until the new package is validated.
 
 The modern-build workflow:
 - builds the pinned Baresip/libre sources and creates the XCFramework;

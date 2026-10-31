@@ -68,15 +68,15 @@ The script downloads the release checksum sidecar and archive, independently ver
 
 ## Build the legacy demo
 
-The current `TareSIPDemo` Xcode project still uses CocoaPods:
+The current `SipSdk` Xcode project still uses CocoaPods:
 
 ```bash
 gem install cocoapods --version 1.17.0
 pod install --deployment --repo-update
-open TareSIPDemo.xcworkspace
+open SipSdk.xcworkspace
 ```
 
-Configure a test SIP account in `TareSIPDemo/SipCallsViewController.swift` before running the app. Do not commit real account credentials. The bundled legacy `TareSIPDemo/config` file contains Baresip module and audio settings; it is not a secrets store.
+Configure a test SIP account in `SipSdk/SipCallsViewController.swift` before running the app. Do not commit real account credentials. The bundled legacy `SipSdk/config` file contains Baresip module and audio settings; it is not a secrets store.
 
 ## Current status and limitations
 
