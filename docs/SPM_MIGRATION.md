@@ -2,7 +2,7 @@
 
 ## Current state
 
-The repository is migrating from the legacy `taresip 0.1.1` CocoaPods integration to a release-backed Baresip v4 SwiftPM package. The migration is deliberately staged: the existing demo remains on CocoaPods until the new adapter has been integrated and exercised on a physical iOS device.
+Both the SwiftPM `SipSdk` package (`Package.swift`) and the iOS Video Phone application (`SipSdk.xcodeproj`) have been migrated from the legacy `taresip 0.1.1` CocoaPods integration to the release-backed Baresip v4.12.0 XCFramework (`BaresipCore.xcframework`) with native Apple `VideoToolbox` H.264 video (`vidcodec`), `AVCaptureSession` + Simulator synthetic test-pattern camera capture (`vidsrc`), `SipVideoView` UIKit display (`vidisp`), full telephony controls, CallKit integration (`SipCallKitManager`), persistent SIP account settings (`SipAccountStore`), and call history (`SipCallHistoryStore`).
 
 The pinned native build uses:
 

@@ -121,7 +121,7 @@
         <!--Sip Call Details View Controller-->
         <scene sceneID="72h-nK-CdS">
             <objects>
-                <viewController id="xrw-cs-e5W" customClass="SipCallDetailsViewController" customModule="SipSdk" customModuleProvider="target" sceneMemberID="viewController">
+                <viewController storyboardIdentifier="SipCallDetailsViewController" id="xrw-cs-e5W" customClass="SipCallDetailsViewController" customModule="SipSdk" customModuleProvider="target" sceneMemberID="viewController">
                     <view key="view" contentMode="scaleToFill" id="71p-WP-B2l">
                         <rect key="frame" x="0.0" y="0.0" width="375" height="667"/>
                         <autoresizingMask key="autoresizingMask" widthSizable="YES" heightSizable="YES"/>

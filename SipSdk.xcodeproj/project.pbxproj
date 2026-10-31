@@ -8,8 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		34F01D8FE98C4D4835DA052F /* SipCredentials.plist in Resources */ = {isa = PBXBuildFile; fileRef = 428EDE54086CF385F3C93E72 /* SipCredentials.plist */; };
-		A2FABC62F71736D19A40C9AC /* Pods_SipSdk.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 3E50DF2FF5588800EBD8D873 /* Pods_SipSdk.framework */; };
-		B41B7A122226C2800078B9F7 /* SipClient.mm in Sources */ = {isa = PBXBuildFile; fileRef = B41B7A112226C2800078B9F7 /* SipClient.mm */; };
+		B41B7A122226C2800078B9F7 /* SipClientBaresipV4.mm in Sources */ = {isa = PBXBuildFile; fileRef = B41B7A112226C2800078B9F7 /* SipClientBaresipV4.mm */; };
 		B41E9BBC2227EE9200647A38 /* SipCallDetailsViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = B41E9BBB2227EE9200647A38 /* SipCallDetailsViewController.swift */; };
 		B44A572B2225A0F100570604 /* CFNetwork.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B44A572A2225A0F100570604 /* CFNetwork.framework */; };
 		B44A572D2225A0FE00570604 /* AudioToolbox.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B44A572C2225A0FE00570604 /* AudioToolbox.framework */; };
@@ -17,7 +16,11 @@
 		B44A57312225A10F00570604 /* SystemConfiguration.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B44A57302225A10F00570604 /* SystemConfiguration.framework */; };
 		B44A57332225A11A00570604 /* CoreMedia.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B44A57322225A11A00570604 /* CoreMedia.framework */; };
 		B44A573B2225A67600570604 /* config in Resources */ = {isa = PBXBuildFile; fileRef = B44A573A2225A67600570604 /* config */; };
+		B44A573D2225A67600570605 /* config.baresip-v4 in Resources */ = {isa = PBXBuildFile; fileRef = B44A573C2225A67600570605 /* config.baresip-v4 */; };
 		B49EE8572227EA7E00B8F170 /* CallCell.swift in Sources */ = {isa = PBXBuildFile; fileRef = B49EE8562227EA7E00B8F170 /* CallCell.swift */; };
+		B49EE8612227EA7E00B8F171 /* SipAccountStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = B49EE8602227EA7E00B8F171 /* SipAccountStore.swift */; };
+		B49EE8632227EA7E00B8F172 /* SipCallHistoryStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = B49EE8622227EA7E00B8F172 /* SipCallHistoryStore.swift */; };
+		B49EE8652227EA7E00B8F173 /* SipCallKitManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = B49EE8642227EA7E00B8F173 /* SipCallKitManager.swift */; };
 		B4E342BB22259C9200D70E9A /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4E342BA22259C9200D70E9A /* AppDelegate.swift */; };
 		B4E342BD22259C9200D70E9A /* SipCallsViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4E342BC22259C9200D70E9A /* SipCallsViewController.swift */; };
 		B4E342C022259C9200D70E9A /* Main.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = B4E342BE22259C9200D70E9A /* Main.storyboard */; };
@@ -26,11 +29,9 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
-		14C9236464D4178464561B4F /* Pods-SipSdk.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-SipSdk.release.xcconfig"; path = "Target Support Files/Pods-SipSdk/Pods-SipSdk.release.xcconfig"; sourceTree = "<group>"; };
-		3E50DF2FF5588800EBD8D873 /* Pods_SipSdk.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_SipSdk.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		428EDE54086CF385F3C93E72 /* SipCredentials.plist */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.xml; name = SipCredentials.plist; path = SipCredentials.plist; sourceTree = "<group>"; };
 		B41B7A102226C2800078B9F7 /* SipClient.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = SipClient.h; sourceTree = "<group>"; };
-		B41B7A112226C2800078B9F7 /* SipClient.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = SipClient.mm; sourceTree = "<group>"; };
+		B41B7A112226C2800078B9F7 /* SipClientBaresipV4.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; name = SipClientBaresipV4.mm; path = ../Sources/SipSdk/SipClientBaresipV4.mm; sourceTree = "<group>"; };
 		B41E9BBB2227EE9200647A38 /* SipCallDetailsViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SipCallDetailsViewController.swift; sourceTree = "<group>"; };
 		B44A572A2225A0F100570604 /* CFNetwork.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CFNetwork.framework; path = System/Library/Frameworks/CFNetwork.framework; sourceTree = SDKROOT; };
 		B44A572C2225A0FE00570604 /* AudioToolbox.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AudioToolbox.framework; path = System/Library/Frameworks/AudioToolbox.framework; sourceTree = SDKROOT; };
@@ -39,7 +40,11 @@
 		B44A57322225A11A00570604 /* CoreMedia.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreMedia.framework; path = System/Library/Frameworks/CoreMedia.framework; sourceTree = SDKROOT; };
 		B44A57342225A17700570604 /* SipSdk-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "SipSdk-Bridging-Header.h"; sourceTree = "<group>"; };
 		B44A573A2225A67600570604 /* config */ = {isa = PBXFileReference; lastKnownFileType = text; path = config; sourceTree = "<group>"; };
+		B44A573C2225A67600570605 /* config.baresip-v4 */ = {isa = PBXFileReference; lastKnownFileType = text; name = "config.baresip-v4"; path = "../Sources/SipSdkResources/Resources/config.baresip-v4"; sourceTree = "<group>"; };
 		B49EE8562227EA7E00B8F170 /* CallCell.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallCell.swift; sourceTree = "<group>"; };
+		B49EE8602227EA7E00B8F171 /* SipAccountStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SipAccountStore.swift; sourceTree = "<group>"; };
+		B49EE8622227EA7E00B8F172 /* SipCallHistoryStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SipCallHistoryStore.swift; sourceTree = "<group>"; };
+		B49EE8642227EA7E00B8F173 /* SipCallKitManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SipCallKitManager.swift; sourceTree = "<group>"; };
 		B4E342B722259C9200D70E9A /* SipSdk.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SipSdk.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		B4E342BA22259C9200D70E9A /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		B4E342BC22259C9200D70E9A /* SipCallsViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SipCallsViewController.swift; sourceTree = "<group>"; };
@@ -47,7 +52,6 @@
 		B4E342C122259C9300D70E9A /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		B4E342C422259C9400D70E9A /* Base */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; name = Base; path = Base.lproj/LaunchScreen.storyboard; sourceTree = "<group>"; };
 		B4E342C622259C9400D70E9A /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
-		FCCBAAA2E8ED7CACA559530A /* Pods-SipSdk.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-SipSdk.debug.xcconfig"; path = "Target Support Files/Pods-SipSdk/Pods-SipSdk.debug.xcconfig"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -60,7 +64,6 @@
 				B44A572F2225A10500570604 /* AVFoundation.framework in Frameworks */,
 				B44A572D2225A0FE00570604 /* AudioToolbox.framework in Frameworks */,
 				B44A572B2225A0F100570604 /* CFNetwork.framework in Frameworks */,
-				A2FABC62F71736D19A40C9AC /* Pods_SipSdk.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -75,18 +78,8 @@
 				B44A572E2225A10400570604 /* AVFoundation.framework */,
 				B44A572C2225A0FE00570604 /* AudioToolbox.framework */,
 				B44A572A2225A0F100570604 /* CFNetwork.framework */,
-				3E50DF2FF5588800EBD8D873 /* Pods_SipSdk.framework */,
 			);
 			name = Frameworks;
-			sourceTree = "<group>";
-		};
-		4C3F58970C4FEB62622C2895 /* Pods */ = {
-			isa = PBXGroup;
-			children = (
-				FCCBAAA2E8ED7CACA559530A /* Pods-SipSdk.debug.xcconfig */,
-				14C9236464D4178464561B4F /* Pods-SipSdk.release.xcconfig */,
-			);
-			path = Pods;
 			sourceTree = "<group>";
 		};
 		B4E342AE22259C9200D70E9A = {
@@ -94,7 +87,6 @@
 			children = (
 				B4E342B922259C9200D70E9A /* SipSdk */,
 				B4E342B822259C9200D70E9A /* Products */,
-				4C3F58970C4FEB62622C2895 /* Pods */,
 				193ED1425638EE209F25F16F /* Frameworks */,
 			);
 			sourceTree = "<group>";
@@ -114,14 +106,18 @@
 				B4E342BC22259C9200D70E9A /* SipCallsViewController.swift */,
 				B49EE8562227EA7E00B8F170 /* CallCell.swift */,
 				B41E9BBB2227EE9200647A38 /* SipCallDetailsViewController.swift */,
+				B49EE8602227EA7E00B8F171 /* SipAccountStore.swift */,
+				B49EE8622227EA7E00B8F172 /* SipCallHistoryStore.swift */,
+				B49EE8642227EA7E00B8F173 /* SipCallKitManager.swift */,
 				B4E342BE22259C9200D70E9A /* Main.storyboard */,
 				B4E342C122259C9300D70E9A /* Assets.xcassets */,
 				B4E342C322259C9400D70E9A /* LaunchScreen.storyboard */,
 				B4E342C622259C9400D70E9A /* Info.plist */,
 				B44A57342225A17700570604 /* SipSdk-Bridging-Header.h */,
 				B44A573A2225A67600570604 /* config */,
+				B44A573C2225A67600570605 /* config.baresip-v4 */,
 				B41B7A102226C2800078B9F7 /* SipClient.h */,
-				B41B7A112226C2800078B9F7 /* SipClient.mm */,
+				B41B7A112226C2800078B9F7 /* SipClientBaresipV4.mm */,
 				428EDE54086CF385F3C93E72 /* SipCredentials.plist */,
 			);
 			path = SipSdk;
@@ -134,7 +130,6 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = B4E342C922259C9400D70E9A /* Build configuration list for PBXNativeTarget "SipSdk" */;
 			buildPhases = (
-				DEE5C4AB5921F325AE749C3B /* [CP] Check Pods Manifest.lock */,
 				B4E342B322259C9200D70E9A /* Sources */,
 				B4E342B422259C9200D70E9A /* Frameworks */,
 				B4E342B522259C9200D70E9A /* Resources */,
@@ -188,6 +183,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				B44A573B2225A67600570604 /* config in Resources */,
+				B44A573D2225A67600570605 /* config.baresip-v4 in Resources */,
 				B4E342C522259C9400D70E9A /* LaunchScreen.storyboard in Resources */,
 				B4E342C222259C9300D70E9A /* Assets.xcassets in Resources */,
 				B4E342C022259C9200D70E9A /* Main.storyboard in Resources */,
@@ -197,31 +193,6 @@
 		};
 /* End PBXResourcesBuildPhase section */
 
-/* Begin PBXShellScriptBuildPhase section */
-		DEE5C4AB5921F325AE749C3B /* [CP] Check Pods Manifest.lock */ = {
-			isa = PBXShellScriptBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			inputFileListPaths = (
-			);
-			inputPaths = (
-				"${PODS_PODFILE_DIR_PATH}/Podfile.lock",
-				"${PODS_ROOT}/Manifest.lock",
-			);
-			name = "[CP] Check Pods Manifest.lock";
-			outputFileListPaths = (
-			);
-			outputPaths = (
-				"$(DERIVED_FILE_DIR)/Pods-SipSdk-checkManifestLockResult.txt",
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-			shellPath = /bin/sh;
-			shellScript = "diff \"${PODS_PODFILE_DIR_PATH}/Podfile.lock\" \"${PODS_ROOT}/Manifest.lock\" > /dev/null\nif [ $? != 0 ] ; then\n    # print error to STDERR\n    echo \"error: The sandbox is not in sync with the Podfile.lock. Run 'pod install' or update your CocoaPods installation.\" >&2\n    exit 1\nfi\n# This output is used by Xcode 'outputs' to avoid re-running this script phase.\necho \"SUCCESS\" > \"${SCRIPT_OUTPUT_FILE_0}\"\n";
-			showEnvVarsInLog = 0;
-		};
-/* End PBXShellScriptBuildPhase section */
-
 /* Begin PBXSourcesBuildPhase section */
 		B4E342B322259C9200D70E9A /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
@@ -230,7 +201,10 @@
 				B41E9BBC2227EE9200647A38 /* SipCallDetailsViewController.swift in Sources */,
 				B4E342BD22259C9200D70E9A /* SipCallsViewController.swift in Sources */,
 				B49EE8572227EA7E00B8F170 /* CallCell.swift in Sources */,
-				B41B7A122226C2800078B9F7 /* SipClient.mm in Sources */,
+				B49EE8612227EA7E00B8F171 /* SipAccountStore.swift in Sources */,
+				B49EE8632227EA7E00B8F172 /* SipCallHistoryStore.swift in Sources */,
+				B49EE8652227EA7E00B8F173 /* SipCallKitManager.swift in Sources */,
+				B41B7A122226C2800078B9F7 /* SipClientBaresipV4.mm in Sources */,
 				B4E342BB22259C9200D70E9A /* AppDelegate.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -263,7 +237,7 @@
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				CLANG_ANALYZER_NONNULL = YES;
 				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
-				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++17";
 				CLANG_CXX_LIBRARY = "libc++";
 				CLANG_ENABLE_MODULES = YES;
 				CLANG_ENABLE_OBJC_ARC = YES;
@@ -324,7 +298,7 @@
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				CLANG_ANALYZER_NONNULL = YES;
 				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
-				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++17";
 				CLANG_CXX_LIBRARY = "libc++";
 				CLANG_ENABLE_MODULES = YES;
 				CLANG_ENABLE_OBJC_ARC = YES;
@@ -375,45 +349,139 @@
 		};
 		B4E342CA22259C9400D70E9A /* Debug */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = FCCBAAA2E8ED7CACA559530A /* Pods-SipSdk.debug.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_TEAM = Y3KQN6X8VW;
 				ENABLE_BITCODE = NO;
+				"HEADER_SEARCH_PATHS[sdk=iphoneos*]" = (
+					"$(inherited)",
+					"$(SRCROOT)/Sources/SipSdk/include",
+					"$(SRCROOT)/.build/artifacts/sipsdk/BaresipCore/BaresipCore.xcframework/ios-arm64/Headers",
+				);
+				"HEADER_SEARCH_PATHS[sdk=iphonesimulator*]" = (
+					"$(inherited)",
+					"$(SRCROOT)/Sources/SipSdk/include",
+					"$(SRCROOT)/.build/artifacts/sipsdk/BaresipCore/BaresipCore.xcframework/ios-arm64_x86_64-simulator/Headers",
+				);
 				INFOPLIST_FILE = SipSdk/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
+				"OTHER_LDFLAGS[sdk=iphoneos*]" = (
+					"$(inherited)",
+					"-ObjC",
+					"$(SRCROOT)/.build/artifacts/sipsdk/BaresipCore/BaresipCore.xcframework/ios-arm64/libBaresipCore.a",
+					"-framework",
+					"VideoToolbox",
+					"-framework",
+					"CoreVideo",
+					"-framework",
+					"CoreGraphics",
+					"-framework",
+					"QuartzCore",
+					"-framework",
+					"CallKit",
+					"-framework",
+					"CoreAudio",
+					"-lz",
+					"-lm",
+				);
+				"OTHER_LDFLAGS[sdk=iphonesimulator*]" = (
+					"$(inherited)",
+					"-ObjC",
+					"$(SRCROOT)/.build/artifacts/sipsdk/BaresipCore/BaresipCore.xcframework/ios-arm64_x86_64-simulator/libBaresipCore.a",
+					"-framework",
+					"VideoToolbox",
+					"-framework",
+					"CoreVideo",
+					"-framework",
+					"CoreGraphics",
+					"-framework",
+					"QuartzCore",
+					"-framework",
+					"CallKit",
+					"-framework",
+					"CoreAudio",
+					"-lz",
+					"-lm",
+				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.wiseland.SipSdk;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_OBJC_BRIDGING_HEADER = "SipSdk/SipSdk-Bridging-Header.h";
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
-				SWIFT_VERSION = 4.2;
+				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Debug;
 		};
 		B4E342CB22259C9400D70E9A /* Release */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = 14C9236464D4178464561B4F /* Pods-SipSdk.release.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_TEAM = Y3KQN6X8VW;
 				ENABLE_BITCODE = NO;
+				"HEADER_SEARCH_PATHS[sdk=iphoneos*]" = (
+					"$(inherited)",
+					"$(SRCROOT)/Sources/SipSdk/include",
+					"$(SRCROOT)/.build/artifacts/sipsdk/BaresipCore/BaresipCore.xcframework/ios-arm64/Headers",
+				);
+				"HEADER_SEARCH_PATHS[sdk=iphonesimulator*]" = (
+					"$(inherited)",
+					"$(SRCROOT)/Sources/SipSdk/include",
+					"$(SRCROOT)/.build/artifacts/sipsdk/BaresipCore/BaresipCore.xcframework/ios-arm64_x86_64-simulator/Headers",
+				);
 				INFOPLIST_FILE = SipSdk/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
+				"OTHER_LDFLAGS[sdk=iphoneos*]" = (
+					"$(inherited)",
+					"-ObjC",
+					"$(SRCROOT)/.build/artifacts/sipsdk/BaresipCore/BaresipCore.xcframework/ios-arm64/libBaresipCore.a",
+					"-framework",
+					"VideoToolbox",
+					"-framework",
+					"CoreVideo",
+					"-framework",
+					"CoreGraphics",
+					"-framework",
+					"QuartzCore",
+					"-framework",
+					"CallKit",
+					"-framework",
+					"CoreAudio",
+					"-lz",
+					"-lm",
+				);
+				"OTHER_LDFLAGS[sdk=iphonesimulator*]" = (
+					"$(inherited)",
+					"-ObjC",
+					"$(SRCROOT)/.build/artifacts/sipsdk/BaresipCore/BaresipCore.xcframework/ios-arm64_x86_64-simulator/libBaresipCore.a",
+					"-framework",
+					"VideoToolbox",
+					"-framework",
+					"CoreVideo",
+					"-framework",
+					"CoreGraphics",
+					"-framework",
+					"QuartzCore",
+					"-framework",
+					"CallKit",
+					"-framework",
+					"CoreAudio",
+					"-lz",
+					"-lm",
+				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.wiseland.SipSdk;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_OBJC_BRIDGING_HEADER = "SipSdk/SipSdk-Bridging-Header.h";
-				SWIFT_VERSION = 4.2;
+				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Release;

@@ -31,11 +31,14 @@
   #incoming { display: none; border-color: #ff9f0a; }
   #incall { display: none; }
   audio { width: 100%; margin-top: 8px; }
+  .video-stage { position: relative; background: #0b0d14; border-radius: 10px; overflow: hidden; margin-top: 10px; min-height: 220px; display: flex; align-items: center; justify-content: center; }
+  #remoteVideo { width: 100%; max-height: 340px; background: #0b0d14; display: block; }
+  #localVideo { position: absolute; right: 12px; bottom: 12px; width: 140px; height: 105px; object-fit: cover; background: #1c1c1e; border: 2px solid rgba(255,255,255,.85); border-radius: 8px; }
 </style>
 </head>
 <body>
 <main>
-  <h1>SipSdk test client <span style="font-weight:400;color:#6e6e73">— SIP over WebSocket (iptel.org), audio only</span></h1>
+  <h1>SipSdk test client <span style="font-weight:400;color:#6e6e73">— SIP over WebSocket (iptel.org), Audio + H.264 Video</span></h1>
 
   <section>
     <h2>Account</h2>
@@ -61,6 +64,9 @@
       <div><label for="target">Target SIP URI</label><input id="target" type="text" value="sip:echo@iptel.org" autocomplete="off"></div>
       <div style="flex:0"><button id="btnCall" disabled>Call</button></div>
     </div>
+    <div style="margin:6px 0">
+      <label style="display:inline"><input type="checkbox" id="enableVideo" checked> Enable two-way Video (H.264 / WebRTC)</label>
+    </div>
     <button class="secondary" data-dial="sip:echo@iptel.org">echo@iptel.org</button>
     <button class="secondary" data-dial="sip:music@iptel.org">music@iptel.org</button>
   </section>
@@ -69,6 +75,7 @@
     <h2>Incoming call</h2>
     <p id="incomingFrom" style="margin:0 0 8px"></p>
     <button id="btnAnswer">Answer</button>
+    <button id="btnAnswerAudio" class="secondary">Answer Audio Only</button>
     <button id="btnReject" class="danger">Reject</button>
   </section>
 
@@ -77,7 +84,12 @@
     <p class="status" id="callStatus">—</p>
     <button id="btnHangup" class="danger">Hang up</button>
     <button id="btnMute" class="secondary">Mute</button>
+    <button id="btnVideo" class="secondary">Video Off</button>
     <button id="btnHold" class="secondary">Hold</button>
+    <div class="video-stage">
+      <video id="remoteVideo" autoplay playsinline></video>
+      <video id="localVideo" autoplay muted playsinline></video>
+    </div>
     <div class="dtmf" style="margin-top:10px">
       <label>DTMF</label>
       <button class="secondary" data-dtmf="1">1</button><button class="secondary" data-dtmf="2">2</button><button class="secondary" data-dtmf="3">3</button>
@@ -111,6 +123,7 @@
   let ua = null;
   let session = null;
   let muted = false;
+  let videoMuted = false;
   let held = false;
 
   const setRegStatus = (state) => {
@@ -128,29 +141,64 @@
     $('btnCall').disabled = inCall || !ua;
     if (!inCall) {
       $('remoteAudio').srcObject = null;
-      muted = held = false;
+      $('remoteVideo').srcObject = null;
+      $('localVideo').srcObject = null;
+      muted = videoMuted = held = false;
       $('btnMute').textContent = 'Mute';
+      $('btnVideo').textContent = 'Video Off';
       $('btnHold').textContent = 'Hold';
     }
   };
 
-  const attachRemoteAudio = (s) => {
+  const attachMediaStreams = (s) => {
+    const remoteStream = new MediaStream();
     const onTrack = (e) => {
-      const stream = e.streams && e.streams[0] ? e.streams[0] : new MediaStream([e.track]);
-      const el = $('remoteAudio');
-      el.srcObject = stream;
-      el.play().catch(() => {});
-      log('Remote audio attached');
+      const track = e.track;
+      if (track) remoteStream.addTrack(track);
+      const stream = (e.streams && e.streams[0]) ? e.streams[0] : remoteStream;
+      if (!track || track.kind === 'audio') {
+        const audioEl = $('remoteAudio');
+        audioEl.srcObject = stream;
+        audioEl.play().catch(() => {});
+        log('Remote audio attached');
+      }
+      if (!track || track.kind === 'video') {
+        const videoEl = $('remoteVideo');
+        videoEl.srcObject = stream;
+        videoEl.play().catch(() => {});
+        log('Remote video attached');
+      }
     };
-    // For incoming calls JsSIP creates the RTCPeerConnection only inside answer(),
-    // so wait for the 'peerconnection' event if it does not exist yet.
+
+    const captureLocalStream = (pc) => {
+      if (!pc || !pc.getSenders) return;
+      const tracks = pc.getSenders()
+        .map((sender) => sender.track)
+        .filter((t) => t && t.kind === 'video');
+      if (tracks.length > 0) {
+        const localEl = $('localVideo');
+        localEl.srcObject = new MediaStream(tracks);
+        localEl.play().catch(() => {});
+        log('Local video preview attached');
+      }
+    };
+
     const wire = () => {
       const pc = s.connection;
+      if (!pc) return;
       if ('ontrack' in pc) {
         pc.addEventListener('track', onTrack);
       } else {
-        pc.onaddstream = (e) => { $('remoteAudio').srcObject = e.stream; $('remoteAudio').play().catch(() => {}); log('Remote audio attached'); };
+        pc.onaddstream = (e) => {
+          $('remoteAudio').srcObject = e.stream;
+          $('remoteAudio').play().catch(() => {});
+          $('remoteVideo').srcObject = e.stream;
+          $('remoteVideo').play().catch(() => {});
+          log('Remote audio attached');
+        };
       }
+      pc.addEventListener('signalingstatechange', () => captureLocalStream(pc));
+      setTimeout(() => captureLocalStream(pc), 150);
     };
     if (s.connection) wire();
     else s.on('peerconnection', wire);
@@ -158,16 +206,25 @@
 
   const wireSession = (s) => {
     session = s;
-    attachRemoteAudio(s);
+    attachMediaStreams(s);
     const remote = s.remote_identity ? s.remote_identity.uri.toString() : 'unknown';
 
     s.on('progress', () => { $('callStatus').textContent = `Ringing ${remote}…`; log(`Call progress: ${remote}`); });
     s.on('accepted', () => { $('callStatus').textContent = `Connected: ${remote}`; log('Call accepted'); });
-    s.on('confirmed', () => log('Call confirmed (ACK)'));
+    s.on('confirmed', () => {
+      if (s.connection) {
+        const vSenders = s.connection.getSenders().filter((sn) => sn.track && sn.track.kind === 'video');
+        if (vSenders.length > 0 && !$('localVideo').srcObject) {
+          $('localVideo').srcObject = new MediaStream(vSenders.map((sn) => sn.track));
+          $('localVideo').play().catch(() => {});
+        }
+      }
+      log('Call confirmed (ACK)');
+    });
     s.on('ended', (e) => { log(`Call ended (${e.cause})`); cleanup(); });
     s.on('failed', (e) => { const st = e.message && e.message.status_code; log(`Call failed: ${e.cause}${st ? ` — ${st} ${e.message.reason_phrase || ''}` : ''}`); cleanup(); });
-    s.on('muted', () => log('Session muted'));
-    s.on('unmuted', () => log('Session unmuted'));
+    s.on('muted', (e) => log(`Session muted (${e && e.video ? 'video' : 'audio'})`));
+    s.on('unmuted', (e) => log(`Session unmuted (${e && e.video ? 'video' : 'audio'})`));
     s.on('hold', () => log('Session on hold'));
     s.on('unhold', () => log('Session resumed'));
   };
@@ -246,9 +303,13 @@
   const call = (target) => {
     if (!ua || session) return;
     const uri = target.startsWith('sip:') ? target : `sip:${target}`;
-    log(`Calling ${uri}…`);
+    const wantVideo = $('enableVideo').checked;
+    log(`Calling ${uri} (${wantVideo ? 'audio+video' : 'audio'})…`);
     const s = ua.call(uri, {
-      mediaConstraints: { audio: true, video: false },
+      mediaConstraints: {
+        audio: true,
+        video: wantVideo ? { width: { ideal: 640 }, height: { ideal: 480 } } : false,
+      },
       pcConfig: { iceServers: [] },
     });
     wireSession(s);
@@ -256,24 +317,39 @@
     $('callStatus').textContent = `Calling ${uri}…`;
   };
 
-  $('btnRegister').onclick = startUa;
-  $('btnUnregister').onclick = () => { if (ua) { ua.unregister({ all: true }); ua.stop(); ua = null; } };
-  $('btnCall').onclick = () => call($('target').value.trim());
-  $('btnHangup').onclick = () => { if (session) session.terminate(); };
-  $('btnAnswer').onclick = () => {
+  const answerIncoming = (withVideo) => {
     $('incoming').style.display = 'none';
     if (session) {
-      session.answer({ mediaConstraints: { audio: true, video: false }, pcConfig: { iceServers: [] } });
+      session.answer({
+        mediaConstraints: {
+          audio: true,
+          video: withVideo ? { width: { ideal: 640 }, height: { ideal: 480 } } : false,
+        },
+        pcConfig: { iceServers: [] },
+      });
       setCallUI(true);
       $('callStatus').textContent = 'Answering…';
     }
   };
+
+  $('btnRegister').onclick = startUa;
+  $('btnUnregister').onclick = () => { if (ua) { ua.unregister({ all: true }); ua.stop(); ua = null; } };
+  $('btnCall').onclick = () => call($('target').value.trim());
+  $('btnHangup').onclick = () => { if (session) session.terminate(); };
+  $('btnAnswer').onclick = () => answerIncoming($('enableVideo').checked);
+  $('btnAnswerAudio').onclick = () => answerIncoming(false);
   $('btnReject').onclick = () => { $('incoming').style.display = 'none'; if (session) session.terminate({ status_code: 486 }); };
   $('btnMute').onclick = () => {
     if (!session) return;
     muted = !muted;
     muted ? session.mute({ audio: true }) : session.unmute({ audio: true });
     $('btnMute').textContent = muted ? 'Unmute' : 'Mute';
+  };
+  $('btnVideo').onclick = () => {
+    if (!session) return;
+    videoMuted = !videoMuted;
+    videoMuted ? session.mute({ video: true }) : session.unmute({ video: true });
+    $('btnVideo').textContent = videoMuted ? 'Video On' : 'Video Off';
   };
   $('btnHold').onclick = () => {
     if (!session) return;

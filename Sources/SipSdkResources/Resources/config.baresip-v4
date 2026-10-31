@@ -1,5 +1,5 @@
-# Minimal Baresip v4 iOS configuration for SipSdk.
-# Only modules built into BaresipCore.xcframework should be configured here.
+# Minimal Baresip v4 iOS configuration for SipSdk (Audio + Video).
+# Only modules built into BaresipCore.xcframework or registered by SipSdk should be configured here.
 
 poll_method             select
 
@@ -11,6 +11,14 @@ audio_player            audiounit,nil
 audio_source            audiounit,nil
 audio_srate             8000-48000
 audio_channels          1-2
+
+# Native iOS AVCapture + SipVideoView video pipeline registered by SipSdk.
+video_source            avcapture,front
+video_display           iosview,nil
+video_size              640x480
+video_bitrate           512000
+video_fps               30.00
+video_fullscreen        no
 
 # RTP / jitter buffer
 rtp_tos                 184

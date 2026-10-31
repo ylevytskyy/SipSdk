@@ -27,6 +27,7 @@ let package = Package(
             publicHeadersPath: "include",
             linkerSettings: [
                 .linkedFramework("Foundation"),
+                .linkedFramework("UIKit"),
                 .linkedFramework("CoreFoundation"),
                 .linkedFramework("SystemConfiguration"),
                 .linkedFramework("CoreAudio"),
@@ -34,6 +35,11 @@ let package = Package(
                 .linkedFramework("AVFoundation"),
                 .linkedFramework("CFNetwork"),
                 .linkedFramework("CoreMedia"),
+                .linkedFramework("CoreVideo"),
+                .linkedFramework("CoreGraphics"),
+                .linkedFramework("VideoToolbox"),
+                .linkedFramework("QuartzCore"),
+                .linkedFramework("CallKit"),
                 .linkedLibrary("z"),
                 .linkedLibrary("m")
             ]

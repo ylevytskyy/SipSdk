@@ -92,6 +92,7 @@ link_adapter() {
     "$OUTPUT_DIR/adapter-link-main.mm" \
     -x none "$library" \
     -framework Foundation \
+    -framework UIKit \
     -framework CoreFoundation \
     -framework SystemConfiguration \
     -framework CoreAudio \
@@ -99,6 +100,11 @@ link_adapter() {
     -framework AVFoundation \
     -framework CFNetwork \
     -framework CoreMedia \
+    -framework CoreVideo \
+    -framework CoreGraphics \
+    -framework VideoToolbox \
+    -framework QuartzCore \
+    -framework CallKit \
     -lz -lm \
     -o "$OUTPUT_DIR/adapter-link-$label"
 }
@@ -110,12 +116,12 @@ xcrun --sdk iphoneos clang++ \
   -fobjc-arc \
   -fblocks \
   -fsyntax-only \
-  -target arm64-apple-ios12.1 \
+  -target arm64-apple-ios15.0 \
   -isysroot "$SDK_PATH" \
   -I "$HEADER_DIR" \
   -I "$ROOT_DIR/Sources/SipSdk/include" \
   "$SOURCE"
 
-link_adapter iphoneos "arm64-apple-ios12.1" "$DEVICE_LIBRARY" device-arm64
-link_adapter iphonesimulator "arm64-apple-ios12.1-simulator" "$SIMULATOR_LIBRARY" simulator-arm64
-link_adapter iphonesimulator "x86_64-apple-ios12.1-simulator" "$SIMULATOR_LIBRARY" simulator-x86_64
+link_adapter iphoneos "arm64-apple-ios15.0" "$DEVICE_LIBRARY" device-arm64
+link_adapter iphonesimulator "arm64-apple-ios15.0-simulator" "$SIMULATOR_LIBRARY" simulator-arm64
+link_adapter iphonesimulator "x86_64-apple-ios15.0-simulator" "$SIMULATOR_LIBRARY" simulator-x86_64
