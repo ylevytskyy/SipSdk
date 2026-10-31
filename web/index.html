@@ -124,7 +124,7 @@
   };
 
   const setCallUI = (inCall) => {
-    $('incall').style.display = inCall ? '' : 'none';
+    $('incall').style.display = inCall ? 'block' : 'none';
     $('btnCall').disabled = inCall || !ua;
     if (!inCall) {
       $('remoteAudio').srcObject = null;
@@ -220,7 +220,7 @@
         if (session) { s.terminate({ status_code: 486 }); return; }
         const from = s.remote_identity ? s.remote_identity.uri.toString() : 'unknown';
         $('incomingFrom').textContent = `From: ${from}`;
-        $('incoming').style.display = '';
+        $('incoming').style.display = 'block';
         log(`Incoming call from ${from}`);
         wireSession(s);
         s.on('failed', () => { $('incoming').style.display = 'none'; });
