@@ -50,6 +50,7 @@
     <div style="margin-top:10px">
       <button id="btnRegister">Register</button>
       <button id="btnUnregister" class="secondary" disabled>Unregister</button>
+      <label style="display:inline;margin-left:8px"><input type="checkbox" id="sipTrace"> SIP trace</label>
       <span class="status" id="regStatus"><span class="dot" id="regDot"></span>Not registered</span>
     </div>
   </section>
@@ -186,11 +187,33 @@
       register: true,
     });
 
-    ua.on('connected', () => log('UA connected'));
+    ua.on('connected', () => {
+      log('UA connected');
+      if ($('sipTrace').checked) {
+        const prevSend = socket.send.bind(socket);
+        socket.send = (msg) => {
+          const line = String(msg).split('\r\n')[0];
+          if (line.trim()) log(`SIP → ${line.substring(0, 120)}`);
+          return prevSend(msg);
+        };
+        const prevData = socket.ondata;
+        socket.ondata = (d) => {
+          const text = (d && d.message) ? String(d.message) : '';
+          if (text.trim()) log(`SIP ← ${text.split('\r\n')[0].substring(0, 120)}`);
+          if (prevData) prevData(d);
+        };
+      }
+    });
     ua.on('disconnected', () => { log('UA disconnected'); setRegStatus('idle'); });
     ua.on('registered', () => { $('regStatus').childNodes[1].textContent = `Registered as ${uri}`; setRegStatus('ok'); log(`Registered: ${uri}`); });
     ua.on('unregistered', () => { setRegStatus('idle'); $('regStatus').childNodes[1].textContent = 'Not registered'; log('Unregistered'); });
-    ua.on('registrationFailed', (e) => { setRegStatus('err'); $('regStatus').childNodes[1].textContent = `Registration failed: ${e.cause}`; log(`Registration failed: ${e.cause}`); });
+    ua.on('registrationFailed', (e) => {
+      const r = e.response;
+      const detail = r && r.status_code ? `${r.status_code} ${r.reason_phrase || ''}`.trim() : e.cause;
+      setRegStatus('err');
+      $('regStatus').childNodes[1].textContent = `Registration failed: ${detail}`;
+      log(`Registration failed: ${detail}`);
+    });
     ua.on('newRTCSession', (e) => {
       const s = e.session;
       if (s.direction === 'incoming') {
