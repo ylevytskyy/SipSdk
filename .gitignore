@@ -16,6 +16,9 @@ xcuserdata/
 # CocoaPods generated files
 Pods/
 
+# SwiftPM build products
+.build/
+
 # macOS
 .DS_Store
 
