@@ -17,13 +17,11 @@ import json, sys
 data = json.load(open(sys.argv[1]))
 devices = data.get("result", {}).get("devices", [])
 for d in devices:
-    props = d.get("connectionProperties", {})
     hw = d.get("hardwareProperties", {})
     name = d.get("deviceProperties", {}).get("name", "")
-    if hw.get("reality") == "physical" and props.get("tunnelState") in ("connected", "available"):
-        if "iPhone 11 Pro" in name:
-            print(hw.get("udid") or d.get("identifier"))
-            sys.exit(0)
+    if hw.get("reality") == "physical" and "iPhone 11 Pro" in name:
+        print(hw.get("udid") or d.get("identifier"))
+        sys.exit(0)
 for d in devices:
     props = d.get("connectionProperties", {})
     hw = d.get("hardwareProperties", {})
@@ -53,15 +51,16 @@ test -f "$DEV_APP/SipSdk"
 echo "==> Installing SipSdk.app onto physical device $DEVICE_UDID"
 xcrun devicectl device install app --device "$DEVICE_UDID" "$DEV_APP"
 
-echo "==> Launching SipSdk.app on physical device $DEVICE_UDID and streaming console verification"
+TARGET_CALL_URI="${SIPSDK_DEVICE_CALL_URI:-9001}"
+echo "==> Launching SipSdk.app on physical device $DEVICE_UDID and streaming console verification (target: $TARGET_CALL_URI)"
 (
   SIPSDK_UITEST_MODE="device_verify" \
-  SIPSDK_DEVICE_CALL_URI="sip:echo@iptel.org" \
+  SIPSDK_DEVICE_CALL_URI="$TARGET_CALL_URI" \
   xcrun devicectl device process launch \
     --device "$DEVICE_UDID" \
     --terminate-existing \
     --console \
-    --environment-variables '{"SIPSDK_UITEST_MODE":"device_verify","SIPSDK_DEVICE_CALL_URI":"sip:echo@iptel.org"}' \
+    --environment-variables "{\"SIPSDK_UITEST_MODE\":\"device_verify\",\"SIPSDK_DEVICE_CALL_URI\":\"$TARGET_CALL_URI\"}" \
     com.wiseland.SipSdk >"$CONSOLE_LOG" 2>&1
 ) &
 LAUNCH_PID=$!

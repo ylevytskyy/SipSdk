@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="390" height="844" viewBox="0 0 390 844" font-family="Arial, sans-serif" fill="#162139">
+<rect width="390" height="844" fill="#F4F6FA"/><text x="24" y="30" font-size="14" font-weight="700">9:41</text><text x="24" y="89" font-size="34" font-weight="700">History</text><text x="24" y="119" font-size="17" fill="#526079">Pick up where you left off.</text>
+<rect x="24" y="148" width="342" height="48" rx="14" fill="#E4E9F1"/><rect x="28" y="152" width="167" height="40" rx="11" fill="white"/><text x="111" y="178" text-anchor="middle" font-size="16" fill="#2457DE" font-weight="700">All calls</text><text x="280" y="178" text-anchor="middle" font-size="16" fill="#526079">Missed</text>
+<text x="24" y="239" font-size="13" fill="#526079" font-weight="700" letter-spacing="1">TODAY</text>
+<rect x="24" y="256" width="342" height="268" rx="20" fill="white"/><path d="M44 345h302M44 434h302" stroke="#DCE2EC"/>
+<g font-size="17" font-weight="700"><text x="80" y="291">1002</text><text x="80" y="380" fill="#C93245">1003</text><text x="80" y="469">1002</text></g>
+<g font-size="14" fill="#526079"><text x="80" y="318">Outgoing video · 04:32</text><text x="80" y="407">Missed video call</text><text x="80" y="496">Incoming audio · 01:08</text></g>
+<g font-size="13" fill="#526079" text-anchor="end"><text x="344" y="291">09:35</text><text x="344" y="380">09:10</text><text x="344" y="469">08:52</text></g>
+<text x="43" y="301" font-size="24" fill="#2457DE">↗</text><text x="43" y="390" font-size="24" fill="#C93245">!</text><text x="43" y="479" font-size="24" fill="#2457DE">↙</text>
+<text x="24" y="572" font-size="13" fill="#526079" font-weight="700" letter-spacing="1">YESTERDAY</text>
+<rect x="24" y="589" width="342" height="90" rx="20" fill="white"/><text x="43" y="634" font-size="24" fill="#2457DE">↗</text><text x="80" y="624" font-size="17" font-weight="700">1004</text><text x="80" y="651" font-size="14" fill="#526079">Outgoing video · No answer</text><text x="344" y="624" text-anchor="end" font-size="13" fill="#526079">17:20</text>
+<text x="195" y="717" text-anchor="middle" font-size="14" fill="#526079">Tap a call to see details and call back.</text>
+<path d="M0 752h390" stroke="#DCE2EC"/><rect y="753" width="390" height="91" fill="white"/><rect x="144" y="764" width="102" height="48" rx="16" fill="#EAF0FF"/>
+<g font-size="15" text-anchor="middle"><text x="75" y="794" fill="#526079">Home</text><text x="195" y="794" fill="#2457DE" font-weight="700">History</text><text x="315" y="794" fill="#526079">Settings</text></g><rect x="129" y="829" width="132" height="5" rx="3" fill="#162139"/>
+</svg>

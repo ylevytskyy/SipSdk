@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="390" height="844" viewBox="0 0 390 844" font-family="Arial, sans-serif" fill="#F4F7FC">
+<rect width="390" height="844" fill="#101827"/><text x="24" y="30" font-size="14" font-weight="700">9:41</text><text x="195" y="103" text-anchor="middle" font-size="14" fill="#B7C3D8" letter-spacing="1">INCOMING VIDEO CALL</text>
+<circle cx="195" cy="231" r="65" fill="#1C2940"/><text x="195" y="246" text-anchor="middle" font-size="44" fill="#A8C1FF">10</text><text x="195" y="346" text-anchor="middle" font-size="34" font-weight="700">1002</text><text x="195" y="381" text-anchor="middle" font-size="16" fill="#B7C3D8">sip:1002@sip.example.com</text>
+<text x="195" y="461" text-anchor="middle" font-size="15" fill="#B7C3D8">Your camera stays off until you choose.</text>
+<rect x="24" y="519" width="342" height="56" rx="16" fill="#A8C1FF"/><text x="195" y="554" text-anchor="middle" font-size="17" font-weight="700" fill="#101827">Answer with video</text>
+<rect x="24" y="591" width="342" height="56" rx="16" fill="#1C2940" stroke="#73819A"/><text x="195" y="626" text-anchor="middle" font-size="17" font-weight="700">Answer with audio</text>
+<rect x="24" y="691" width="342" height="56" rx="16" fill="#C93245"/><text x="195" y="726" text-anchor="middle" font-size="17" font-weight="700" fill="white">Decline</text><text x="195" y="789" text-anchor="middle" font-size="13" fill="#B7C3D8">Calling your account 1001</text><rect x="129" y="829" width="132" height="5" rx="3" fill="#F4F7FC"/>
+</svg>

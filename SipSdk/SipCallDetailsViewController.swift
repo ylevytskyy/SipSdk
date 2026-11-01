@@ -55,6 +55,7 @@ class SipCallDetailsViewController: UIViewController {
 
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
+        sipClient?.stopLocalVideoPreview()
         durationTimer?.invalidate()
         durationTimer = nil
         syntheticFrameTimer?.invalidate()
@@ -309,6 +310,10 @@ class SipCallDetailsViewController: UIViewController {
         // Render initial frames immediately so local PiP and remote canvas are live
         remoteVideoView.renderTestPattern(withWidth: 640, height: 480)
         localVideoView.renderTestPattern(withWidth: 320, height: 240)
+
+        if isSimulatedVideoPreview {
+            sipClient?.startLocalVideoPreview()
+        }
     }
 
     private func startCallTimers() {
@@ -322,7 +327,8 @@ class SipCallDetailsViewController: UIViewController {
             syntheticFrameTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
                 guard let self = self else { return }
                 self.remoteVideoView.renderTestPattern(withWidth: 640, height: 480)
-                if self.sipClient?.isLocalVideoEnabled ?? true {
+                let previewActive = self.sipClient?.isLocalVideoPreviewActive ?? false
+                if !previewActive && (self.sipClient?.isLocalVideoEnabled ?? true) {
                     self.localVideoView.renderTestPattern(withWidth: 320, height: 240)
                 }
             }

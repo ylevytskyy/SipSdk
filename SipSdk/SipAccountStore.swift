@@ -67,6 +67,10 @@ final class SipAccountStore: NSObject {
         if let data = defaults.data(forKey: storageKey),
            let decoded = try? JSONDecoder().decode(SipAccountProfile.self, from: data),
            decoded.isValid {
+            if decoded.domain == "iptel.org", let bundled = Self.bundledPlistProfile(), bundled.domain != "iptel.org" {
+                saveProfile(bundled)
+                return bundled
+            }
             return decoded
         }
         return Self.bundledPlistProfile()

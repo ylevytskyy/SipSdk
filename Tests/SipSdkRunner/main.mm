@@ -2,6 +2,9 @@
 #import <UIKit/UIKit.h>
 #import <CallKit/CallKit.h>
 #import <AVFoundation/AVFoundation.h>
+#import <arpa/inet.h>
+#import <sys/socket.h>
+#import <unistd.h>
 #import "SipClient.h"
 #import "SipSdkAppStores-Swift.h"
 
@@ -22,6 +25,219 @@ static void check(BOOL condition, NSString *name, NSString *detail)
         gFailures++;
     }
 }
+
+// Minimal loopback SIP registrar: answers REGISTER with 401 Unauthorized,
+// then 200 OK once the request carries an Authorization header. Exercises the
+// real libre -> baresip -> SipClient response path end to end.
+@interface LoopbackRegistrar : NSObject
+@property (nonatomic) int sockFd;
+@property (nonatomic) BOOL running;
+@end
+
+@implementation LoopbackRegistrar
+
+- (instancetype)initWithPort:(uint16_t)port
+{
+    self = [super init];
+    self.sockFd = socket(AF_INET, SOCK_DGRAM, 0);
+    int reuse = 1;
+    setsockopt(self.sockFd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
+    struct sockaddr_in addr = {0};
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    addr.sin_port = htons(port);
+    if (bind(self.sockFd, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
+        close(self.sockFd);
+        self.sockFd = -1;
+    }
+    return self;
+}
+
+- (BOOL)isBound
+{
+    return self.sockFd >= 0;
+}
+
+- (void)start
+{
+    self.running = YES;
+    [NSThread detachNewThreadSelector:@selector(serveLoop) toTarget:self withObject:nil];
+}
+
+- (void)stop
+{
+    self.running = NO;
+    if (self.sockFd >= 0) {
+        shutdown(self.sockFd, SHUT_RDWR);
+        close(self.sockFd);
+        self.sockFd = -1;
+    }
+}
+
+static NSString *sipHeader(NSString *msg, NSString *name)
+{
+    NSString *prefix = [name.lowercaseString stringByAppendingString:@":"];
+    for (NSString *line in [msg componentsSeparatedByString:@"\r\n"]) {
+        if ([line.lowercaseString hasPrefix:prefix]) {
+            return [[line substringFromIndex:prefix.length]
+                stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+        }
+    }
+    return @"";
+}
+
+- (void)serveLoop
+{
+    @autoreleasepool {
+        char buf[8192];
+        struct sockaddr_in peer;
+        socklen_t peerLen = sizeof(peer);
+        while (self.running) {
+            ssize_t n = recvfrom(self.sockFd, buf, sizeof(buf) - 1, 0,
+                                 (struct sockaddr *)&peer, &peerLen);
+            if (n <= 0) break;
+            buf[n] = '\0';
+            NSString *msg = [NSString stringWithUTF8String:buf];
+            if (![msg hasPrefix:@"REGISTER"]) continue;
+
+            NSString *via = sipHeader(msg, @"Via");
+            NSString *from = sipHeader(msg, @"From");
+            NSString *to = sipHeader(msg, @"To");
+            NSString *callId = sipHeader(msg, @"Call-ID");
+            NSString *cseq = sipHeader(msg, @"CSeq");
+            if (![to containsString:@"tag="]) {
+                to = [to stringByAppendingString:@";tag=srv42"];
+            }
+
+            NSString *status;
+            NSString *extra = @"";
+            if ([sipHeader(msg, @"Authorization") length] == 0) {
+                status = @"401 Unauthorized";
+                extra = @"WWW-Authenticate: Digest realm=\"sipreg-test\", nonce=\"deadbeef1234\", algorithm=MD5\r\n";
+            } else {
+                status = @"200 OK";
+            }
+            NSString *resp = [NSString stringWithFormat:
+                @"SIP/2.0 %@\r\nVia: %@\r\nFrom: %@\r\nTo: %@\r\nCall-ID: %@\r\nCSeq: %@\r\n%@Content-Length: 0\r\n\r\n",
+                status, via, from, to, callId, cseq, extra];
+            sendto(self.sockFd, resp.UTF8String, [resp lengthOfBytesUsingEncoding:NSUTF8StringEncoding],
+                   0, (struct sockaddr *)&peer, peerLen);
+        }
+    }
+}
+
+@end
+
+@interface LoopbackAnswerPeer : LoopbackRegistrar
+@property (atomic) BOOL acknowledged;
+@end
+
+@implementation LoopbackAnswerPeer
+- (void)serveLoop
+{
+    @autoreleasepool {
+        char buf[8192];
+        while (self.running) {
+            struct sockaddr_in peer = {0};
+            socklen_t peerLen = sizeof(peer);
+            ssize_t n = recvfrom(self.sockFd, buf, sizeof(buf), 0,
+                                 (struct sockaddr *)&peer, &peerLen);
+            if (n <= 0) break;
+            NSString *msg = [[NSString alloc] initWithBytes:buf length:(NSUInteger)n
+                                                  encoding:NSUTF8StringEncoding];
+            if ([msg hasPrefix:@"ACK "]) {
+                self.acknowledged = YES;
+                continue;
+            }
+            BOOL invite = [msg hasPrefix:@"INVITE "];
+            if (!invite && ![msg hasPrefix:@"BYE "]) continue;
+            NSMutableString *body = [NSMutableString string];
+            if (invite) {
+                [body appendString:@"v=0\r\no=peer 1 1 IN IP4 127.0.0.1\r\ns=Answer test\r\n"
+                                    "c=IN IP4 127.0.0.1\r\nt=0 0\r\n"
+                                    "m=audio 16000 RTP/AVP 0\r\na=rtpmap:0 PCMU/8000\r\na=sendrecv\r\n"];
+                NSRegularExpression *regex = [NSRegularExpression
+                    regularExpressionWithPattern:@"a=rtpmap:(\\d+) H264/90000"
+                    options:NSRegularExpressionCaseInsensitive error:nil];
+                NSTextCheckingResult *match = [regex firstMatchInString:msg options:0
+                                                                 range:NSMakeRange(0, msg.length)];
+                if (match) {
+                    NSString *pt = [msg substringWithRange:[match rangeAtIndex:1]];
+                    [body appendFormat:@"m=video 16002 RTP/AVP %@\r\na=rtpmap:%@ H264/90000\r\n"
+                                        "a=fmtp:%@ packetization-mode=1;profile-level-id=42e01f\r\na=sendrecv\r\n",
+                                        pt, pt, pt];
+                }
+            }
+            NSString *to = sipHeader(msg, @"To");
+            if (![to containsString:@";tag="]) to = [to stringByAppendingString:@";tag=answer-test"];
+            NSString *response = [NSString stringWithFormat:
+                @"SIP/2.0 200 OK\r\nVia: %@\r\nFrom: %@\r\nTo: %@\r\nCall-ID: %@\r\nCSeq: %@\r\n"
+                 "Contact: <sip:peer@127.0.0.1:15099>\r\nContent-Type: application/sdp\r\n"
+                 "Content-Length: %lu\r\n\r\n%@",
+                sipHeader(msg, @"Via"), sipHeader(msg, @"From"), to,
+                sipHeader(msg, @"Call-ID"), sipHeader(msg, @"CSeq"),
+                (unsigned long)[body lengthOfBytesUsingEncoding:NSUTF8StringEncoding], body];
+            sendto(self.sockFd, response.UTF8String,
+                   [response lengthOfBytesUsingEncoding:NSUTF8StringEncoding],
+                   0, (struct sockaddr *)&peer, peerLen);
+        }
+    }
+}
+@end
+
+@interface AnswerProbe : NSObject <SipClientDelegate>
+@property (nonatomic) BOOL established;
+@property (nonatomic) BOOL closed;
+@end
+
+@implementation AnswerProbe
+- (void)onCallEstablished:(SipCall *)call { self.established = YES; }
+- (void)onCallClosed:(SipCall *)call { self.closed = YES; }
+@end
+
+static void testAnsweredCall(SipClient *client, BOOL withVideo)
+{
+    AVAudioSession *session = AVAudioSession.sharedInstance;
+    [session setActive:NO error:nil];
+    [session setCategory:AVAudioSessionCategorySoloAmbient error:nil];
+    LoopbackAnswerPeer *peer = [[LoopbackAnswerPeer alloc] initWithPort:15099];
+    check(peer.isBound, @"Answering SIP peer binds loopback port", @"15099");
+    if (!peer.isBound) return;
+    [peer start];
+    AnswerProbe *probe = [AnswerProbe new];
+    client.delegate = probe;
+    SipCall *call = [client makeCall:@"sip:peer@127.0.0.1:15099" withVideo:withVideo];
+    NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:5];
+    while (!probe.closed && !probe.established && deadline.timeIntervalSinceNow > 0) {
+        [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];
+    }
+    NSDate *connectedDeadline = [NSDate dateWithTimeIntervalSinceNow:2];
+    while (probe.established && !probe.closed && connectedDeadline.timeIntervalSinceNow > 0) {
+        [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];
+    }
+    check(call != nil && probe.established && !probe.closed && peer.acknowledged &&
+          call.hasVideo == withVideo,
+          withVideo ? @"Answered video call stays connected" : @"Answered audio call stays connected",
+          [NSString stringWithFormat:@"established=%d closed=%d ack=%d",
+           probe.established, probe.closed, peer.acknowledged]);
+    [call hangup:0 reason:@"Test complete"];
+    NSDate *closeDeadline = [NSDate dateWithTimeIntervalSinceNow:2];
+    while (!probe.closed && closeDeadline.timeIntervalSinceNow > 0) {
+        [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];
+    }
+    [peer stop];
+    client.delegate = nil;
+}
+
+@interface RegisterProbe : NSObject <SipClientDelegate>
+@property (nonatomic) BOOL registered;
+@property (nonatomic) BOOL failed;
+@end
+
+@implementation RegisterProbe
+- (void)onDidRegister:(SipClient *)sipSdk { self.registered = YES; }
+- (void)onFailedRegister:(SipClient *)sipSdk { self.failed = YES; }
+@end
 
 int main(int argc, char *argv[])
 {
@@ -73,6 +289,36 @@ int main(int argc, char *argv[])
         check([client hasVideoDisplayRegistered],
               @"Baresip v4 registers iosview vidisp", @"iosview");
 
+        // 3b. Register against a loopback registrar: REGISTER -> 401 -> auth REGISTER -> 200 OK.
+        // Locks the full response path (socket -> transaction -> sipreg -> bevent -> delegate).
+        LoopbackRegistrar *registrar = [[LoopbackRegistrar alloc] initWithPort:(uint16_t)client.port];
+        check(registrar.isBound, @"Loopback SIP registrar binds 127.0.0.1:5060", @"");
+        [registrar start];
+        [NSThread sleepForTimeInterval:0.2];
+
+        RegisterProbe *probe = [[RegisterProbe alloc] init];
+        client.delegate = probe;
+
+        int regRc = [client registry];
+        check(regRc == 0, @"SipClient registry() submits REGISTER",
+              [NSString stringWithFormat:@"rc=%d", regRc]);
+
+        NSDate *regDeadline = [NSDate dateWithTimeIntervalSinceNow:5.0];
+        while (!probe.registered && !probe.failed &&
+               [[NSDate date] compare:regDeadline] == NSOrderedAscending) {
+            [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];
+        }
+        check(probe.registered,
+              @"REGISTER round-trip yields REGISTER_OK delegate callback",
+              [NSString stringWithFormat:@"registered=%d failed=%d", probe.registered, probe.failed]);
+        check(client.isRegistered,
+              @"SipClient reports registered state after 200 OK", @"");
+        [registrar stop];
+        client.delegate = nil;
+
+        testAnsweredCall(client, NO);
+        testAnsweredCall(client, YES);
+
         // 4. Test VideoToolbox H.264 encode -> RFC 6184 RTP packetize -> depacketize -> decode round-trip
         BOOL h264Ok = [SipClient testH264RoundTripWithWidth:640 height:480];
         check(h264Ok,
@@ -94,6 +340,20 @@ int main(int argc, char *argv[])
         check(client.isLocalVideoEnabled == NO, @"SipClient disables local video stream", @"");
         client.localVideoEnabled = YES;
         check(client.isLocalVideoEnabled == YES, @"SipClient re-enables local video stream", @"");
+
+        // 5b. Test standalone local video preview outside of a call
+        NSUInteger framesBeforePreview = localView.renderedFrameCount;
+        [client startLocalVideoPreview];
+        check(client.isLocalVideoPreviewActive == YES,
+              @"SipClient starts local video preview outside a call", @"");
+        [NSThread sleepForTimeInterval:0.5];
+        check(localView.renderedFrameCount > framesBeforePreview,
+              @"Local preview feeds frames into localVideoView without an active call",
+              [NSString stringWithFormat:@"frames=%lu liveCamera=%d",
+               (unsigned long)localView.renderedFrameCount,
+               client.isLiveCameraFeedActive ? 1 : 0]);
+        [client stopLocalVideoPreview];
+        check(client.isLocalVideoPreviewActive == NO, @"SipClient stops local video preview", @"");
 
         // 6. Test outgoing video call creation and SipCall controls + CallKit manager
         SipCall *videoCall = [client makeCall:@"sip:bob@127.0.0.1:5099" withVideo:YES];

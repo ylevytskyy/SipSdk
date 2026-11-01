@@ -26,4 +26,5 @@ Pods/
 .idea/
 .vscode/
 SipSdk/SipCredentials.plist
+.env
 specs/*/evidence/

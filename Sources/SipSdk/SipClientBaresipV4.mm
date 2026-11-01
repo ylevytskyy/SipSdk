@@ -250,8 +250,11 @@ static void fillSyntheticYUV420Pattern(uint8_t *yPlane,
 @property (nonatomic, strong) NSDate *establishedAt;
 @end
 
+@class SipAVCaptureHelper;
+
 @interface SipClient ()
 @property (nonatomic) struct ua *ua;
+@property (nonatomic, strong, nullable) SipAVCaptureHelper *localPreviewHelper;
 @property (nonatomic) struct mqueue *controlMq;
 @property (nonatomic, strong) NSThread *loopThread;
 @property (nonatomic, strong) dispatch_semaphore_t loopStartedSemaphore;
@@ -261,6 +264,9 @@ static void fillSyntheticYUV420Pattern(uint8_t *yPlane,
 @property (nonatomic) BOOL stackStarted;
 @property (nonatomic) BOOL eventsRegistered;
 @property (nonatomic) BOOL mediaPluginsRegistered;
+@property (nonatomic) BOOL callAudioSessionActive;
+- (BOOL)prepareCallAudioSession;
+- (void)releaseCallAudioSessionIfIdle;
 @end
 
 @interface SipLoopTask : NSObject
@@ -1121,6 +1127,32 @@ static __weak SipAVCaptureHelper *gActiveCaptureHelper = nil;
     return discovery.devices.firstObject;
 }
 
+- (void)configureVideoConnection:(AVCaptureConnection *)connection
+                     forPosition:(AVCaptureDevicePosition)position
+{
+    if (connection == nil) {
+        return;
+    }
+    BOOL rotated = NO;
+    if (@available(iOS 17.0, *)) {
+        const CGFloat portraitAngle = 90.0;
+        if ([connection isVideoRotationAngleSupported:portraitAngle]) {
+            connection.videoRotationAngle = portraitAngle;
+            rotated = YES;
+        }
+    }
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+    if (!rotated && connection.isVideoOrientationSupported) {
+        connection.videoOrientation = AVCaptureVideoOrientationPortrait;
+    }
+#pragma clang diagnostic pop
+    if (position == AVCaptureDevicePositionFront && connection.isVideoMirroringSupported) {
+        connection.automaticallyAdjustsVideoMirroring = NO;
+        connection.videoMirrored = YES;
+    }
+}
+
 - (void)startSyntheticFallbackTimer
 {
     if (self.syntheticTimer) {
@@ -1194,6 +1226,8 @@ static __weak SipAVCaptureHelper *gActiveCaptureHelper = nil;
                     [session addOutput:output];
                 }
                 [session commitConfiguration];
+                [self configureVideoConnection:[output connectionWithMediaType:AVMediaTypeVideo]
+                                   forPosition:wantedPos];
                 [session startRunning];
                 self.captureSession = session;
                 return;
@@ -1210,11 +1244,11 @@ static __weak SipAVCaptureHelper *gActiveCaptureHelper = nil;
 - (void)emitSyntheticFrame
 {
     struct vidsrc_st *st = self.owner;
-    if (!st || !st->frameh) {
+    SipClient *client = gActiveSipClient;
+    if ((!st || !st->frameh) && client.localVideoView == nil) {
         return;
     }
 
-    SipClient *client = gActiveSipClient;
     unsigned w = self.width;
     unsigned h = self.height;
     unsigned uvW = w / 2;
@@ -1247,6 +1281,9 @@ static __weak SipAVCaptureHelper *gActiveCaptureHelper = nil;
                                           height:(int)h];
     }
 
+    if (!st || !st->frameh) {
+        return;
+    }
     struct vidframe vf;
     vidframe_init_buf(&vf, VID_FMT_YUV420P, &sz, buf.data());
     uint64_t ts = (uint64_t)([[NSProcessInfo processInfo] systemUptime] * (double)VIDEO_TIMEBASE);
@@ -1275,11 +1312,10 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
         self.syntheticTimer = nil;
     }
     struct vidsrc_st *st = self.owner;
-    if (!st || !st->frameh) {
+    SipClient *client = gActiveSipClient;
+    if ((!st || !st->frameh) && client.localVideoView == nil) {
         return;
     }
-
-    SipClient *client = gActiveSipClient;
     if (client != nil && !client.isLocalVideoEnabled) {
         return;
     }
@@ -1332,19 +1368,21 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
                                               height:(int)h];
         }
 
-        uint64_t ts = (uint64_t)([[NSProcessInfo processInfo] systemUptime] * (double)VIDEO_TIMEBASE);
-        std::vector<uint8_t> frameCopy = std::move(buf);
-        SipAVCaptureHelper *strongSelf = self;
-        performAsyncOnSipLoop(client, ^{
-            struct vidsrc_st *loopSt = strongSelf.owner;
-            if (!loopSt || !loopSt->frameh) {
-                return;
-            }
-            struct vidsz loopSz = { w, h };
-            struct vidframe loopVf;
-            vidframe_init_buf(&loopVf, VID_FMT_YUV420P, &loopSz, (uint8_t *)frameCopy.data());
-            loopSt->frameh(&loopVf, ts, loopSt->arg);
-        });
+        if (st && st->frameh) {
+            uint64_t ts = (uint64_t)([[NSProcessInfo processInfo] systemUptime] * (double)VIDEO_TIMEBASE);
+            std::vector<uint8_t> frameCopy = std::move(buf);
+            SipAVCaptureHelper *strongSelf = self;
+            performAsyncOnSipLoop(client, ^{
+                struct vidsrc_st *loopSt = strongSelf.owner;
+                if (!loopSt || !loopSt->frameh) {
+                    return;
+                }
+                struct vidsz loopSz = { w, h };
+                struct vidframe loopVf;
+                vidframe_init_buf(&loopVf, VID_FMT_YUV420P, &loopSz, (uint8_t *)frameCopy.data());
+                loopSt->frameh(&loopVf, ts, loopSt->arg);
+            });
+        }
     }
     CVPixelBufferUnlockBaseAddress(imageBuffer, kCVPixelBufferLock_ReadOnly);
 }
@@ -1366,6 +1404,9 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
 - (void)stop
 {
     self.owner = nullptr;
+    if (gActiveCaptureHelper == self) {
+        gActiveCaptureHelper = nil;
+    }
     dispatch_async(self.captureQueue, ^{
         [self stopInternal];
     });
@@ -1748,6 +1789,7 @@ static void ua_event_handler(enum bevent_ev ev, struct bevent *event, void *arg)
                 if ([delegate respondsToSelector:@selector(onCallClosed:)]) {
                     [delegate onCallClosed:sipCall];
                 }
+                [sipSdk releaseCallAudioSessionIfIdle];
             });
 
             if (call != nullptr) {
@@ -1889,6 +1931,9 @@ static void ua_event_handler(enum bevent_ev ev, struct bevent *event, void *arg)
 {
     performAsyncOnSipLoop(gActiveSipClient, ^{
         if (self.ua != nullptr && self.call != nullptr) {
+            if (![gActiveSipClient prepareCallAudioSession]) {
+                return;
+            }
             self.callHasVideo = withVideo;
             (void)ua_answer(self.ua, self.call, withVideo ? VIDMODE_ON : VIDMODE_OFF);
         }
@@ -2005,6 +2050,49 @@ static void ua_event_handler(enum bevent_ev ev, struct bevent *event, void *arg)
     struct account *account = ua_account(self.ua);
     const char *aor = account ? account_aor(account) : nullptr;
     return aor ? [NSString stringWithUTF8String:aor] : @"";
+}
+
+- (BOOL)prepareCallAudioSession
+{
+    AVAudioSession *session = AVAudioSession.sharedInstance;
+    NSError *error = nil;
+    AVAudioSessionCategoryOptions options = self.isSpeakerEnabled
+        ? AVAudioSessionCategoryOptionDefaultToSpeaker : 0;
+    if (![session setCategory:AVAudioSessionCategoryPlayAndRecord
+                         mode:AVAudioSessionModeVoiceChat
+                      options:options
+                        error:&error] ||
+        ![session setActive:YES error:&error]) {
+        NSLog(@"Unable to prepare SIP call audio session: %@", error);
+        return NO;
+    }
+    self.callAudioSessionActive = YES;
+    return YES;
+}
+
+- (void)releaseCallAudioSessionIfIdle
+{
+    performSyncOnSipLoop(self, ^{
+        if (!self.callAudioSessionActive) {
+            return;
+        }
+        NSMutableDictionary<NSValue *, SipCall *> *cache = sipCallsCache();
+        @synchronized (cache) {
+            for (SipCall *call in cache.allValues) {
+                if (call.ua == self.ua && call.call != nullptr) {
+                    return;
+                }
+            }
+        }
+        NSError *error = nil;
+        if ([AVAudioSession.sharedInstance setActive:NO
+                                        withOptions:AVAudioSessionSetActiveOptionNotifyOthersOnDeactivation
+                                              error:&error]) {
+            self.callAudioSessionActive = NO;
+        } else {
+            NSLog(@"Unable to release SIP call audio session: %@", error);
+        }
+    });
 }
 
 - (void)registerNativeVideoPlugins
@@ -2284,6 +2372,7 @@ static void ua_event_handler(enum bevent_ev ev, struct bevent *event, void *arg)
     self.ua = nullptr;
 
     ua_close();
+    [self releaseCallAudioSessionIfIdle];
     [self unregisterNativeVideoPlugins];
     module_app_unload();
     conf_close();
@@ -2356,24 +2445,39 @@ static void ua_event_handler(enum bevent_ev ev, struct bevent *event, void *arg)
         return nil;
     }
 
-    NSString *uriCopy = [uri copy];
+    NSString *dialUri = [uri copy];
+    if (![dialUri hasPrefix:@"sip:"]) {
+        if (![dialUri containsString:@"@"] && self.domain.length > 0) {
+            dialUri = [NSString stringWithFormat:@"sip:%@@%@", dialUri, self.domain];
+        } else {
+            dialUri = [NSString stringWithFormat:@"sip:%@", dialUri];
+        }
+    } else if (![dialUri containsString:@"@"] && self.domain.length > 0) {
+        dialUri = [NSString stringWithFormat:@"%@@%@", dialUri, self.domain];
+    }
+
     __block struct call *call = nullptr;
     __block int result = 0;
     enum vidmode vmode = withVideo ? VIDMODE_ON : VIDMODE_OFF;
     performSyncOnSipLoop(self, ^{
         if (self.ua != nullptr) {
-            result = ua_connect(self.ua, &call, nullptr, uriCopy.UTF8String, vmode);
+            result = [self prepareCallAudioSession]
+                ? ua_connect(self.ua, &call, nullptr, dialUri.UTF8String, vmode)
+                : EIO;
+            if (result != 0) {
+                [self releaseCallAudioSessionIfIdle];
+            }
         } else {
             result = EINVAL;
         }
     });
     if (result != 0 || call == nullptr) {
-        NSLog(@"Failed to create SIP call (result %d).", result);
+        NSLog(@"Failed to create SIP call to '%@' (result %d).", dialUri, result);
         return nil;
     }
 
     const char *peerUri = call_peeruri(call);
-    NSString *remoteUri = peerUri ? [NSString stringWithUTF8String:peerUri] : uriCopy;
+    NSString *remoteUri = peerUri ? [NSString stringWithUTF8String:peerUri] : dialUri;
     SipCall *sipCall = getSipCall(call, self, remoteUri);
     sipCall.callHasVideo = withVideo;
     sipCall.callIsOutgoing = YES;
@@ -2448,6 +2552,41 @@ static void ua_event_handler(enum bevent_ev ev, struct bevent *event, void *arg)
     if (!localVideoEnabled && self.localVideoView != nil) {
         [self.localVideoView clearVideo];
     }
+}
+
+- (void)startLocalVideoPreview
+{
+    if (self.localPreviewHelper != nil) {
+        return;
+    }
+    if (gActiveSipClient == nil) {
+        gActiveSipClient = self;
+    }
+    SipAVCaptureHelper *helper = [[SipAVCaptureHelper alloc]
+        initWithOwner:NULL
+                width:640
+               height:480
+                  fps:30.0];
+    self.localPreviewHelper = helper;
+    NSString *deviceName = (self.cameraPosition == SipCameraPositionBack) ? @"back" : @"front";
+    [helper startWithDeviceName:deviceName];
+}
+
+- (void)stopLocalVideoPreview
+{
+    SipAVCaptureHelper *helper = self.localPreviewHelper;
+    self.localPreviewHelper = nil;
+    [helper stop];
+}
+
+- (BOOL)isLocalVideoPreviewActive
+{
+    return self.localPreviewHelper != nil;
+}
+
+- (BOOL)isLiveCameraFeedActive
+{
+    return self.localPreviewHelper.captureSession.isRunning;
 }
 
 - (BOOL)hasVideoCodecRegistered

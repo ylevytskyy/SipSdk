@@ -38,16 +38,21 @@
 </head>
 <body>
 <main>
-  <h1>SipSdk test client <span style="font-weight:400;color:#6e6e73">— SIP over WebSocket (iptel.org), Audio + H.264 Video</span></h1>
+  <h1>SipSdk test client <span style="font-weight:400;color:#6e6e73">— SIP over WebSocket (Asterisk / WebRTC), Audio + H.264 Video</span></h1>
 
   <section>
     <h2>Account</h2>
+    <div style="margin-bottom:8px">
+      <span style="font-size:12px;color:#6e6e73">Presets: </span>
+      <button type="button" class="secondary" id="btnPresetLocal" style="padding:4px 8px;font-size:12px">Local Asterisk (1002 @ 192.168.0.107)</button>
+      <button type="button" class="secondary" id="btnPresetIptel" style="padding:4px 8px;font-size:12px">iptel.org</button>
+    </div>
     <div class="row">
-      <div><label for="sipUri">SIP URI</label><input id="sipUri" type="text" placeholder="you@iptel.org" autocomplete="off"></div>
+      <div><label for="sipUri">SIP URI</label><input id="sipUri" type="text" placeholder="1002@192.168.0.107" autocomplete="off"></div>
       <div><label for="sipPass">Password</label><input id="sipPass" type="password" autocomplete="off"></div>
     </div>
     <div class="row">
-      <div><label for="wsUri">WebSocket server</label><input id="wsUri" type="text" value="wss://sip.iptel.org:8081" autocomplete="off"></div>
+      <div><label for="wsUri">WebSocket server</label><input id="wsUri" type="text" value="ws://192.168.0.107:8088/ws" autocomplete="off"></div>
       <div><label for="displayName">Display name (optional)</label><input id="displayName" type="text" autocomplete="off"></div>
     </div>
     <div style="margin-top:10px">
@@ -61,12 +66,17 @@
   <section>
     <h2>Call</h2>
     <div class="row">
-      <div><label for="target">Target SIP URI</label><input id="target" type="text" value="sip:echo@iptel.org" autocomplete="off"></div>
+      <div><label for="target">Target SIP URI</label><input id="target" type="text" value="9001" autocomplete="off"></div>
       <div style="flex:0"><button id="btnCall" disabled>Call</button></div>
     </div>
     <div style="margin:6px 0">
       <label style="display:inline"><input type="checkbox" id="enableVideo" checked> Enable two-way Video (H.264 / WebRTC)</label>
     </div>
+    <button class="secondary" data-dial="1001">1001 (Mobile)</button>
+    <button class="secondary" data-dial="1003">1003 (Linphone)</button>
+    <button class="secondary" data-dial="1004">1004 (Jami)</button>
+    <button class="secondary" data-dial="9001">9001 (Echo Test)</button>
+    <button class="secondary" data-dial="9002">9002 (Music)</button>
     <button class="secondary" data-dial="sip:echo@iptel.org">echo@iptel.org</button>
     <button class="secondary" data-dial="sip:music@iptel.org">music@iptel.org</button>
   </section>
@@ -204,10 +214,70 @@
     else s.on('peerconnection', wire);
   };
 
+  const sanitizeSdp = (sdp) => {
+    const lines = sdp.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+    const allowedCodecs = ['opus', 'pcmu', 'pcma', 'telephone-event'];
+    const keepPts = new Set(['0', '8']);
+    let h264Count = 0;
+    let vp8Count = 0;
+
+    for (const line of lines) {
+      const m = line.match(/^a=rtpmap:(\d+)\s+([a-zA-Z0-9_-]+)/i);
+      if (!m) continue;
+      const pt = m[1];
+      const name = m[2].toLowerCase();
+      if (allowedCodecs.includes(name)) {
+        keepPts.add(pt);
+      } else if (name === 'vp8' && vp8Count < 1) {
+        keepPts.add(pt);
+        vp8Count++;
+      } else if (name === 'h264' && h264Count < 1) {
+        keepPts.add(pt);
+        h264Count++;
+      }
+    }
+
+    const out = [];
+    for (const line of lines) {
+      if (line.startsWith('m=')) {
+        const parts = line.split(' ');
+        const pts = parts.slice(3).filter((pt) => keepPts.has(pt));
+        out.push([parts[0], parts[1], parts[2], ...pts].join(' '));
+        continue;
+      }
+      const ptMatch = line.match(/^a=(?:rtpmap|fmtp|rtcp-fb):(\d+|\*)/);
+      if (ptMatch) {
+        const pt = ptMatch[1];
+        if (pt === '*' || keepPts.has(pt)) {
+          out.push(line);
+        }
+        continue;
+      }
+      if (line.startsWith('a=extmap:') && (line.includes('color-space') || line.includes('video-timing') || line.includes('playout-delay') || line.includes('video-content-type') || line.includes('toffset') || line.includes('repaired-rtp-stream-id'))) {
+        continue;
+      }
+      if (line.startsWith('a=candidate:')) {
+        const parts = line.split(' ');
+        const ip = parts[4];
+        if (parts[2].toLowerCase() === 'tcp' || !ip || ip.includes(':') || ip.startsWith('169.254.')) {
+          continue;
+        }
+      }
+      out.push(line);
+    }
+    return out.join('\r\n') + '\r\n';
+  };
+
   const wireSession = (s) => {
     session = s;
     attachMediaStreams(s);
     const remote = s.remote_identity ? s.remote_identity.uri.toString() : 'unknown';
+
+    s.on('sdp', (data) => {
+      if (data.originator === 'local' && data.type === 'offer') {
+        data.sdp = sanitizeSdp(data.sdp);
+      }
+    });
 
     s.on('progress', () => { $('callStatus').textContent = `Ringing ${remote}…`; log(`Call progress: ${remote}`); });
     s.on('accepted', () => { $('callStatus').textContent = `Connected: ${remote}`; log('Call accepted'); });
@@ -359,17 +429,55 @@
   };
   $('btnClearLog').onclick = () => { logEl.textContent = ''; };
 
+  const defaultHost = '192.168.0.107';
+  const getPbxHost = () => {
+    return (location.hostname && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1' && location.hostname !== '')
+      ? location.hostname
+      : defaultHost;
+  };
+
+  $('btnPresetLocal').onclick = () => {
+    const host = getPbxHost();
+    $('sipUri').value = `1002@${host}`;
+    $('sipPass').value = 'test1002';
+    $('wsUri').value = `ws://${host}:8088/ws`;
+    $('displayName').value = 'Web Client';
+    $('target').value = '9001';
+    log(`Loaded Local Asterisk PBX preset (Extension 1002 @ ${host}). Press Register.`);
+  };
+  $('btnPresetIptel').onclick = () => {
+    $('sipUri').value = '';
+    $('sipPass').value = '';
+    $('wsUri').value = 'wss://sip.iptel.org:8081';
+    $('displayName').value = '';
+    $('target').value = 'sip:echo@iptel.org';
+    log('Loaded iptel.org preset. Enter your credentials and press Register.');
+  };
+
   document.querySelectorAll('[data-dial]').forEach((b) => { b.onclick = () => { $('target').value = b.dataset.dial; }; });
   document.querySelectorAll('[data-dtmf]').forEach((b) => {
     b.onclick = () => { if (session && session.isEstablished()) { session.sendDTMF(b.dataset.dtmf); log(`DTMF ${b.dataset.dtmf}`); } };
   });
 
-  $('sipUri').value = localStorage.getItem('sip.uri') || '';
-  $('wsUri').value = localStorage.getItem('sip.ws') || 'wss://sip.iptel.org:8081';
-  $('displayName').value = localStorage.getItem('sip.name') || '';
+  const savedUri = localStorage.getItem('sip.uri') || '';
+  const isIptel = savedUri.includes('iptel.org');
+  const pbxHost = getPbxHost();
+
+  if (!savedUri || isIptel) {
+    $('sipUri').value = `1002@${pbxHost}`;
+    $('wsUri').value = `ws://${pbxHost}:8088/ws`;
+    $('sipPass').value = 'test1002';
+    $('displayName').value = 'Web Client';
+    $('target').value = '9001';
+  } else {
+    $('sipUri').value = savedUri;
+    $('wsUri').value = localStorage.getItem('sip.ws') || `ws://${pbxHost}:8088/ws`;
+    $('displayName').value = localStorage.getItem('sip.name') || 'Web Client';
+    $('target').value = '9001';
+  }
 
   window.addEventListener('beforeunload', () => { if (session) session.terminate(); if (ua) ua.stop(); });
-  log('Page ready. Enter iptel.org credentials and press Register.');
+  log(`Page ready with prefilled Asterisk PBX credentials (1002 @ ${pbxHost}). Press Register.`);
 })();
 </script>
 </body>

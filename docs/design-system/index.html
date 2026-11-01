@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SipSdk — Design System</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#dce2ec;color:#162139;font:17px Arial,sans-serif}header{max-width:1200px;margin:32px auto;padding:0 24px}h1{font-size:28px}p{line-height:1.6}a{color:#1943b5}main{max-width:1200px;margin:auto}figure{margin:0 0 32px}img{display:block;width:100%;height:auto}nav{display:flex;gap:24px;flex-wrap:wrap}@page{size:1200px 900px;margin:0}@media print{header{display:none}body{background:white}main{max-width:none}figure{margin:0;break-after:page}figure:last-child{break-after:auto}img{width:1200px;height:900px}}
+</style>
+<header><h1>SipSdk · Design System 0.1</h1><p>A new visual proposal. Three vector sheets cover foundations, components, and video calls. SVGs contain text and vector shapes. They do not create Figma components automatically.</p><nav><a href="01-foundations.svg" download>Foundations · SVG</a><a href="02-components.svg" download>Components · SVG</a><a href="03-call-patterns.svg" download>Video calls · SVG</a><a href="SipSdk-design-system.pdf">Catalog · PDF</a><a href="tokens.json">Tokens · JSON</a></nav></header>
+<header><h2>Moving to Figma</h2><p>Try dragging the SVGs onto the canvas. Import has not been tested here. Whether text stays editable depends on the importer. Create variables, Auto Layout, component variants, and prototype links separately in Figma. The JSON file is a reference, not a plugin-specific format.</p><p>This is an initial proposal, not a copy of the Figma file we could not access. The dark theme covers foundations and the call panel, not the full library. Examples do not cover every state. Incoming call and connection recovery behaviors are requirements for future work, not verified app features.</p><p>For larger text, increase row height and use fewer control columns. VoiceOver order: caller, status, controls, end call. When muted, change the action label to “Unmute” and announce “Microphone muted”. Account for system safe areas when building the app. Icons are original vector sketches.</p></header>
+<main>
+<figure><img src="01-foundations.svg" alt="Light and dark colors, typography, spacing, and corner radii"></figure>
+<figure><img src="02-components.svg" alt="Buttons, input fields, connection states, and a call history row"></figure>
+<figure><img src="03-call-patterns.svg" alt="Call screen, control states, and incoming call options"></figure>
+</main>
+</html>

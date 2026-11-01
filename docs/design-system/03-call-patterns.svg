@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="900" viewBox="0 0 1200 900">
+<rect width="1200" height="900" fill="#F4F6FA"/>
+<g font-family="Arial, sans-serif" fill="#162139">
+<text x="48" y="52" font-size="14" font-weight="700" letter-spacing="2">SIPSDK / DESIGN SYSTEM / 03</text>
+<text x="48" y="112" font-size="44" font-weight="700">Focus on the conversation.</text>
+<text x="48" y="148" font-size="18" fill="#526079">A sample call layout and reusable controls. All icons are drawn as vectors.</text>
+<rect x="48" y="184" width="390" height="620" rx="32" fill="#101827"/>
+<text x="76" y="216" font-size="14" fill="#F4F7FC">9:41</text>
+<text x="243" y="263" text-anchor="middle" font-size="24" font-weight="700" fill="#F4F7FC">Olena</text>
+<text x="243" y="292" text-anchor="middle" font-size="15" fill="#B7C3D8">Connected · 04:32</text>
+<circle cx="243" cy="388" r="58" fill="#1C2940"/><text x="243" y="404" text-anchor="middle" font-size="44" fill="#A8C1FF">O</text>
+<text x="243" y="476" text-anchor="middle" font-size="15" fill="#B7C3D8">Olena’s camera is off</text>
+<rect x="328" y="320" width="86" height="120" rx="16" fill="#1C2940" stroke="#73819A"/>
+<text x="371" y="378" text-anchor="middle" font-size="14" fill="#F4F7FC">You</text>
+<text x="371" y="400" text-anchor="middle" font-size="12" fill="#B7C3D8">Preview</text>
+<rect x="64" y="508" width="358" height="278" rx="24" fill="#1C2940"/>
+<g fill="#34445F"><circle cx="126" cy="550" r="26"/><circle cx="243" cy="550" r="26"/><circle cx="360" cy="550" r="26"/><circle cx="126" cy="646" r="26"/><circle cx="243" cy="646" r="26"/><circle cx="360" cy="646" r="26"/></g>
+<g fill="none" stroke="#F4F7FC" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+<rect x="122" y="537" width="8" height="17" rx="4"/><path d="M117 548v3a9 9 0 0 0 18 0v-3 M126 560v5 M121 565h10"/>
+<rect x="230" y="542" width="17" height="16" rx="3"/><path d="m247 547 9-5v16l-9-5"/>
+<path d="m349 546 5 0 7-6v20l-7-6h-5z M366 543q8 7 0 14"/>
+<path d="M114 642a13 13 0 0 1 23-4m0-6v6h-6 M138 650a13 13 0 0 1-23 4m0 6v-6h6"/>
+<path d="M238 637v18 M248 637v18"/>
+<path d="M352 638h1m7 0h1m7 0h1 M352 646h1m7 0h1m7 0h1 M352 654h1m7 0h1m7 0h1" stroke-width="4"/>
+</g>
+<g font-size="12" fill="#F4F7FC" text-anchor="middle">
+<text x="126" y="593">Mute</text><text x="243" y="593">Camera off</text><text x="360" y="593">Speaker</text>
+<text x="126" y="689">Flip camera</text><text x="243" y="689">Hold</text><text x="360" y="689">Keypad</text>
+</g>
+<rect x="88" y="712" width="310" height="52" rx="16" fill="#C93245"/><text x="243" y="744" text-anchor="middle" font-size="17" fill="white" font-weight="700">End call</text>
+<rect x="462" y="184" width="690" height="216" rx="24" fill="white"/>
+<text x="486" y="224" font-size="23" font-weight="700">Call control states</text>
+<circle cx="526" cy="280" r="28" fill="#1C2940"/><circle cx="682" cy="280" r="28" fill="#A8C1FF"/>
+<circle cx="838" cy="280" r="28" fill="#E4E9F1"/><circle cx="994" cy="280" r="32" fill="white" stroke="#2457DE" stroke-width="2"/><circle cx="994" cy="280" r="28" fill="#1C2940"/>
+<g fill="none" stroke-width="2" stroke-linecap="round">
+<g stroke="#F4F7FC"><path d="M526 268v20m-6-10v5a6 6 0 0 0 12 0v-5 M526 289v5 M994 268v20m-6-10v5a6 6 0 0 0 12 0v-5 M994 289v5"/></g>
+<path d="M682 268v20m-6-10v5a6 6 0 0 0 12 0v-5 M682 289v5m-12-26 24 24" stroke="#101827"/>
+<path d="M838 268v20m-6-10v5a6 6 0 0 0 12 0v-5 M838 289v5" stroke="#526079"/>
+</g>
+<g font-size="14" text-anchor="middle"><text x="526" y="332">Default</text><text x="682" y="332">Muted</text><text x="838" y="332">Disabled</text><text x="994" y="332">Focused</text></g>
+<text x="486" y="372" font-size="14" fill="#526079">Selected state: fill color + changed icon + VoiceOver announcement.</text>
+<rect x="462" y="424" width="690" height="180" rx="24" fill="white"/>
+<text x="486" y="464" font-size="23" font-weight="700">Incoming video call</text>
+<text x="486" y="496" font-size="15" fill="#526079">Send no video before answering. Make the answer options clear.</text>
+<rect x="486" y="522" width="192" height="56" rx="16" fill="#C93245"/><text x="582" y="556" text-anchor="middle" font-size="16" fill="white">Decline</text>
+<rect x="694" y="522" width="192" height="56" rx="16" fill="#EAF0FF"/><text x="790" y="556" text-anchor="middle" font-size="16" fill="#2457DE">Audio only</text>
+<rect x="902" y="522" width="226" height="56" rx="16" fill="#2457DE"/><text x="1015" y="556" text-anchor="middle" font-size="16" fill="white">Answer with video</text>
+<rect x="462" y="628" width="690" height="176" rx="24" fill="white"/>
+<text x="486" y="668" font-size="23" font-weight="700">During a call</text>
+<g font-size="15" fill="#526079">
+<text x="486" y="701">Hold → Show “On hold” and a “Resume” action.</text>
+<text x="486" y="730">Network lost → Show “Connection lost”. Keep “End call” available.</text>
+<text x="486" y="759">Camera unavailable → Explain why and continue with audio.</text>
+<text x="486" y="788">Use a solid control panel so controls stay clear over any video.</text>
+</g>
+<text x="48" y="853" font-size="14" fill="#526079">Sample layout: adapt safe areas and large text to each device. Behaviors shown are design requirements.</text>
+<text x="1100" y="853" font-size="14" fill="#526079">03 / 03</text>
+</g></svg>

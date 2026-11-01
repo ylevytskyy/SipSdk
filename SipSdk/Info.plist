@@ -24,6 +24,8 @@
 	<string>Camera access is required to capture and transmit live video during SIP video calls.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Microphone access is required to make and receive SIP voice calls.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Local network access is required to connect to local SIP servers and PBX for audio and video calls.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

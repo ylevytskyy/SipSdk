@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="390" height="844" viewBox="0 0 390 844" font-family="Arial, sans-serif" fill="#162139">
+<rect width="390" height="844" fill="#F4F6FA"/><text x="24" y="30" font-size="14" font-weight="700">9:41</text><text x="195" y="111" text-anchor="middle" font-size="14" fill="#526079" letter-spacing="1">CALL ENDED</text>
+<circle cx="195" cy="228" r="60" fill="#EAF0FF"/><text x="195" y="243" text-anchor="middle" font-size="44" fill="#2457DE">10</text><text x="195" y="338" text-anchor="middle" font-size="34" font-weight="700">1002</text><text x="195" y="375" text-anchor="middle" font-size="16" fill="#526079">Video call · 05:32</text>
+<rect x="24" y="421" width="342" height="95" rx="20" fill="white"/><text x="195" y="461" text-anchor="middle" font-size="17" font-weight="700">Thanks for connecting.</text><text x="195" y="490" text-anchor="middle" font-size="14" fill="#526079">This call is saved in your history.</text>
+<rect x="24" y="572" width="342" height="56" rx="16" fill="#2457DE"/><text x="195" y="607" text-anchor="middle" font-size="17" font-weight="700" fill="white">Call again with video</text>
+<rect x="24" y="644" width="342" height="56" rx="16" fill="#EAF0FF"/><text x="195" y="679" text-anchor="middle" font-size="17" font-weight="700" fill="#2457DE">Back to home</text><text x="195" y="755" text-anchor="middle" font-size="15" fill="#2457DE">View call details</text><rect x="129" y="829" width="132" height="5" rx="3" fill="#162139"/>
+</svg>

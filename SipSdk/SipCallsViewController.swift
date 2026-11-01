@@ -17,6 +17,7 @@ class SipCallsViewController: UIViewController {
     private var calls: [SipCall] = []
     private var historyEntries: [SipCallHistoryEntry] = []
     private var didReturnFromBackground = false
+    private var didHandleLaunchUiTestMode = false
     private var wirelessDataAlertVisible = false
 
     private let statusHeaderBadge = UILabel()
@@ -39,15 +40,26 @@ class SipCallsViewController: UIViewController {
     }
 
     private func initiateCall(withVideo: Bool) {
-        guard let uri = remoteUri.text?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !uri.isEmpty else {
+        guard let rawUri = remoteUri.text?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !rawUri.isEmpty else {
             log("Enter a SIP URI before starting a call.")
             return
         }
 
-        let normalizedUri = uri.lowercased().hasPrefix("sip:") ? uri : "sip:\(uri)"
-        guard let sipCall = client.makeCall(normalizedUri, withVideo: withVideo) else {
-            log("Failed to create \(withVideo ? "video" : "audio") call. Check SIP registration and the destination URI.")
+        var uri = rawUri
+        let domain = client.domain.isEmpty ? "192.168.0.107" : client.domain
+        if !uri.lowercased().hasPrefix("sip:") {
+            if !uri.contains("@") {
+                uri = "sip:\(uri)@\(domain)"
+            } else {
+                uri = "sip:\(uri)"
+            }
+        } else if !uri.contains("@") {
+            uri = "\(uri)@\(domain)"
+        }
+
+        guard let sipCall = client.makeCall(uri, withVideo: withVideo) else {
+            log("Failed to create \(withVideo ? "video" : "audio") call to \(uri). Check SIP registration and the destination URI.")
             return
         }
 
@@ -101,8 +113,11 @@ class SipCallsViewController: UIViewController {
                                                            target: self,
                                                            action: #selector(openSimulatedInCallVideoScreen))
 
-        remoteUri?.placeholder = "sip:user@domain (e.g. sip:echo@iptel.org)"
+        remoteUri?.placeholder = "sip:user@domain (e.g. 9001 or 1002)"
         remoteUri?.clearButtonMode = .whileEditing
+        if remoteUri?.text == nil || remoteUri?.text?.isEmpty == true || remoteUri?.text?.contains("iptel.org") == true {
+            remoteUri?.text = "9001"
+        }
 
         let headerContainer = UIView(frame: CGRect(x: 0, y: 0, width: view.bounds.width, height: 84))
         statusHeaderBadge.translatesAutoresizingMaskIntoConstraints = false
@@ -193,13 +208,22 @@ class SipCallsViewController: UIViewController {
             let codecsReady = client.hasVideoCodecRegistered() && client.hasVideoSourceRegistered() && client.hasVideoDisplayRegistered()
             log("SIP video stack started (H264+avcapture+iosview=\(codecsReady)).")
             updateRegistrationStatusBadge("Starting (\(profile.aorDisplay))", color: .systemBlue)
+            let regResult = client.registry()
+            if regResult != 0 {
+                log("Failed to register SIP client (code \(regResult): \(errorText(for: regResult))).")
+            }
         }
     }
 
     // MARK: - Editable Account Settings Modal (R4)
 
     @objc func presentAccountSettingsModal() {
-        let current = SipAccountStore.shared.loadProfile() ?? SipAccountProfile(username: "", domain: "iptel.org", password: "")
+        let current = SipAccountStore.shared.loadProfile() ?? SipAccountProfile(username: "1001",
+                                                                                domain: "192.168.0.107",
+                                                                                password: "test1001",
+                                                                                displayName: "iPhone 11 Pro",
+                                                                                port: 5060,
+                                                                                transport: "udp")
         let alert = UIAlertController(title: "SIP Account Settings",
                                       message: "Configure SIP credentials for Audio & H.264 Video calls",
                                       preferredStyle: .alert)
@@ -300,6 +324,8 @@ class SipCallsViewController: UIViewController {
                 if controlsOk { lines.append("CONTROLS_EXERCISED_OK") }
                 if callKitOk { lines.append("CALLKIT_READY_OK") }
                 if h264Ok { lines.append("H264_ROUNDTRIP_OK") }
+                lines.append("LOCAL_PREVIEW_ACTIVE=\(self.client.isLocalVideoPreviewActive ? "YES" : "NO")")
+                lines.append("LIVE_CAMERA_FEED=\(self.client.isLiveCameraFeedActive ? "YES" : "NO")")
                 lines.append("INCALL_VIDEO_READY")
                 for line in lines {
                     NSLog("SIPSDK_VERIFY: %@", line)
@@ -310,6 +336,8 @@ class SipCallsViewController: UIViewController {
     }
 
     private func handleLaunchUiTestModeIfNeeded() {
+        guard !didHandleLaunchUiTestMode else { return }
+        didHandleLaunchUiTestMode = true
         let env = ProcessInfo.processInfo.environment
         guard let mode = env["SIPSDK_UITEST_MODE"], !mode.isEmpty else { return }
 
@@ -334,7 +362,7 @@ class SipCallsViewController: UIViewController {
                 self?.openSimulatedInCallVideoScreen()
             }
         } else if mode == "device_verify" {
-            let targetUri = env["SIPSDK_DEVICE_CALL_URI"] ?? "sip:echo@iptel.org"
+            let targetUri = env["SIPSDK_DEVICE_CALL_URI"] ?? "9001"
             remoteUri?.text = targetUri
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
                 guard let self = self else { return }

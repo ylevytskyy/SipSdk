@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="390" height="844" viewBox="0 0 390 844" font-family="Arial, sans-serif" fill="#162139">
+<rect width="390" height="844" fill="#F4F6FA"/><text x="24" y="30" font-size="14" font-weight="700">9:41</text><path d="M326 20v8m5-11v11m5-14v14" stroke="#162139" stroke-width="3"/><rect x="348" y="17" width="22" height="12" rx="3" fill="none" stroke="#162139"/>
+<text x="24" y="89" font-size="34" font-weight="700">SipSdk</text><text x="24" y="119" font-size="17" fill="#526079">Let’s get you connected.</text>
+<rect x="24" y="147" width="342" height="238" rx="20" fill="#FFF0F2"/>
+<text x="44" y="184" font-size="19" font-weight="700" fill="#C93245">! Could not reach the server</text>
+<text x="44" y="216" font-size="15" fill="#526079">Check your network and SIP server.</text><text x="44" y="241" font-size="15" fill="#526079">Your account details are still saved.</text>
+<rect x="44" y="264" width="302" height="52" rx="16" fill="#2457DE"/><text x="195" y="296" text-anchor="middle" font-size="17" font-weight="700" fill="white">Try again</text><text x="195" y="352" text-anchor="middle" font-size="15" fill="#2457DE">Edit SIP account</text>
+<text x="24" y="429" font-size="15" font-weight="700">Number or SIP address</text><rect x="24" y="444" width="342" height="56" rx="12" fill="white" stroke="#73819A"/><text x="40" y="479" font-size="20">1002</text>
+<rect x="24" y="524" width="342" height="56" rx="16" fill="#E4E9F1"/><text x="195" y="559" text-anchor="middle" font-size="17" fill="#526079">Video call</text>
+<rect x="24" y="592" width="342" height="56" rx="16" fill="#E4E9F1"/><text x="195" y="627" text-anchor="middle" font-size="17" fill="#526079">Audio call</text><text x="195" y="689" text-anchor="middle" font-size="14" fill="#526079">Reconnect your account to place a call.</text>
+<path d="M0 752h390" stroke="#DCE2EC"/><rect y="753" width="390" height="91" fill="white"/><rect x="24" y="764" width="102" height="48" rx="16" fill="#EAF0FF"/>
+<g font-size="15" text-anchor="middle"><text x="75" y="794" fill="#2457DE" font-weight="700">Home</text><text x="195" y="794" fill="#526079">History</text><text x="315" y="794" fill="#526079">Settings</text></g><rect x="129" y="829" width="132" height="5" rx="3" fill="#162139"/>
+</svg>

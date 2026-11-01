@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="900" viewBox="0 0 1200 900">
+<rect width="1200" height="900" fill="#F4F6FA"/>
+<g font-family="Arial, sans-serif" fill="#162139">
+<text x="48" y="52" font-size="14" font-weight="700" letter-spacing="2">SIPSDK / DESIGN SYSTEM / 02</text>
+<text x="48" y="112" font-size="44" font-weight="700">Clear from the first tap.</text>
+<text x="48" y="148" font-size="18" fill="#526079">Core components and states. Labels describe actions. Messages explain what is happening.</text>
+<rect x="48" y="184" width="536" height="294" rx="24" fill="white"/>
+<text x="72" y="224" font-size="23" font-weight="700">Buttons / height 56</text>
+<rect x="72" y="248" width="232" height="56" rx="16" fill="#2457DE"/><text x="188" y="282" text-anchor="middle" font-size="17" fill="white" font-weight="700">Video call</text>
+<rect x="328" y="248" width="232" height="56" rx="16" fill="#1943B5"/><text x="444" y="282" text-anchor="middle" font-size="17" fill="white" font-weight="700">Pressed</text>
+<rect x="72" y="320" width="232" height="56" rx="16" fill="#EAF0FF"/><text x="188" y="354" text-anchor="middle" font-size="17" fill="#2457DE" font-weight="700">Audio call</text>
+<rect x="328" y="320" width="232" height="56" rx="16" fill="#E4E9F1"/><text x="444" y="354" text-anchor="middle" font-size="17" fill="#526079">Disabled</text>
+<rect x="72" y="392" width="232" height="56" rx="16" fill="#C93245"/><text x="188" y="426" text-anchor="middle" font-size="17" fill="white" font-weight="700">End call</text>
+<text x="328" y="414" font-size="14" fill="#526079">Loading: “Connecting…”</text><text x="328" y="438" font-size="14" fill="#526079">Disable repeated taps.</text>
+<rect x="608" y="184" width="544" height="456" rx="24" fill="white"/>
+<text x="632" y="224" font-size="23" font-weight="700">Fields / height 56</text>
+<text x="632" y="258" font-size="15" font-weight="700">Number or SIP address</text>
+<rect x="632" y="272" width="496" height="56" rx="12" fill="white" stroke="#73819A"/>
+<text x="648" y="306" font-size="17" fill="#526079">For example, 1002</text>
+<text x="632" y="361" font-size="15" font-weight="700">Focused field</text>
+<rect x="632" y="375" width="496" height="56" rx="12" fill="white" stroke="#2457DE" stroke-width="2"/>
+<text x="648" y="409" font-size="17">1002</text><path d="M694 389v27" stroke="#2457DE" stroke-width="2"/>
+<text x="632" y="464" font-size="15" font-weight="700">Input error</text>
+<rect x="632" y="478" width="496" height="56" rx="12" fill="white" stroke="#C93245" stroke-width="2"/>
+<text x="648" y="512" font-size="17">sip:</text>
+<text x="632" y="561" font-size="15" fill="#C93245">! Add a username and domain after sip:</text>
+<text x="632" y="603" font-size="14" fill="#526079">Visible label · Error below the field · Keep the entered text</text>
+<rect x="48" y="502" width="536" height="302" rx="24" fill="white"/>
+<text x="72" y="542" font-size="23" font-weight="700">Account status</text>
+<rect x="72" y="566" width="232" height="40" rx="20" fill="#E5F4EC"/><text x="88" y="592" font-size="15" fill="#16734B">● Ready to call</text>
+<rect x="72" y="620" width="232" height="40" rx="20" fill="#FFF1DC"/><text x="88" y="646" font-size="15" fill="#9A5800">◷ Connecting…</text>
+<rect x="72" y="674" width="232" height="40" rx="20" fill="#FFF0F2"/><text x="88" y="700" font-size="15" fill="#C93245">! Not connected</text>
+<text x="328" y="592" font-size="14" fill="#526079">Calls are available.</text>
+<text x="328" y="646" font-size="14" fill="#526079">Show progress.</text>
+<text x="328" y="700" font-size="14" fill="#526079">Action: “Try again”.</text>
+<text x="72" y="758" font-size="14" fill="#526079">Status is not a button. Provide a separate retry action.</text>
+<rect x="608" y="664" width="544" height="140" rx="24" fill="white"/>
+<circle cx="660" cy="714" r="24" fill="#EAF0FF"/><text x="660" y="721" text-anchor="middle" font-size="20" fill="#2457DE">↙</text>
+<text x="700" y="707" font-size="17" font-weight="700">Olena</text><text x="700" y="735" font-size="15" fill="#526079">Incoming · Video · 04:32</text>
+<text x="1128" y="707" text-anchor="end" font-size="14" fill="#526079">14:20</text>
+<text x="632" y="779" font-size="14" fill="#526079">History row · Minimum height 80 · Tap to open details.</text>
+<text x="48" y="853" font-size="14" fill="#526079">Focus: 2 pt outline + 2 pt gap · Explain errors in text · Names and addresses are examples.</text>
+<text x="1100" y="853" font-size="14" fill="#526079">02 / 03</text>
+</g></svg>

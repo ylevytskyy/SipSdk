@@ -98,6 +98,16 @@ typedef NS_ENUM(NSInteger, SipCameraPosition) {
 - (void)setSpeakerphone:(BOOL)enabled;
 - (void)switchCamera;
 
+/// Standalone local camera preview rendered into `localVideoView` without an
+/// active SIP call. Falls back to the synthetic pattern where no camera is
+/// available (e.g. iOS Simulator).
+- (void)startLocalVideoPreview;
+- (void)stopLocalVideoPreview;
+@property (nonatomic, readonly, getter=isLocalVideoPreviewActive) BOOL localVideoPreviewActive;
+/// YES while the hardware AVCaptureSession is delivering frames (NO when the
+/// preview is fed by the synthetic pattern).
+@property (nonatomic, readonly, getter=isLiveCameraFeedActive) BOOL liveCameraFeedActive;
+
 - (BOOL)hasVideoCodecRegistered;
 - (BOOL)hasVideoSourceRegistered;
 - (BOOL)hasVideoDisplayRegistered;
