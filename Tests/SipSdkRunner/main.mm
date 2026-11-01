@@ -5,6 +5,7 @@
 #import <arpa/inet.h>
 #import <sys/socket.h>
 #import <unistd.h>
+#import <vector>
 #import "SipClient.h"
 #import "SipSdkAppStores-Swift.h"
 
@@ -566,6 +567,89 @@ int main(int argc, char *argv[])
         check(remoteView.renderedFrameCount >= 1,
               @"SipVideoView increments renderedFrameCount",
               [NSString stringWithFormat:@"count=%lu", (unsigned long)remoteView.renderedFrameCount]);
+
+        // 2b. Test Native iOS Video Media Drivers (Slice 3: IosVideoRendererDriver, IosVideoCaptureDriver, IosVideoCodecDriver)
+        IosVideoRendererDriver *rendererDriver = [[IosVideoRendererDriver alloc] initWithVideoView:remoteView];
+        check(rendererDriver != nil, @"IosVideoRendererDriver instantiates with videoView", @"");
+
+        // Prepare synthetic YUV420P test frame
+        int testW = 640;
+        int testH = 480;
+        size_t testYSize = (size_t)testW * (size_t)testH;
+        size_t testUvSize = (size_t)(testW / 2) * (size_t)(testH / 2);
+        std::vector<uint8_t> testYuv(testYSize + testUvSize * 2, 128);
+        std::memset(testYuv.data(), 200, testYSize); // Luma
+
+        sip_video_frame_t cFrame{};
+        cFrame.width = testW;
+        cFrame.height = testH;
+        cFrame.y = testYuv.data();
+        cFrame.u = testYuv.data() + testYSize;
+        cFrame.v = testYuv.data() + testYSize + testUvSize;
+        cFrame.y_stride = testW;
+        cFrame.u_stride = testW / 2;
+        cFrame.v_stride = testW / 2;
+        cFrame.timestamp_ns = 1234567890ULL;
+
+        NSUInteger frameCountBefore = remoteView.renderedFrameCount;
+        [rendererDriver renderFrame:&cFrame];
+        check(remoteView.renderedFrameCount > frameCountBefore,
+              @"IosVideoRendererDriver renders frame onto SipVideoView",
+              [NSString stringWithFormat:@"frames=%lu", (unsigned long)remoteView.renderedFrameCount]);
+        check(CGSizeEqualToSize(remoteView.videoSize, CGSizeMake(testW, testH)),
+              @"IosVideoRendererDriver updates SipVideoView videoSize",
+              NSStringFromCGSize(remoteView.videoSize));
+
+        [rendererDriver onStreamResizedWithWidth:1280 height:720];
+        check(CGSizeEqualToSize(remoteView.videoSize, CGSizeMake(1280, 720)),
+              @"IosVideoRendererDriver onStreamResized updates videoSize",
+              NSStringFromCGSize(remoteView.videoSize));
+
+        // Test IosVideoCaptureDriver
+        IosVideoCaptureDriver *captureDriver = [[IosVideoCaptureDriver alloc] initWithClient:client];
+        check(captureDriver != nil, @"IosVideoCaptureDriver instantiates with client", @"");
+        check([captureDriver isEnabled] == YES, @"IosVideoCaptureDriver defaults to enabled", @"");
+        [captureDriver setEnabled:NO];
+        check([captureDriver isEnabled] == NO, @"IosVideoCaptureDriver disables video", @"");
+        [captureDriver setEnabled:YES];
+        check([captureDriver isEnabled] == YES, @"IosVideoCaptureDriver re-enables video", @"");
+
+        __block BOOL captureHandlerInvoked = NO;
+        __block int capturedW = 0;
+        __block int capturedH = 0;
+        sip_video_capture_driver_t cCapDriver = [captureDriver cDriver];
+        check(cCapDriver.start != nullptr && cCapDriver.stop != nullptr,
+              @"IosVideoCaptureDriver exports valid C ABI driver functions", @"");
+
+        cCapDriver.set_frame_handler(cCapDriver.user_data, [](const sip_video_frame_t *frame, void *arg) {
+            auto *flag = static_cast<BOOL *>(arg);
+            if (flag) *flag = YES;
+        }, &captureHandlerInvoked);
+
+        [captureDriver deliverSyntheticFrame];
+        check(captureHandlerInvoked == YES,
+              @"IosVideoCaptureDriver delivers captured frames to registered frame handler", @"");
+
+        // Test IosVideoCodecDriver
+        IosVideoCodecDriver *codecDriver = [[IosVideoCodecDriver alloc] init];
+        check(codecDriver != nil, @"IosVideoCodecDriver instantiates cleanly", @"");
+        sip_video_codec_driver_t cCodecDriver = [codecDriver cDriver];
+        check(cCodecDriver.register_codec != nullptr && cCodecDriver.unregister_codec != nullptr,
+              @"IosVideoCodecDriver exports valid C ABI codec driver functions", @"");
+
+        // Verify SipClient registers drivers with sip_core via sip_client_set_*_driver
+        check(client.coreClient != nullptr, @"SipClient creates sip_core client handle", @"");
+        check(client.captureDriver != nil, @"SipClient initializes native capture driver", @"");
+        check(client.remoteRendererDriver != nil, @"SipClient initializes native remote renderer driver", @"");
+        check(client.codecDriver != nil, @"SipClient initializes native codec driver", @"");
+
+        int setCodecRc = sip_client_set_video_codec_driver(client.coreClient, &cCodecDriver);
+        int setCapRc = sip_client_set_video_capture_driver(client.coreClient, &cCapDriver);
+        sip_video_renderer_driver_t cRendDriver = [rendererDriver cDriver];
+        int setRendRc = sip_client_set_remote_renderer(client.coreClient, &cRendDriver);
+        check(setCodecRc == 0 && setCapRc == 0 && setRendRc == 0,
+              @"SipClient registers native iOS media drivers with sip_core via sip_client_set_*_driver",
+              [NSString stringWithFormat:@"codec=%d cap=%d rend=%d", setCodecRc, setCapRc, setRendRc]);
 
         // 3. Start Baresip v4 stack and verify video codec, source, and display registration
         int startRes = [client start];

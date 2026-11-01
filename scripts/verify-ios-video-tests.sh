@@ -44,7 +44,13 @@ xcrun --sdk iphonesimulator clang++ \
   -isysroot "$SIM_SDK_PATH" \
   -I "$HEADER_DIR" \
   -I "$ROOT_DIR/Sources/SipSdk/include" \
+  -I "$ROOT_DIR/core/include" \
+  -I "$ROOT_DIR/core/src" \
   -I "$WORK_DIR" \
+  "$ROOT_DIR/core/src/call_session.cpp" \
+  "$ROOT_DIR/core/src/media_driver.cpp" \
+  "$ROOT_DIR/core/src/engine.cpp" \
+  "$ROOT_DIR/core/src/sip_abi.cpp" \
   "$ROOT_DIR/Sources/SipSdk/SipClientBaresipV4.mm" \
   "$ROOT_DIR/Tests/SipSdkRunner/main.mm" \
   -x none "$WORK_DIR/SipSdkAppStores.o" "$SIM_LIB" \

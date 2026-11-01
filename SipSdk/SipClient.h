@@ -9,12 +9,17 @@
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <CoreGraphics/CoreGraphics.h>
+#import <CoreMedia/CoreMedia.h>
+#import "sip_abi.h"
 
 NS_ASSUME_NONNULL_BEGIN
 
 @class SipCall;
 @class SipClient;
 @class SipVideoView;
+@class IosVideoCaptureDriver;
+@class IosVideoRendererDriver;
+@class IosVideoCodecDriver;
 
 typedef NS_ENUM(NSInteger, SipCameraPosition) {
     SipCameraPositionFront = 0,
@@ -36,6 +41,39 @@ typedef NS_ENUM(NSInteger, SipCameraPosition) {
                    height:(int)height;
 - (void)renderTestPatternWithWidth:(int)width height:(int)height;
 - (void)clearVideo;
+@end
+
+/// Native iOS video capture driver bridging AVCaptureSession (device) and synthetic generator (simulator) to sip_video_capture_driver_t.
+@interface IosVideoCaptureDriver : NSObject
+@property (nonatomic, weak, nullable) SipClient *client;
+- (instancetype)initWithClient:(nullable SipClient *)client;
+- (sip_video_capture_driver_t)cDriver;
+- (int)startWithWidth:(int)width height:(int)height fps:(int)fps;
+- (void)stop;
+- (void)switchCamera;
+- (void)setCamera:(int)position;
+- (void)setEnabled:(BOOL)enabled;
+- (BOOL)isEnabled;
+- (void)deliverSyntheticFrame;
+- (void)deliverCustomFrame:(const sip_video_frame_t *)frame;
+- (void)deliverSampleBuffer:(CMSampleBufferRef)sampleBuffer;
+@end
+
+/// Native iOS video renderer driver bridging decoded remote frames to SipVideoView.
+@interface IosVideoRendererDriver : NSObject
+@property (nonatomic, weak, nullable) SipVideoView *videoView;
+- (instancetype)initWithVideoView:(nullable SipVideoView *)videoView;
+- (sip_video_renderer_driver_t)cDriver;
+- (void)renderFrame:(const sip_video_frame_t *)frame;
+- (void)onStreamResizedWithWidth:(int)width height:(int)height;
+- (void)clear;
+@end
+
+/// Native iOS video codec driver bridging Apple VideoToolbox H.264 to sip_video_codec_driver_t.
+@interface IosVideoCodecDriver : NSObject
+- (sip_video_codec_driver_t)cDriver;
+- (int)registerCodec;
+- (void)unregisterCodec;
 @end
 
 /// SIP Events
@@ -81,6 +119,14 @@ typedef NS_ENUM(NSInteger, SipCameraPosition) {
 
 @property (nonatomic, strong, nullable) SipVideoView* remoteVideoView;
 @property (nonatomic, strong, nullable) SipVideoView* localVideoView;
+
+@property (nonatomic, readonly, nullable) sip_client_t *coreClient;
+@property (nonatomic, readonly, strong) IosVideoCaptureDriver *captureDriver;
+@property (nonatomic, readonly, strong) IosVideoRendererDriver *remoteRendererDriver;
+@property (nonatomic, readonly, strong) IosVideoRendererDriver *localRendererDriver;
+@property (nonatomic, readonly, strong) IosVideoCodecDriver *codecDriver;
+
+- (void)registerNativeMediaDriversWithCore;
 
 - (instancetype)initWithUsername:(NSString*)username domain:(NSString*)domain;
 

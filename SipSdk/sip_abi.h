@@ -234,6 +234,82 @@ SIP_ABI_EXPORT void sip_call_set_user_data(sip_call_t *call, void *user_data);
  */
 SIP_ABI_EXPORT void sip_call_destroy(sip_call_t *call);
 
+/* ============================================================================
+ * Media Driver Abstractions & Extensibility
+ * ============================================================================ */
+
+typedef struct sip_video_frame_t {
+    int width;
+    int height;
+    const uint8_t *y;
+    const uint8_t *u;
+    const uint8_t *v;
+    int y_stride;
+    int u_stride;
+    int v_stride;
+    uint64_t timestamp_ns;
+} sip_video_frame_t;
+
+typedef struct sip_video_capture_driver_t {
+    void *user_data;
+    int (*start)(void *user_data, int width, int height, int fps);
+    void (*stop)(void *user_data);
+    void (*set_frame_handler)(void *user_data, void (*handler)(const sip_video_frame_t *frame, void *arg), void *arg);
+    void (*switch_camera)(void *user_data);
+    void (*set_camera)(void *user_data, int position);
+    void (*set_enabled)(void *user_data, bool enabled);
+    bool (*is_enabled)(void *user_data);
+} sip_video_capture_driver_t;
+
+typedef struct sip_video_renderer_driver_t {
+    void *user_data;
+    void (*render_frame)(void *user_data, const sip_video_frame_t *frame);
+    void (*on_stream_resized)(void *user_data, int width, int height);
+    void (*clear)(void *user_data);
+} sip_video_renderer_driver_t;
+
+typedef struct sip_video_codec_driver_t {
+    void *user_data;
+    int (*register_codec)(void *user_data);
+    void (*unregister_codec)(void *user_data);
+} sip_video_codec_driver_t;
+
+/**
+ * Registers video capture driver for camera hardware integration.
+ */
+SIP_ABI_EXPORT int sip_client_set_video_capture_driver(sip_client_t *client, const sip_video_capture_driver_t *driver);
+
+/**
+ * Registers remote video renderer driver for decoded incoming video.
+ */
+SIP_ABI_EXPORT int sip_client_set_remote_renderer(sip_client_t *client, const sip_video_renderer_driver_t *renderer);
+
+/**
+ * Registers local video renderer driver for camera preview.
+ */
+SIP_ABI_EXPORT int sip_client_set_local_renderer(sip_client_t *client, const sip_video_renderer_driver_t *renderer);
+
+/**
+ * Registers hardware video codec driver (e.g. VideoToolbox H.264 or MediaCodec).
+ */
+SIP_ABI_EXPORT int sip_client_set_video_codec_driver(sip_client_t *client, const sip_video_codec_driver_t *driver);
+
+/**
+ * Requests an immediate RTCP PLI/FIR keyframe from the remote peer.
+ */
+SIP_ABI_EXPORT int sip_call_request_keyframe(sip_call_t *call);
+
+/**
+ * Camera and local preview controls.
+ */
+SIP_ABI_EXPORT int sip_client_switch_camera(sip_client_t *client);
+SIP_ABI_EXPORT int sip_client_set_camera(sip_client_t *client, int position);
+SIP_ABI_EXPORT int sip_client_set_local_video_enabled(sip_client_t *client, bool enabled);
+SIP_ABI_EXPORT bool sip_client_is_local_video_enabled(const sip_client_t *client);
+SIP_ABI_EXPORT int sip_client_start_local_preview(sip_client_t *client);
+SIP_ABI_EXPORT int sip_client_stop_local_preview(sip_client_t *client);
+SIP_ABI_EXPORT bool sip_client_is_local_preview_active(const sip_client_t *client);
+
 #ifdef __cplusplus
 }
 #endif

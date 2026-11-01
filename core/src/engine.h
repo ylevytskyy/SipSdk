@@ -2,10 +2,12 @@
 #define SIP_CORE_ENGINE_H
 
 #include "sip_abi.h"
+#include "media_driver.h"
 
 #include <atomic>
 #include <condition_variable>
 #include <functional>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -17,6 +19,8 @@ struct bevent;
 struct call;
 
 namespace sip_core {
+
+class MediaDriverManager;
 
 class Engine {
 public:
@@ -42,6 +46,23 @@ public:
     int set_client_mic_muted(bool muted);
     bool is_client_mic_muted() const;
     void destroy_call(sip_call_t *call);
+    int request_keyframe(sip_call_t *call);
+
+    int switch_camera();
+    int set_camera(int position);
+    int set_local_video_enabled(bool enabled);
+    bool is_local_video_enabled() const;
+    int start_local_preview();
+    int stop_local_preview();
+    bool is_local_preview_active() const;
+
+    int set_video_capture_driver(std::shared_ptr<IVideoCaptureDriver> driver);
+    int set_remote_renderer(std::shared_ptr<IVideoRendererDriver> renderer);
+    int set_local_renderer(std::shared_ptr<IVideoRendererDriver> renderer);
+    int set_video_codec_driver(std::shared_ptr<IVideoCodecDriver> driver);
+    MediaDriverManager &media_driver_manager();
+    void notify_media_resize(int width, int height);
+    void preserve_video_rx_and_display(struct call *bcall);
 
     bool is_started() const { return m_started.load(); }
     sip_client_t *owner() const { return m_owner; }
@@ -96,6 +117,8 @@ private:
 
     mutable std::mutex m_calls_mutex;
     std::vector<sip_call_t *> m_all_calls;
+
+    std::unique_ptr<MediaDriverManager> m_media_manager;
 };
 
 } // namespace sip_core

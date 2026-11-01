@@ -1,7 +1,9 @@
 #include "engine.h"
 #include "call_session.h"
+#include "media_driver.h"
 
 #include <re.h>
+#include <rem.h>
 #include <baresip.h>
 
 #include <cctype>
@@ -31,6 +33,7 @@ static void ua_event_handler(enum bevent_ev ev, struct bevent *event, void *arg)
 Engine::Engine(sip_client_t *owner, const sip_callbacks_t *callbacks, void *user_data)
     : m_owner(owner)
     , m_user_data(user_data)
+    , m_media_manager(std::make_unique<MediaDriverManager>(this))
 {
     if (callbacks) {
         m_callbacks = *callbacks;
@@ -153,6 +156,24 @@ int Engine::init_on_loop_thread(const char *config_path)
 
     re_thread_async_init(4);
 
+    struct config *cfg = conf_config();
+    if (cfg != nullptr) {
+        snprintf(cfg->video.src_mod, sizeof(cfg->video.src_mod), "%s", "avcapture");
+        snprintf(cfg->video.src_dev, sizeof(cfg->video.src_dev), "%s", "front");
+        snprintf(cfg->video.disp_mod, sizeof(cfg->video.disp_mod), "%s", "iosview");
+        if (cfg->video.width == 0 || cfg->video.height == 0) {
+            cfg->video.width = 640;
+            cfg->video.height = 480;
+        }
+        if (cfg->video.fps <= 0) {
+            cfg->video.fps = 30.0;
+        }
+        if (cfg->video.bitrate == 0) {
+            cfg->video.bitrate = 512000;
+        }
+        cfg->video.enc_fmt = VID_FMT_YUV420P;
+    }
+
     rc = baresip_init(conf_config());
     if (rc != 0) {
         re_thread_async_close();
@@ -170,6 +191,10 @@ int Engine::init_on_loop_thread(const char *config_path)
             sa_set_str(&dns_servers[1], "1.1.1.1", 53) == 0) {
             (void)net_use_nameserver(baresip_network(), dns_servers, 2);
         }
+    }
+
+    if (m_media_manager) {
+        m_media_manager->register_baresip_plugins();
     }
 
     rc = ua_init("SipSdk", true, true, false);
@@ -261,6 +286,10 @@ void Engine::cleanup_on_loop_thread()
         m_ua = nullptr;
     }
 
+    if (m_media_manager) {
+        m_media_manager->unregister_baresip_plugins();
+    }
+
     ua_close();
     module_app_unload();
     conf_close();
@@ -344,6 +373,31 @@ bool Engine::is_registered() const
     std::lock_guard<std::mutex> lock(m_mutex);
     return m_ua != nullptr && ua_isregistered(m_ua);
 }
+
+struct sdp_media_internal {
+    struct le le;
+    struct list lfmtl;
+    struct list rfmtl;
+    struct list lattrl;
+    struct list rattrl;
+    struct sa laddr;
+    struct sa raddr;
+    struct sa laddr_rtcp;
+    struct sa raddr_rtcp;
+    int32_t lbwv[SDP_BANDWIDTH_MAX];
+    int32_t rbwv[SDP_BANDWIDTH_MAX];
+    char *name;
+    char *proto;
+    char *protov[8];
+    char *uproto;
+    sdp_media_enc_h *ench;
+    void *arg;
+    enum sdp_dir ldir;
+    enum sdp_dir rdir;
+    bool fmt_ignore;
+    bool disabled;
+    int dynpt;
+};
 
 void Engine::handle_ua_event(int ev, struct bevent *event)
 {
@@ -469,6 +523,29 @@ void Engine::handle_ua_event(int ev, struct bevent *event)
                 if (sess) {
                     dispatch_dtmf_digit(sess, text);
                 }
+            }
+            break;
+        }
+        case BEVENT_CALL_REMOTE_SDP: {
+            if (bcall != nullptr && text && std::strcmp(text, "answer") == 0) {
+                sip_call_t *sess = find_call_session(bcall);
+                if (sess && sess->has_video()) {
+                    struct video *vid = call_video(bcall);
+                    struct stream *strm = vid ? video_strm(vid) : nullptr;
+                    struct sdp_media *m = strm ? stream_sdpmedia(strm) : nullptr;
+                    if (m && !sdp_media_disabled(m)) {
+                        auto *im = reinterpret_cast<struct sdp_media_internal *>(m);
+                        if (im->ldir == sdp_media_ldir(m) && im->rdir == sdp_media_rdir(m)) {
+                            im->rdir = SDP_SENDRECV;
+                        }
+                    }
+                }
+            }
+            break;
+        }
+        case BEVENT_CALL_LOCAL_SDP: {
+            if (bcall != nullptr) {
+                preserve_video_rx_and_display(bcall);
             }
             break;
         }
@@ -1025,6 +1102,198 @@ void Engine::dispatch_dtmf_digit(sip_call_t *call, const char *digit)
 #else
     run_dtmf_digit_task(args);
 #endif
+}
+
+int Engine::set_video_capture_driver(std::shared_ptr<IVideoCaptureDriver> driver)
+{
+    if (m_started.load()) {
+        post_task([this, driver]() {
+            if (m_media_manager) {
+                m_media_manager->set_capture_driver(driver);
+            }
+        });
+    } else {
+        if (m_media_manager) {
+            m_media_manager->set_capture_driver(driver);
+        }
+    }
+    return 0;
+}
+
+int Engine::set_remote_renderer(std::shared_ptr<IVideoRendererDriver> renderer)
+{
+    if (m_started.load()) {
+        post_task([this, renderer]() {
+            if (m_media_manager) {
+                m_media_manager->set_remote_renderer(renderer);
+            }
+        });
+    } else {
+        if (m_media_manager) {
+            m_media_manager->set_remote_renderer(renderer);
+        }
+    }
+    return 0;
+}
+
+int Engine::set_local_renderer(std::shared_ptr<IVideoRendererDriver> renderer)
+{
+    if (m_started.load()) {
+        post_task([this, renderer]() {
+            if (m_media_manager) {
+                m_media_manager->set_local_renderer(renderer);
+            }
+        });
+    } else {
+        if (m_media_manager) {
+            m_media_manager->set_local_renderer(renderer);
+        }
+    }
+    return 0;
+}
+
+int Engine::set_video_codec_driver(std::shared_ptr<IVideoCodecDriver> driver)
+{
+    if (m_started.load()) {
+        post_task([this, driver]() {
+            if (m_media_manager) {
+                m_media_manager->set_codec_driver(driver);
+            }
+        });
+    } else {
+        if (m_media_manager) {
+            m_media_manager->set_codec_driver(driver);
+        }
+    }
+    return 0;
+}
+
+MediaDriverManager &Engine::media_driver_manager()
+{
+    return *m_media_manager;
+}
+
+void Engine::notify_media_resize(int width, int height)
+{
+    std::lock_guard<std::mutex> lock(m_calls_mutex);
+    for (auto *sess : m_all_calls) {
+        if (sess && sess->has_video() && !sess->is_closed()) {
+            dispatch_call_media(sess, width, height, sess->is_on_hold(), sess->is_muted());
+        }
+    }
+}
+
+void Engine::preserve_video_rx_and_display(struct call *bcall)
+{
+    if (!bcall) return;
+    sip_call_t *sess = find_call_session(bcall);
+    if (!sess || !sess->has_video()) return;
+    struct video *vid = call_video(bcall);
+    if (!vid) return;
+    struct stream *strm = video_strm(vid);
+    if (!strm) return;
+    struct sdp_media *m = stream_sdpmedia(strm);
+    if (!m || sdp_media_disabled(m)) return;
+
+    auto *im = reinterpret_cast<struct sdp_media_internal *>(m);
+    if (im->ldir == sdp_media_ldir(m) && im->rdir == sdp_media_rdir(m)) {
+        im->rdir = SDP_SENDRECV;
+    }
+
+    (void)stream_enable_rx(strm, true);
+    (void)video_start_display(vid, call_peeruri(bcall));
+    video_req_keyframe(vid);
+}
+
+int Engine::request_keyframe(sip_call_t *call_sess)
+{
+    if (!call_sess) return EINVAL;
+    call_sess->retain();
+    bool posted = post_task([call_sess]() {
+        struct call *c = call_sess->raw_call();
+        if (c != nullptr) {
+            struct video *vid = call_video(c);
+            if (vid != nullptr) {
+                video_req_keyframe(vid);
+            }
+        }
+        call_sess->release();
+    });
+    if (!posted) {
+        call_sess->release();
+        return EIO;
+    }
+    return 0;
+}
+
+int Engine::switch_camera()
+{
+    if (!m_media_manager) return EINVAL;
+    m_media_manager->switch_camera();
+    post_task([this]() {
+        std::lock_guard<std::mutex> lock(m_calls_mutex);
+        for (auto *c : m_all_calls) {
+            if (c && c->raw_call()) {
+                struct video *vid = call_video(c->raw_call());
+                if (vid != nullptr) {
+                    video_vidsrc_set_device(vid, nullptr);
+                }
+            }
+        }
+    });
+    return 0;
+}
+
+int Engine::set_camera(int position)
+{
+    if (!m_media_manager) return EINVAL;
+    m_media_manager->set_camera(position);
+    const char *dev = (position == 1) ? "back" : "front";
+    post_task([this, dev]() {
+        if (conf_config() != nullptr) {
+            snprintf(conf_config()->video.src_dev, sizeof(conf_config()->video.src_dev), "%s", dev);
+        }
+        std::lock_guard<std::mutex> lock(m_calls_mutex);
+        for (auto *c : m_all_calls) {
+            if (c && c->raw_call()) {
+                struct video *vid = call_video(c->raw_call());
+                if (vid != nullptr) {
+                    video_vidsrc_set_device(vid, dev);
+                }
+            }
+        }
+    });
+    return 0;
+}
+
+int Engine::set_local_video_enabled(bool enabled)
+{
+    if (!m_media_manager) return EINVAL;
+    return m_media_manager->set_local_video_enabled(enabled);
+}
+
+bool Engine::is_local_video_enabled() const
+{
+    if (!m_media_manager) return false;
+    return m_media_manager->is_local_video_enabled();
+}
+
+int Engine::start_local_preview()
+{
+    if (!m_media_manager) return EINVAL;
+    return m_media_manager->start_local_preview();
+}
+
+int Engine::stop_local_preview()
+{
+    if (!m_media_manager) return EINVAL;
+    return m_media_manager->stop_local_preview();
+}
+
+bool Engine::is_local_preview_active() const
+{
+    if (!m_media_manager) return false;
+    return m_media_manager->is_local_preview_active();
 }
 
 void Engine::mqueue_callback(int id, void *data, void *arg)

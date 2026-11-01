@@ -221,3 +221,11 @@ int sip_call_t::send_dtmf(const char *digits)
     }
     return m_engine->send_dtmf(this, digits);
 }
+
+int sip_call_t::request_keyframe()
+{
+    if (!m_engine) {
+        return EINVAL;
+    }
+    return m_engine->request_keyframe(this);
+}

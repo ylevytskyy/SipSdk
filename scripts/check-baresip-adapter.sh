@@ -88,6 +88,9 @@ link_adapter() {
     -isysroot "$sdk_path" \
     -I "$HEADER_DIR" \
     -I "$ROOT_DIR/Sources/SipSdk/include" \
+    -I "$ROOT_DIR/core/include" \
+    -I "$ROOT_DIR/core/src" \
+    "$ROOT_DIR"/core/src/*.cpp \
     "$SOURCE" \
     "$OUTPUT_DIR/adapter-link-main.mm" \
     -x none "$library" \
@@ -120,6 +123,8 @@ xcrun --sdk iphoneos clang++ \
   -isysroot "$SDK_PATH" \
   -I "$HEADER_DIR" \
   -I "$ROOT_DIR/Sources/SipSdk/include" \
+  -I "$ROOT_DIR/core/include" \
+  -I "$ROOT_DIR/core/src" \
   "$SOURCE"
 
 link_adapter iphoneos "arm64-apple-ios15.0" "$DEVICE_LIBRARY" device-arm64

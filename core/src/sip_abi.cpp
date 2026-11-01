@@ -1,6 +1,7 @@
 #include "sip_abi.h"
 #include "engine.h"
 #include "call_session.h"
+#include "media_driver.h"
 
 #include <cerrno>
 #include <memory>
@@ -195,6 +196,102 @@ SIP_ABI_EXPORT void sip_call_destroy(sip_call_t *call)
     } else {
         call->release();
     }
+}
+
+SIP_ABI_EXPORT int sip_client_set_video_capture_driver(sip_client_t *client, const sip_video_capture_driver_t *driver)
+{
+    if (!client || !client->engine) {
+        return EINVAL;
+    }
+    if (!driver) {
+        return client->engine->set_video_capture_driver(nullptr);
+    }
+    auto cpp_driver = std::make_shared<sip_core::CApiVideoCaptureDriver>(*driver);
+    return client->engine->set_video_capture_driver(cpp_driver);
+}
+
+SIP_ABI_EXPORT int sip_client_set_remote_renderer(sip_client_t *client, const sip_video_renderer_driver_t *renderer)
+{
+    if (!client || !client->engine) {
+        return EINVAL;
+    }
+    if (!renderer) {
+        return client->engine->set_remote_renderer(nullptr);
+    }
+    auto cpp_renderer = std::make_shared<sip_core::CApiVideoRendererDriver>(*renderer);
+    return client->engine->set_remote_renderer(cpp_renderer);
+}
+
+SIP_ABI_EXPORT int sip_client_set_local_renderer(sip_client_t *client, const sip_video_renderer_driver_t *renderer)
+{
+    if (!client || !client->engine) {
+        return EINVAL;
+    }
+    if (!renderer) {
+        return client->engine->set_local_renderer(nullptr);
+    }
+    auto cpp_renderer = std::make_shared<sip_core::CApiVideoRendererDriver>(*renderer);
+    return client->engine->set_local_renderer(cpp_renderer);
+}
+
+SIP_ABI_EXPORT int sip_client_set_video_codec_driver(sip_client_t *client, const sip_video_codec_driver_t *driver)
+{
+    if (!client || !client->engine) {
+        return EINVAL;
+    }
+    if (!driver) {
+        return client->engine->set_video_codec_driver(nullptr);
+    }
+    auto cpp_codec = std::make_shared<sip_core::CApiVideoCodecDriver>(*driver);
+    return client->engine->set_video_codec_driver(cpp_codec);
+}
+
+SIP_ABI_EXPORT int sip_call_request_keyframe(sip_call_t *call)
+{
+    if (!call) return EINVAL;
+    return call->request_keyframe();
+}
+
+SIP_ABI_EXPORT int sip_client_switch_camera(sip_client_t *client)
+{
+    if (!client || !client->engine) return EINVAL;
+    return client->engine->switch_camera();
+}
+
+SIP_ABI_EXPORT int sip_client_set_camera(sip_client_t *client, int position)
+{
+    if (!client || !client->engine) return EINVAL;
+    return client->engine->set_camera(position);
+}
+
+SIP_ABI_EXPORT int sip_client_set_local_video_enabled(sip_client_t *client, bool enabled)
+{
+    if (!client || !client->engine) return EINVAL;
+    return client->engine->set_local_video_enabled(enabled);
+}
+
+SIP_ABI_EXPORT bool sip_client_is_local_video_enabled(const sip_client_t *client)
+{
+    if (!client || !client->engine) return false;
+    return client->engine->is_local_video_enabled();
+}
+
+SIP_ABI_EXPORT int sip_client_start_local_preview(sip_client_t *client)
+{
+    if (!client || !client->engine) return EINVAL;
+    return client->engine->start_local_preview();
+}
+
+SIP_ABI_EXPORT int sip_client_stop_local_preview(sip_client_t *client)
+{
+    if (!client || !client->engine) return EINVAL;
+    return client->engine->stop_local_preview();
+}
+
+SIP_ABI_EXPORT bool sip_client_is_local_preview_active(const sip_client_t *client)
+{
+    if (!client || !client->engine) return false;
+    return client->engine->is_local_preview_active();
 }
 
 } // extern "C"

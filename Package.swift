@@ -21,8 +21,21 @@ let package = Package(
             resources: [.copy("Resources/config.baresip-v4")]
         ),
         .target(
-            name: "SipSdk",
+            name: "SipCore",
             dependencies: ["BaresipCore"],
+            path: "core",
+            exclude: ["tests", "CMakeLists.txt"],
+            sources: ["src"],
+            publicHeadersPath: "include",
+            cxxSettings: [
+                .headerSearchPath("src"),
+                .define("USE_UNIXSOCK", to: "1"),
+                .define("SIP_CORE_BUILDING_LIB", to: "1")
+            ]
+        ),
+        .target(
+            name: "SipSdk",
+            dependencies: ["BaresipCore", "SipCore"],
             path: "Sources/SipSdk",
             publicHeadersPath: "include",
             linkerSettings: [

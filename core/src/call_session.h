@@ -51,6 +51,7 @@ public:
     int set_hold(bool hold);
     int set_call_muted(bool muted);
     int send_dtmf(const char *digits);
+    int request_keyframe();
 
     struct call *raw_call() const { return m_raw_call; }
     sip_client_t *owner() const { return m_owner; }

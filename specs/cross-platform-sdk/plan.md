@@ -60,11 +60,11 @@ The test seam attaches at the **Universal C ABI Boundary (`sip_abi.h`)**:
 
 ## 3. Milestones Roadmap
 
-- [ ] **Milestone 1 — C++ Core Extraction & iOS Parity Lock**
+- [x] **Milestone 1 — C++ Core Extraction & iOS Parity Lock**
   - [x] **Slice 1 (Issue #11)**: Core Engine Lifecycle, C ABI Scaffold & Automated Lifecycle Verification
   - [x] **Slice 2 (Issue #12)**: SIP Account Registration, MD5 Authentication & Presence State Machine (detailed in [`../account-registration/plan.md`](../account-registration/plan.md))
-  - [ ] **Slice 3 (Issue #13)**: Audio Calling Session, G.711 Negotiation & Telephony Controls (Hold, Mute, DTMF)
-  - [ ] **Slice 4 (Issue #14)**: Video Media Driver (`IVideoCaptureDriver`, `IVideoRendererDriver`, `IVideoCodecDriver`), Resilient Stream Recovery (re-INVITE `recvonly` preservation & RTCP PLI keyframe request on packet loss), and iOS Parity Lock
+  - [x] **Slice 3 (Issue #13)**: Audio Calling Session, G.711 Negotiation & Telephony Controls (Hold, Mute, DTMF)
+  - [x] **Slice 4 (Issue #14)**: Video Media Driver (`IVideoCaptureDriver`, `IVideoRendererDriver`, `IVideoCodecDriver`), Resilient Stream Recovery (re-INVITE `recvonly` preservation & RTCP PLI keyframe request on packet loss), and iOS Parity Lock
 - [ ] **Milestone 2 — Android Platform SDK (AAR + MediaCodec)** (Issues #15, #16)
 - [ ] **Milestone 3 — Desktop Platform SDKs (macOS, Linux, Windows)** (Issues #17, #18)
 

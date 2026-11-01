@@ -235,10 +235,105 @@ static void fillSyntheticYUV420Pattern(uint8_t *yPlane,
 @end
 
 // ============================================================================
+// MARK: - IosVideoRendererDriver Implementation
+// ============================================================================
+
+static void ios_renderer_render_frame(void *user_data, const sip_video_frame_t *frame)
+{
+    if (!user_data || !frame) return;
+    IosVideoRendererDriver *driver = (__bridge IosVideoRendererDriver *)user_data;
+    [driver renderFrame:frame];
+}
+
+static void ios_renderer_on_stream_resized(void *user_data, int width, int height)
+{
+    if (!user_data) return;
+    IosVideoRendererDriver *driver = (__bridge IosVideoRendererDriver *)user_data;
+    [driver onStreamResizedWithWidth:width height:height];
+}
+
+static void ios_renderer_clear(void *user_data)
+{
+    if (!user_data) return;
+    IosVideoRendererDriver *driver = (__bridge IosVideoRendererDriver *)user_data;
+    [driver clear];
+}
+
+@implementation IosVideoRendererDriver
+
+- (instancetype)initWithVideoView:(nullable SipVideoView *)videoView
+{
+    self = [super init];
+    if (self) {
+        _videoView = videoView;
+    }
+    return self;
+}
+
+- (sip_video_renderer_driver_t)cDriver
+{
+    sip_video_renderer_driver_t driver{};
+    driver.user_data = (__bridge void *)self;
+    driver.render_frame = ios_renderer_render_frame;
+    driver.on_stream_resized = ios_renderer_on_stream_resized;
+    driver.clear = ios_renderer_clear;
+    return driver;
+}
+
+- (void)renderFrame:(const sip_video_frame_t *)frame
+{
+    if (!frame) return;
+    SipVideoView *view = self.videoView;
+    if (view == nil) return;
+
+    [view renderYUV420WithY:frame->y
+                          u:frame->u
+                          v:frame->v
+                    yStride:frame->y_stride
+                    uStride:frame->u_stride
+                    vStride:frame->v_stride
+                      width:frame->width
+                     height:frame->height];
+}
+
+- (void)onStreamResizedWithWidth:(int)width height:(int)height
+{
+    SipVideoView *view = self.videoView;
+    if (view == nil || width <= 0 || height <= 0) return;
+
+    void (^updateBlock)(void) = ^{
+        view.videoSize = CGSizeMake(width, height);
+    };
+    if ([NSThread isMainThread]) {
+        updateBlock();
+    } else {
+        dispatch_async(dispatch_get_main_queue(), updateBlock);
+    }
+}
+
+- (void)clear
+{
+    SipVideoView *view = self.videoView;
+    if (view == nil) return;
+
+    void (^clearBlock)(void) = ^{
+        [view clearVideo];
+    };
+    if ([NSThread isMainThread]) {
+        clearBlock();
+    } else {
+        dispatch_async(dispatch_get_main_queue(), clearBlock);
+    }
+}
+
+@end
+
+// ============================================================================
 // MARK: - Private Interfaces & Active Client State
 // ============================================================================
 
 @interface SipCall ()
+@property (nonatomic, assign) sip_call_t *coreCall;
 @property (nonatomic) struct ua *ua;
 @property (nonatomic) struct call *call;
 @property (nonatomic, copy) NSString *cachedRemoteUri;
@@ -255,6 +350,11 @@ static void fillSyntheticYUV420Pattern(uint8_t *yPlane,
 @class SipAVCaptureHelper;
 
 @interface SipClient ()
+@property (nonatomic, assign) sip_client_t *coreClient;
+@property (nonatomic, strong) IosVideoCaptureDriver *captureDriver;
+@property (nonatomic, strong) IosVideoRendererDriver *remoteRendererDriver;
+@property (nonatomic, strong) IosVideoRendererDriver *localRendererDriver;
+@property (nonatomic, strong) IosVideoCodecDriver *codecDriver;
 @property (nonatomic) struct ua *ua;
 @property (nonatomic, strong, nullable) SipAVCaptureHelper *localPreviewHelper;
 @property (nonatomic) struct mqueue *controlMq;
@@ -1148,6 +1248,50 @@ static struct vidcodec gH264CodecMode0 = {
 };
 
 // ============================================================================
+// MARK: - IosVideoCodecDriver Implementation
+// ============================================================================
+
+static int ios_codec_register(void *user_data)
+{
+    if (!user_data) return EINVAL;
+    IosVideoCodecDriver *d = (__bridge IosVideoCodecDriver *)user_data;
+    return [d registerCodec];
+}
+
+static void ios_codec_unregister(void *user_data)
+{
+    if (!user_data) return;
+    IosVideoCodecDriver *d = (__bridge IosVideoCodecDriver *)user_data;
+    [d unregisterCodec];
+}
+
+@implementation IosVideoCodecDriver
+
+- (sip_video_codec_driver_t)cDriver
+{
+    sip_video_codec_driver_t driver{};
+    driver.user_data = (__bridge void *)self;
+    driver.register_codec = ios_codec_register;
+    driver.unregister_codec = ios_codec_unregister;
+    return driver;
+}
+
+- (int)registerCodec
+{
+    vidcodec_register(baresip_vidcodecl(), &gH264CodecMode1);
+    vidcodec_register(baresip_vidcodecl(), &gH264CodecMode0);
+    return 0;
+}
+
+- (void)unregisterCodec
+{
+    vidcodec_unregister(&gH264CodecMode0);
+    vidcodec_unregister(&gH264CodecMode1);
+}
+
+@end
+
+// ============================================================================
 // MARK: - Native iOS Video Capture (vidsrc "avcapture")
 // ============================================================================
 
@@ -1360,6 +1504,20 @@ static __weak SipAVCaptureHelper *gActiveCaptureHelper = nil;
                                           height:(int)h];
     }
 
+    if (client.captureDriver != nil) {
+        sip_video_frame_t cvf{};
+        cvf.width = (int)w;
+        cvf.height = (int)h;
+        cvf.y = yPlane;
+        cvf.u = uPlane;
+        cvf.v = vPlane;
+        cvf.y_stride = (int)w;
+        cvf.u_stride = (int)uvW;
+        cvf.v_stride = (int)uvW;
+        cvf.timestamp_ns = (uint64_t)([[NSProcessInfo processInfo] systemUptime] * 1e9);
+        [client.captureDriver deliverCustomFrame:&cvf];
+    }
+
     if (!st || !st->frameh) {
         return;
     }
@@ -1447,6 +1605,10 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
                                               height:(int)h];
         }
 
+        if (client.captureDriver != nil) {
+            [client.captureDriver deliverSampleBuffer:sampleBuffer];
+        }
+
         if (st && st->frameh) {
             uint64_t ts = (uint64_t)([[NSProcessInfo processInfo] systemUptime] * (double)VIDEO_TIMEBASE);
             std::vector<uint8_t> frameCopy = std::move(buf);
@@ -1489,6 +1651,288 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
     dispatch_async(self.captureQueue, ^{
         [self stopInternal];
     });
+}
+
+@end
+
+// ============================================================================
+// MARK: - IosVideoCaptureDriver Implementation
+// ============================================================================
+
+typedef void (*sip_frame_handler_fn)(const sip_video_frame_t *frame, void *arg);
+
+@interface IosVideoCaptureDriver ()
+@property (nonatomic, assign) BOOL enabled;
+@property (nonatomic, assign) int cameraPosition;
+@property (nonatomic, assign) int width;
+@property (nonatomic, assign) int height;
+@property (nonatomic, assign) int fps;
+@property (nonatomic, assign) sip_frame_handler_fn frameHandler;
+@property (nonatomic, assign) void *frameHandlerArg;
+@property (nonatomic, strong) dispatch_queue_t captureQueue;
+@property (nonatomic, strong, nullable) dispatch_source_t syntheticTimer;
+@property (nonatomic, assign) uint32_t syntheticTick;
+- (void)deliverCustomFrame:(const sip_video_frame_t *)frame;
+- (void)deliverSampleBuffer:(CMSampleBufferRef)sampleBuffer;
+- (void)setFrameHandler:(sip_frame_handler_fn)handler argument:(void *)arg;
+@end
+
+static int ios_capture_start(void *user_data, int width, int height, int fps)
+{
+    if (!user_data) return EINVAL;
+    IosVideoCaptureDriver *d = (__bridge IosVideoCaptureDriver *)user_data;
+    return [d startWithWidth:width height:height fps:fps];
+}
+
+static void ios_capture_stop(void *user_data)
+{
+    if (!user_data) return;
+    IosVideoCaptureDriver *d = (__bridge IosVideoCaptureDriver *)user_data;
+    [d stop];
+}
+
+static void ios_capture_set_frame_handler(void *user_data, void (*handler)(const sip_video_frame_t *frame, void *arg), void *arg)
+{
+    if (!user_data) return;
+    IosVideoCaptureDriver *d = (__bridge IosVideoCaptureDriver *)user_data;
+    [d setFrameHandler:handler argument:arg];
+}
+
+static void ios_capture_switch_camera(void *user_data)
+{
+    if (!user_data) return;
+    IosVideoCaptureDriver *d = (__bridge IosVideoCaptureDriver *)user_data;
+    [d switchCamera];
+}
+
+static void ios_capture_set_camera(void *user_data, int position)
+{
+    if (!user_data) return;
+    IosVideoCaptureDriver *d = (__bridge IosVideoCaptureDriver *)user_data;
+    [d setCamera:position];
+}
+
+static void ios_capture_set_enabled(void *user_data, bool enabled)
+{
+    if (!user_data) return;
+    IosVideoCaptureDriver *d = (__bridge IosVideoCaptureDriver *)user_data;
+    [d setEnabled:enabled ? YES : NO];
+}
+
+static bool ios_capture_is_enabled(void *user_data)
+{
+    if (!user_data) return false;
+    IosVideoCaptureDriver *d = (__bridge IosVideoCaptureDriver *)user_data;
+    return [d isEnabled];
+}
+
+@implementation IosVideoCaptureDriver
+
+- (instancetype)initWithClient:(nullable SipClient *)client
+{
+    self = [super init];
+    if (self) {
+        _client = client;
+        _enabled = YES;
+        _cameraPosition = 0; // Front
+        _width = 640;
+        _height = 480;
+        _fps = 30;
+        _syntheticTick = 0;
+        _captureQueue = dispatch_queue_create("com.wiseland.SipSdk.captureDriver", DISPATCH_QUEUE_SERIAL);
+    }
+    return self;
+}
+
+- (sip_video_capture_driver_t)cDriver
+{
+    sip_video_capture_driver_t driver{};
+    driver.user_data = (__bridge void *)self;
+    driver.start = ios_capture_start;
+    driver.stop = ios_capture_stop;
+    driver.set_frame_handler = ios_capture_set_frame_handler;
+    driver.switch_camera = ios_capture_switch_camera;
+    driver.set_camera = ios_capture_set_camera;
+    driver.set_enabled = ios_capture_set_enabled;
+    driver.is_enabled = ios_capture_is_enabled;
+    return driver;
+}
+
+- (void)setFrameHandler:(sip_frame_handler_fn)handler argument:(void *)arg
+{
+    _frameHandler = handler;
+    _frameHandlerArg = arg;
+}
+
+- (BOOL)isEnabled
+{
+    return _enabled;
+}
+
+- (int)startWithWidth:(int)width height:(int)height fps:(int)fps
+{
+    _width = width > 0 ? width : 640;
+    _height = height > 0 ? height : 480;
+    _fps = fps > 0 ? fps : 30;
+
+    dispatch_async(self.captureQueue, ^{
+        [self stopSyntheticTimerInternal];
+
+        dispatch_source_t timer = dispatch_source_create(
+            DISPATCH_SOURCE_TYPE_TIMER, 0, 0, self.captureQueue);
+        uint64_t intervalNs = (uint64_t)((1.0 / (double)self.fps) * (double)NSEC_PER_SEC);
+        dispatch_source_set_timer(timer, dispatch_time(DISPATCH_TIME_NOW, 0), intervalNs, intervalNs / 10);
+        __weak IosVideoCaptureDriver *weakSelf = self;
+        dispatch_source_set_event_handler(timer, ^{
+            [weakSelf deliverSyntheticFrame];
+        });
+        self.syntheticTimer = timer;
+        dispatch_resume(timer);
+    });
+
+    return 0;
+}
+
+- (void)stopSyntheticTimerInternal
+{
+    if (self.syntheticTimer) {
+        dispatch_source_cancel(self.syntheticTimer);
+        self.syntheticTimer = nil;
+    }
+}
+
+- (void)stop
+{
+    dispatch_sync(self.captureQueue, ^{
+        [self stopSyntheticTimerInternal];
+    });
+}
+
+- (void)switchCamera
+{
+    _cameraPosition = (_cameraPosition == 0) ? 1 : 0;
+}
+
+- (void)setCamera:(int)position
+{
+    _cameraPosition = position;
+}
+
+- (void)deliverSyntheticFrame
+{
+    int w = self.width > 0 ? self.width : 640;
+    int h = self.height > 0 ? self.height : 480;
+    int uvW = w / 2;
+    int uvH = h / 2;
+
+    size_t ySize = (size_t)w * (size_t)h;
+    size_t uvSize = (size_t)uvW * (size_t)uvH;
+    std::vector<uint8_t> buf(ySize + uvSize * 2, 0);
+
+    uint8_t *yPlane = buf.data();
+    uint8_t *uPlane = yPlane + ySize;
+    uint8_t *vPlane = uPlane + uvSize;
+
+    if (self.enabled) {
+        fillSyntheticYUV420Pattern(yPlane, uPlane, vPlane, w, h, ++self.syntheticTick);
+    } else {
+        memset(yPlane, 16, ySize);
+        memset(uPlane, 128, uvSize);
+        memset(vPlane, 128, uvSize);
+    }
+
+    SipClient *client = self.client;
+    if (client.localVideoView != nil && self.enabled) {
+        [client.localVideoView renderYUV420WithY:yPlane
+                                               u:uPlane
+                                               v:vPlane
+                                         yStride:w
+                                         uStride:uvW
+                                         vStride:uvW
+                                           width:w
+                                          height:h];
+    }
+
+    if (self.frameHandler != nullptr) {
+        sip_video_frame_t vf{};
+        vf.width = w;
+        vf.height = h;
+        vf.y = yPlane;
+        vf.u = uPlane;
+        vf.v = vPlane;
+        vf.y_stride = w;
+        vf.u_stride = uvW;
+        vf.v_stride = uvW;
+        vf.timestamp_ns = (uint64_t)([[NSProcessInfo processInfo] systemUptime] * 1e9);
+        self.frameHandler(&vf, self.frameHandlerArg);
+    }
+}
+
+- (void)deliverCustomFrame:(const sip_video_frame_t *)frame
+{
+    if (!frame) return;
+    if (_frameHandler != nullptr && _enabled) {
+        _frameHandler(frame, _frameHandlerArg);
+    }
+}
+
+- (void)deliverSampleBuffer:(CMSampleBufferRef)sampleBuffer
+{
+    if (!sampleBuffer) return;
+    CVImageBufferRef imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer);
+    if (!imageBuffer) return;
+
+    CVPixelBufferLockBaseAddress(imageBuffer, kCVPixelBufferLock_ReadOnly);
+    int width = (int)CVPixelBufferGetWidth(imageBuffer);
+    int height = (int)CVPixelBufferGetHeight(imageBuffer);
+    int uvWidth = width / 2;
+    int uvHeight = height / 2;
+
+    const uint8_t *yPlane = (const uint8_t *)CVPixelBufferGetBaseAddressOfPlane(imageBuffer, 0);
+    int yStride = (int)CVPixelBufferGetBytesPerRowOfPlane(imageBuffer, 0);
+    const uint8_t *uvPlane = (const uint8_t *)CVPixelBufferGetBaseAddressOfPlane(imageBuffer, 1);
+    int uvStride = (int)CVPixelBufferGetBytesPerRowOfPlane(imageBuffer, 1);
+
+    if (yPlane && uvPlane) {
+        std::vector<uint8_t> uPlaneVec((size_t)uvWidth * (size_t)uvHeight);
+        std::vector<uint8_t> vPlaneVec((size_t)uvWidth * (size_t)uvHeight);
+        for (int row = 0; row < uvHeight; row++) {
+            const uint8_t *srcRow = uvPlane + row * uvStride;
+            uint8_t *uDst = uPlaneVec.data() + row * uvWidth;
+            uint8_t *vDst = vPlaneVec.data() + row * uvWidth;
+            for (int col = 0; col < uvWidth; col++) {
+                uDst[col] = srcRow[col * 2 + 0];
+                vDst[col] = srcRow[col * 2 + 1];
+            }
+        }
+
+        SipClient *client = self.client;
+        if (client.localVideoView != nil && self.enabled) {
+            [client.localVideoView renderYUV420WithY:yPlane
+                                                   u:uPlaneVec.data()
+                                                   v:vPlaneVec.data()
+                                             yStride:yStride
+                                             uStride:uvWidth
+                                             vStride:uvWidth
+                                               width:width
+                                              height:height];
+        }
+
+        if (self.frameHandler != nullptr && self.enabled) {
+            sip_video_frame_t vf{};
+            vf.width = width;
+            vf.height = height;
+            vf.y = yPlane;
+            vf.u = uPlaneVec.data();
+            vf.v = vPlaneVec.data();
+            vf.y_stride = yStride;
+            vf.u_stride = uvWidth;
+            vf.v_stride = uvWidth;
+            vf.timestamp_ns = (uint64_t)([[NSProcessInfo processInfo] systemUptime] * 1e9);
+            self.frameHandler(&vf, self.frameHandlerArg);
+        }
+    }
+    CVPixelBufferUnlockBaseAddress(imageBuffer, kCVPixelBufferLock_ReadOnly);
 }
 
 @end
@@ -1638,17 +2082,34 @@ static int ios_vidisp_display(struct vidisp_st *st,
         if (st->resizeh) {
             st->resizeh(&frame->size, st->arg);
         }
+        if (client.remoteRendererDriver != nil) {
+            [client.remoteRendererDriver onStreamResizedWithWidth:(int)w height:(int)h];
+        }
     }
 
-    if (client.remoteVideoView != nil && frame->fmt == VID_FMT_YUV420P) {
-        [client.remoteVideoView renderYUV420WithY:frame->data[0]
-                                                u:frame->data[1]
-                                                v:frame->data[2]
-                                          yStride:frame->linesize[0]
-                                          uStride:frame->linesize[1]
-                                          vStride:frame->linesize[2]
-                                            width:(int)w
-                                           height:(int)h];
+    if (frame->fmt == VID_FMT_YUV420P) {
+        if (client.remoteRendererDriver != nil) {
+            sip_video_frame_t vf{};
+            vf.width = (int)w;
+            vf.height = (int)h;
+            vf.y = frame->data[0];
+            vf.u = frame->data[1];
+            vf.v = frame->data[2];
+            vf.y_stride = (int)frame->linesize[0];
+            vf.u_stride = (int)frame->linesize[1];
+            vf.v_stride = (int)frame->linesize[2];
+            vf.timestamp_ns = timestamp > 0 ? (timestamp * 1000ULL) : 0;
+            [client.remoteRendererDriver renderFrame:&vf];
+        } else if (client.remoteVideoView != nil) {
+            [client.remoteVideoView renderYUV420WithY:frame->data[0]
+                                                    u:frame->data[1]
+                                                    v:frame->data[2]
+                                              yStride:frame->linesize[0]
+                                              uStride:frame->linesize[1]
+                                              vStride:frame->linesize[2]
+                                                width:(int)w
+                                               height:(int)h];
+        }
     }
     return 0;
 }
@@ -1657,7 +2118,9 @@ static void ios_vidisp_hide(struct vidisp_st *st)
 {
     (void)st;
     SipClient *client = gActiveSipClient;
-    if (client.remoteVideoView != nil) {
+    if (client.remoteRendererDriver != nil) {
+        [client.remoteRendererDriver clear];
+    } else if (client.remoteVideoView != nil) {
         [client.remoteVideoView clearVideo];
     }
 }
@@ -2026,11 +2489,23 @@ static void ua_event_handler(enum bevent_ev ev, struct bevent *event, void *arg)
 
 - (NSString *)remoteUri
 {
+    if (self.coreCall != nullptr) {
+        const char *uri = sip_call_get_remote_uri(self.coreCall);
+        if (uri && strlen(uri) > 0) {
+            return [NSString stringWithUTF8String:uri];
+        }
+    }
     return self.cachedRemoteUri ?: @"";
 }
 
 - (NSString *)callId
 {
+    if (self.coreCall != nullptr) {
+        const char *cid = sip_call_get_id(self.coreCall);
+        if (cid && strlen(cid) > 0) {
+            return [NSString stringWithUTF8String:cid];
+        }
+    }
     if (self.call != nullptr) {
         const char *cid = call_id(self.call);
         if (cid) {
@@ -2047,6 +2522,9 @@ static void ua_event_handler(enum bevent_ev ev, struct bevent *event, void *arg)
 
 - (BOOL)hasVideo
 {
+    if (self.coreCall != nullptr) {
+        return sip_call_has_video(self.coreCall) || self.callHasVideo;
+    }
     if (self.call != nullptr) {
         return call_has_video(self.call) || self.callHasVideo;
     }
@@ -2055,6 +2533,9 @@ static void ua_event_handler(enum bevent_ev ev, struct bevent *event, void *arg)
 
 - (BOOL)isOutgoing
 {
+    if (self.coreCall != nullptr) {
+        return sip_call_is_outgoing(self.coreCall);
+    }
     if (self.call != nullptr) {
         return call_is_outgoing(self.call);
     }
@@ -2063,6 +2544,9 @@ static void ua_event_handler(enum bevent_ev ev, struct bevent *event, void *arg)
 
 - (BOOL)isOnHold
 {
+    if (self.coreCall != nullptr) {
+        return sip_call_is_on_hold(self.coreCall) || self.callOnHold;
+    }
     if (self.call != nullptr) {
         return call_is_onhold(self.call) || self.callOnHold;
     }
@@ -2071,11 +2555,20 @@ static void ua_event_handler(enum bevent_ev ev, struct bevent *event, void *arg)
 
 - (BOOL)isClosed
 {
+    if (self.coreCall != nullptr) {
+        return sip_call_is_closed(self.coreCall) || _closed;
+    }
     return _closed;
 }
 
 - (uint32_t)durationSeconds
 {
+    if (self.coreCall != nullptr) {
+        uint32_t dur = sip_call_get_duration(self.coreCall);
+        if (dur > 0) {
+            return dur;
+        }
+    }
     if (self.call != nullptr) {
         uint32_t dur = call_duration(self.call);
         if (dur > 0) {
@@ -2103,6 +2596,11 @@ static void ua_event_handler(enum bevent_ev ev, struct bevent *event, void *arg)
 
 - (void)answerWithVideo:(BOOL)withVideo
 {
+    self.callHasVideo = withVideo;
+    if (self.coreCall != nullptr) {
+        sip_call_answer(self.coreCall, withVideo ? true : false);
+        return;
+    }
     performAsyncOnSipLoop(gActiveSipClient, ^{
         if (self.ua != nullptr && self.call != nullptr) {
             if (![gActiveSipClient prepareCallAudioSession]) {
@@ -2116,6 +2614,11 @@ static void ua_event_handler(enum bevent_ev ev, struct bevent *event, void *arg)
 
 - (void)hangup:(unsigned short)statusCode reason:(NSString *)reason
 {
+    self.closed = YES;
+    if (self.coreCall != nullptr) {
+        sip_call_hangup(self.coreCall, statusCode, reason.UTF8String ?: "");
+        return;
+    }
     NSString *reasonCopy = [reason copy];
     performAsyncOnSipLoop(gActiveSipClient, ^{
         if (self.ua != nullptr && self.call != nullptr) {
@@ -2129,6 +2632,9 @@ static void ua_event_handler(enum bevent_ev ev, struct bevent *event, void *arg)
 {
     BOOL nextHold = !self.isOnHold;
     (void)[self setHold:nextHold];
+    if (self.coreCall != nullptr) {
+        return;
+    }
     performAsyncOnSipLoop(gActiveSipClient, ^{
         if (self.ua != nullptr && self.call != nullptr && !nextHold) {
             (void)ua_hold_answer(self.ua, self.call, self.hasVideo ? VIDMODE_ON : VIDMODE_OFF);
@@ -2139,6 +2645,9 @@ static void ua_event_handler(enum bevent_ev ev, struct bevent *event, void *arg)
 - (int)setHold:(BOOL)hold
 {
     self.callOnHold = hold;
+    if (self.coreCall != nullptr) {
+        return sip_call_set_hold(self.coreCall, hold ? true : false);
+    }
     if (self.call == nullptr) {
         return EINVAL;
     }
@@ -2152,7 +2661,13 @@ static void ua_event_handler(enum bevent_ev ev, struct bevent *event, void *arg)
 
 - (int)sendDtmf:(NSString *)digits
 {
-    if (self.call == nullptr || digits.length == 0) {
+    if (digits.length == 0) {
+        return EINVAL;
+    }
+    if (self.coreCall != nullptr) {
+        return sip_call_send_dtmf(self.coreCall, digits.UTF8String ?: "");
+    }
+    if (self.call == nullptr) {
         return EINVAL;
     }
     NSString *digitsCopy = [digits copy];
@@ -2180,6 +2695,10 @@ static void ua_event_handler(enum bevent_ev ev, struct bevent *event, void *arg)
 
 - (void)requestKeyframe
 {
+    if (self.coreCall != nullptr) {
+        sip_call_request_keyframe(self.coreCall);
+        return;
+    }
     performAsyncOnSipLoop(gActiveSipClient, ^{
         if (self.call != nullptr) {
             struct video *vid = call_video(self.call);
@@ -2193,10 +2712,193 @@ static void ua_event_handler(enum bevent_ev ev, struct bevent *event, void *arg)
 @end
 
 // ============================================================================
+// MARK: - sip_abi Callbacks & Bridge
+// ============================================================================
+
+static void core_dispatch_to_main(void (*task)(void *arg), void *arg, void *user_data)
+{
+    if (!task) return;
+    if ([NSThread isMainThread]) {
+        task(arg);
+    } else {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            task(arg);
+        });
+    }
+}
+
+static void core_on_reg_state(sip_client_t *client, sip_reg_state_t state, int code, const char *reason, void *user_data)
+{
+    if (!user_data) return;
+    SipClient *sipClient = (__bridge SipClient *)user_data;
+    id<SipClientDelegate> delegate = sipClient.delegate;
+    switch (state) {
+        case SIP_REG_STATE_REGISTERING:
+            if ([delegate respondsToSelector:@selector(onWillRegister:)]) {
+                [delegate onWillRegister:sipClient];
+            }
+            break;
+        case SIP_REG_STATE_REGISTERED:
+            if ([delegate respondsToSelector:@selector(onDidRegister:)]) {
+                [delegate onDidRegister:sipClient];
+            }
+            break;
+        case SIP_REG_STATE_FAILED:
+            if ([delegate respondsToSelector:@selector(onFailedRegister:)]) {
+                [delegate onFailedRegister:sipClient];
+            }
+            break;
+        case SIP_REG_STATE_UNREGISTERED:
+            if ([delegate respondsToSelector:@selector(onWillUnRegister:)]) {
+                [delegate onWillUnRegister:sipClient];
+            }
+            break;
+    }
+}
+
+static void core_on_incoming_call(sip_client_t *client, sip_call_t *call, void *user_data)
+{
+    if (!user_data || !call) return;
+    SipClient *sipClient = (__bridge SipClient *)user_data;
+    SipCall *sipCall = (__bridge SipCall *)sip_call_get_user_data(call);
+    if (sipCall == nil) {
+        sipCall = [[SipCall alloc] init];
+        sipCall.coreCall = call;
+        const char *remoteUri = sip_call_get_remote_uri(call);
+        if (remoteUri) {
+            sipCall.cachedRemoteUri = [NSString stringWithUTF8String:remoteUri];
+        }
+        const char *cid = sip_call_get_id(call);
+        if (cid) {
+            sipCall.cachedCallId = [NSString stringWithUTF8String:cid];
+        }
+        sipCall.callHasVideo = sip_call_has_video(call);
+        sipCall.callIsOutgoing = sip_call_is_outgoing(call);
+        sip_call_set_user_data(call, (__bridge void *)sipCall);
+    }
+    id<SipClientDelegate> delegate = sipClient.delegate;
+    if ([delegate respondsToSelector:@selector(onCallIncoming:)]) {
+        [delegate onCallIncoming:sipCall];
+    }
+}
+
+static void core_on_call_state(sip_call_t *call, sip_call_state_t state, int code, const char *reason, void *user_data)
+{
+    if (!user_data || !call) return;
+    SipClient *sipClient = (__bridge SipClient *)user_data;
+    SipCall *sipCall = (__bridge SipCall *)sip_call_get_user_data(call);
+    if (sipCall == nil) {
+        sipCall = [[SipCall alloc] init];
+        sipCall.coreCall = call;
+        const char *remoteUri = sip_call_get_remote_uri(call);
+        if (remoteUri) {
+            sipCall.cachedRemoteUri = [NSString stringWithUTF8String:remoteUri];
+        }
+        const char *cid = sip_call_get_id(call);
+        if (cid) {
+            sipCall.cachedCallId = [NSString stringWithUTF8String:cid];
+        }
+        sipCall.callHasVideo = sip_call_has_video(call);
+        sipCall.callIsOutgoing = sip_call_is_outgoing(call);
+        sip_call_set_user_data(call, (__bridge void *)sipCall);
+    }
+    id<SipClientDelegate> delegate = sipClient.delegate;
+    switch (state) {
+        case SIP_CALL_STATE_INCOMING:
+            break;
+        case SIP_CALL_STATE_CONNECTING:
+            if ([delegate respondsToSelector:@selector(onCallProcess:)]) {
+                [delegate onCallProcess:sipCall];
+            }
+            break;
+        case SIP_CALL_STATE_RINGING:
+            if ([delegate respondsToSelector:@selector(onCallRinging:)]) {
+                [delegate onCallRinging:sipCall];
+            }
+            break;
+        case SIP_CALL_STATE_ESTABLISHED:
+            sipCall.establishedAt = [NSDate date];
+            if ([delegate respondsToSelector:@selector(onCallEstablished:)]) {
+                [delegate onCallEstablished:sipCall];
+            }
+            break;
+        case SIP_CALL_STATE_HOLD:
+            sipCall.callOnHold = sip_call_is_on_hold(call);
+            if ([delegate respondsToSelector:@selector(onCallHoldChanged:isOnHold:)]) {
+                [delegate onCallHoldChanged:sipCall isOnHold:sipCall.callOnHold];
+            }
+            break;
+        case SIP_CALL_STATE_CLOSED:
+            sipCall.closed = YES;
+            sipCall.cachedDuration = sip_call_get_duration(call);
+            if ([delegate respondsToSelector:@selector(onCallClosed:)]) {
+                [delegate onCallClosed:sipCall];
+            }
+            break;
+    }
+}
+
+static void core_on_call_media(sip_call_t *call, int width, int height, bool on_hold, bool is_muted, void *user_data)
+{
+    if (!user_data || !call) return;
+    SipClient *sipClient = (__bridge SipClient *)user_data;
+    SipCall *sipCall = (__bridge SipCall *)sip_call_get_user_data(call);
+    id<SipClientDelegate> delegate = sipClient.delegate;
+    if (sipCall != nil) {
+        sipCall.callOnHold = on_hold;
+        if (width > 0 && height > 0) {
+            if ([delegate respondsToSelector:@selector(onCallVideoSizeChanged:width:height:)]) {
+                [delegate onCallVideoSizeChanged:sipCall width:width height:height];
+            }
+        }
+        if ([delegate respondsToSelector:@selector(onCallHoldChanged:isOnHold:)]) {
+            [delegate onCallHoldChanged:sipCall isOnHold:on_hold];
+        }
+    }
+}
+
+static void core_on_dtmf_digit(sip_call_t *call, const char *digit, void *user_data)
+{
+    if (!user_data || !call) return;
+    SipClient *sipClient = (__bridge SipClient *)user_data;
+    SipCall *sipCall = (__bridge SipCall *)sip_call_get_user_data(call);
+    id<SipClientDelegate> delegate = sipClient.delegate;
+    NSString *dStr = digit ? [NSString stringWithUTF8String:digit] : @"";
+    if (sipCall != nil) {
+        if ([delegate respondsToSelector:@selector(onDtmfReceived:digit:)]) {
+            [delegate onDtmfReceived:sipCall digit:dStr];
+        }
+        if ([delegate respondsToSelector:@selector(onCallDtmfStart:)]) {
+            [delegate onCallDtmfStart:sipCall];
+        }
+        if ([delegate respondsToSelector:@selector(onCallDtmfEnd:)]) {
+            [delegate onCallDtmfEnd:sipCall];
+        }
+    }
+}
+
+static bool core_prepare_audio_session(sip_client_t *client, void *user_data)
+{
+    if (!user_data) return true;
+    SipClient *sipClient = (__bridge SipClient *)user_data;
+    return [sipClient prepareCallAudioSession] ? true : false;
+}
+
+static void core_release_audio_session(sip_client_t *client, void *user_data)
+{
+    if (!user_data) return;
+    SipClient *sipClient = (__bridge SipClient *)user_data;
+    [sipClient releaseCallAudioSessionIfIdle];
+}
+
+// ============================================================================
 // MARK: - SipClient Implementation
 // ============================================================================
 
 @implementation SipClient
+
+@synthesize localVideoEnabled = _localVideoEnabled;
+@synthesize microphoneMuted = _microphoneMuted;
 
 - (instancetype)initWithUsername:(NSString *)username domain:(NSString *)domain
 {
@@ -2211,8 +2913,76 @@ static void ua_event_handler(enum bevent_ev ev, struct bevent *event, void *arg)
         _cameraPosition = SipCameraPositionFront;
         _microphoneMuted = NO;
         _speakerEnabled = NO;
+
+        _captureDriver = [[IosVideoCaptureDriver alloc] initWithClient:self];
+        _remoteRendererDriver = [[IosVideoRendererDriver alloc] initWithVideoView:nil];
+        _localRendererDriver = [[IosVideoRendererDriver alloc] initWithVideoView:nil];
+        _codecDriver = [[IosVideoCodecDriver alloc] init];
+
+        sip_callbacks_t callbacks{};
+        callbacks.dispatch_to_main = core_dispatch_to_main;
+        callbacks.on_reg_state = core_on_reg_state;
+        callbacks.on_incoming_call = core_on_incoming_call;
+        callbacks.on_call_state = core_on_call_state;
+        callbacks.on_call_media = core_on_call_media;
+        callbacks.on_dtmf_digit = core_on_dtmf_digit;
+        callbacks.prepare_audio_session = core_prepare_audio_session;
+        callbacks.release_audio_session = core_release_audio_session;
+        _coreClient = sip_client_create(&callbacks, (__bridge void *)self);
+        [self registerNativeMediaDriversWithCore];
     }
     return self;
+}
+
+- (void)dealloc
+{
+    if (_coreClient != nullptr) {
+        sip_client_destroy(_coreClient);
+        _coreClient = nullptr;
+    }
+}
+
+- (void)setRemoteVideoView:(SipVideoView *)remoteVideoView
+{
+    _remoteVideoView = remoteVideoView;
+    _remoteRendererDriver.videoView = remoteVideoView;
+}
+
+- (void)setLocalVideoView:(SipVideoView *)localVideoView
+{
+    _localVideoView = localVideoView;
+    _localRendererDriver.videoView = localVideoView;
+}
+
+- (void)setCameraPosition:(SipCameraPosition)cameraPosition
+{
+    _cameraPosition = cameraPosition;
+    if (_coreClient != nullptr) {
+        sip_client_set_camera(_coreClient, cameraPosition == SipCameraPositionFront ? 0 : 1);
+    }
+    [_captureDriver setCamera:(cameraPosition == SipCameraPositionFront ? 0 : 1)];
+}
+
+- (void)registerNativeMediaDriversWithCore
+{
+    if (_coreClient == nullptr) return;
+
+    if (_codecDriver != nil) {
+        sip_video_codec_driver_t cCodec = [_codecDriver cDriver];
+        sip_client_set_video_codec_driver(_coreClient, &cCodec);
+    }
+    if (_captureDriver != nil) {
+        sip_video_capture_driver_t cCap = [_captureDriver cDriver];
+        sip_client_set_video_capture_driver(_coreClient, &cCap);
+    }
+    if (_remoteRendererDriver != nil) {
+        sip_video_renderer_driver_t cRem = [_remoteRendererDriver cDriver];
+        sip_client_set_remote_renderer(_coreClient, &cRem);
+    }
+    if (_localRendererDriver != nil) {
+        sip_video_renderer_driver_t cLoc = [_localRendererDriver cDriver];
+        sip_client_set_local_renderer(_coreClient, &cLoc);
+    }
 }
 
 - (NSString *)aor
@@ -2274,6 +3044,8 @@ static void ua_event_handler(enum bevent_ev ev, struct bevent *event, void *arg)
     if (self.mediaPluginsRegistered) {
         return;
     }
+
+    [self registerNativeMediaDriversWithCore];
 
     vidcodec_register(baresip_vidcodecl(), &gH264CodecMode1);
     vidcodec_register(baresip_vidcodecl(), &gH264CodecMode0);
@@ -2583,8 +3355,16 @@ static void ua_event_handler(enum bevent_ev ev, struct bevent *event, void *arg)
 
 - (int)registry
 {
+    if (_coreClient != nullptr) {
+        (void)sip_client_register(_coreClient,
+                                  self.username.UTF8String,
+                                  self.domain.UTF8String,
+                                  self.password.UTF8String ?: "",
+                                  self.transport.UTF8String ?: "udp",
+                                  self.port > 0 ? self.port : 5060);
+    }
     if (self.ua == nullptr) {
-        return EINVAL;
+        return (_coreClient != nullptr) ? 0 : EINVAL;
     }
     __block int rc = 0;
     performSyncOnSipLoop(self, ^{
@@ -2595,7 +3375,10 @@ static void ua_event_handler(enum bevent_ev ev, struct bevent *event, void *arg)
 
 - (void)unregister
 {
-    performSyncOnSipLoop(self, ^{
+    if (_coreClient != nullptr) {
+        sip_client_unregister(_coreClient);
+    }
+    performAsyncOnSipLoop(self, ^{
         if (self.ua != nullptr) {
             ua_unregister(self.ua);
         }
@@ -2604,6 +3387,9 @@ static void ua_event_handler(enum bevent_ev ev, struct bevent *event, void *arg)
 
 - (bool)isRegistered
 {
+    if (_coreClient != nullptr && sip_client_is_registered(_coreClient)) {
+        return true;
+    }
     return self.ua != nullptr && ua_isregistered(self.ua);
 }
 
@@ -2655,16 +3441,31 @@ static void ua_event_handler(enum bevent_ev ev, struct bevent *event, void *arg)
     SipCall *sipCall = getSipCall(call, self, remoteUri);
     sipCall.callHasVideo = withVideo;
     sipCall.callIsOutgoing = YES;
+
+    if (_coreClient != nullptr) {
+        sip_call_t *cCall = sip_call_make(_coreClient, dialUri.UTF8String, withVideo);
+        if (cCall != nullptr) {
+            sipCall.coreCall = cCall;
+            sip_call_set_user_data(cCall, (__bridge void *)sipCall);
+        }
+    }
+
     return sipCall;
 }
 
 - (void)setMuted:(BOOL)muted
 {
     _microphoneMuted = muted;
+    if (_coreClient != nullptr) {
+        sip_client_set_mic_muted(_coreClient, muted ? true : false);
+    }
     performAsyncOnSipLoop(self, ^{
         NSMutableDictionary<NSValue *, SipCall *> *cache = sipCallsCache();
         @synchronized (cache) {
             for (SipCall *sipCall in cache.allValues) {
+                if (sipCall.coreCall != nullptr) {
+                    sip_call_set_muted(sipCall.coreCall, muted ? true : false);
+                }
                 if (sipCall.call != nullptr) {
                     struct audio *au = call_audio(sipCall.call);
                     if (au != nullptr) {
@@ -2674,6 +3475,14 @@ static void ua_event_handler(enum bevent_ev ev, struct bevent *event, void *arg)
             }
         }
     });
+}
+
+- (BOOL)isMicrophoneMuted
+{
+    if (_coreClient != nullptr) {
+        return sip_client_is_mic_muted(_coreClient) || _microphoneMuted;
+    }
+    return _microphoneMuted;
 }
 
 - (void)setSpeakerphone:(BOOL)enabled
@@ -2693,6 +3502,14 @@ static void ua_event_handler(enum bevent_ev ev, struct bevent *event, void *arg)
     self.cameraPosition = (self.cameraPosition == SipCameraPositionFront)
         ? SipCameraPositionBack
         : SipCameraPositionFront;
+
+    if (_coreClient != nullptr) {
+        sip_client_switch_camera(_coreClient);
+    }
+    if (_captureDriver != nil) {
+        [_captureDriver switchCamera];
+    }
+
     const char *dev = (self.cameraPosition == SipCameraPositionBack) ? "back" : "front";
     NSString *nsDev = [NSString stringWithUTF8String:dev];
 
@@ -2723,9 +3540,21 @@ static void ua_event_handler(enum bevent_ev ev, struct bevent *event, void *arg)
 - (void)setLocalVideoEnabled:(BOOL)localVideoEnabled
 {
     _localVideoEnabled = localVideoEnabled;
+    if (_coreClient != nullptr) {
+        sip_client_set_local_video_enabled(_coreClient, localVideoEnabled ? true : false);
+    }
+    [_captureDriver setEnabled:localVideoEnabled];
     if (!localVideoEnabled && self.localVideoView != nil) {
         [self.localVideoView clearVideo];
     }
+}
+
+- (BOOL)isLocalVideoEnabled
+{
+    if (_coreClient != nullptr) {
+        return sip_client_is_local_video_enabled(_coreClient);
+    }
+    return _localVideoEnabled;
 }
 
 - (void)startLocalVideoPreview
@@ -2735,6 +3564,12 @@ static void ua_event_handler(enum bevent_ev ev, struct bevent *event, void *arg)
     }
     if (gActiveSipClient == nil) {
         gActiveSipClient = self;
+    }
+    if (_coreClient != nullptr) {
+        sip_client_start_local_preview(_coreClient);
+    }
+    if (_captureDriver != nil) {
+        [_captureDriver startWithWidth:640 height:480 fps:30];
     }
     SipAVCaptureHelper *helper = [[SipAVCaptureHelper alloc]
         initWithOwner:NULL
@@ -2748,6 +3583,12 @@ static void ua_event_handler(enum bevent_ev ev, struct bevent *event, void *arg)
 
 - (void)stopLocalVideoPreview
 {
+    if (_coreClient != nullptr) {
+        sip_client_stop_local_preview(_coreClient);
+    }
+    if (_captureDriver != nil) {
+        [_captureDriver stop];
+    }
     SipAVCaptureHelper *helper = self.localPreviewHelper;
     self.localPreviewHelper = nil;
     [helper stop];
@@ -2755,6 +3596,9 @@ static void ua_event_handler(enum bevent_ev ev, struct bevent *event, void *arg)
 
 - (BOOL)isLocalVideoPreviewActive
 {
+    if (_coreClient != nullptr && sip_client_is_local_preview_active(_coreClient)) {
+        return YES;
+    }
     return self.localPreviewHelper != nil;
 }
 
