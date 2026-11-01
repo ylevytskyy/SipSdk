@@ -112,6 +112,19 @@ typedef NS_ENUM(NSInteger, SipCameraPosition) {
 - (BOOL)hasVideoSourceRegistered;
 - (BOOL)hasVideoDisplayRegistered;
 + (BOOL)testH264RoundTripWithWidth:(int)width height:(int)height;
+/// Test hook: drops one RTP packet mid-stream. Returns YES when the decoder
+/// reports the loss (so Baresip requests a keyframe), hides frames until the
+/// next IDR, and decodes again after it.
++ (BOOL)testH264PacketLossRecoveryWithWidth:(int)width height:(int)height;
+/// Test hook: sends one synthetic H.264 video frame packetized as RFC 6184 RTP
+/// over UDP to a target loopback port.
++ (BOOL)sendH264TestFrameToPort:(uint16_t)port
+                           ssrc:(uint32_t)ssrc
+                            seq:(uint16_t *)seq
+                             ts:(uint32_t)ts
+                          width:(int)width
+                         height:(int)height
+                            idr:(BOOL)idr;
 @end
 
 /// SIP Call

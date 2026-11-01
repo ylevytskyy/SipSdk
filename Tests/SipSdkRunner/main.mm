@@ -31,6 +31,7 @@ static void check(BOOL condition, NSString *name, NSString *detail)
 // real libre -> baresip -> SipClient response path end to end.
 @interface LoopbackRegistrar : NSObject
 @property (nonatomic) int sockFd;
+@property (nonatomic) uint16_t port;
 @property (nonatomic) BOOL running;
 @end
 
@@ -39,6 +40,7 @@ static void check(BOOL condition, NSString *name, NSString *detail)
 - (instancetype)initWithPort:(uint16_t)port
 {
     self = [super init];
+    self.port = port;
     self.sockFd = socket(AF_INET, SOCK_DGRAM, 0);
     int reuse = 1;
     setsockopt(self.sockFd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
@@ -185,6 +187,153 @@ static NSString *sipHeader(NSString *msg, NSString *name)
 }
 @end
 
+@interface LoopbackReinvitePeer : LoopbackRegistrar
+@property (atomic) BOOL acknowledged;
+@property (atomic) uint16_t clientVideoPort;
+@property (atomic) BOOL reinviteAnswered;
+@property (nonatomic) NSString *lastCallId;
+@property (nonatomic) NSString *clientContact;
+@property (nonatomic) NSString *clientFrom;
+@property (nonatomic) NSString *peerTo;
+@property (nonatomic) struct sockaddr_in clientSockAddr;
+@property (nonatomic) socklen_t clientSockLen;
+- (void)sendReinviteRecvonly;
+@end
+
+@implementation LoopbackReinvitePeer
+- (void)serveLoop
+{
+    @autoreleasepool {
+        char buf[8192];
+        while (self.running) {
+            struct sockaddr_in peer = {0};
+            socklen_t peerLen = sizeof(peer);
+            ssize_t n = recvfrom(self.sockFd, buf, sizeof(buf), 0,
+                                 (struct sockaddr *)&peer, &peerLen);
+            if (n <= 0) break;
+            NSString *msg = [[NSString alloc] initWithBytes:buf length:(NSUInteger)n
+                                                   encoding:NSUTF8StringEncoding];
+            if ([msg hasPrefix:@"ACK "]) {
+                self.acknowledged = YES;
+                continue;
+            }
+            if ([msg hasPrefix:@"SIP/2.0 200 OK"]) {
+                NSString *cseq = sipHeader(msg, @"CSeq");
+                if ([cseq containsString:@"100 INVITE"]) {
+                    self.reinviteAnswered = YES;
+                    NSString *ack = [NSString stringWithFormat:
+                        @"ACK %@ SIP/2.0\r\n"
+                        "Via: SIP/2.0/UDP 127.0.0.1:%u;branch=z9hG4bK-ack-reinvite;rport\r\n"
+                        "Max-Forwards: 70\r\n"
+                        "From: %@\r\n"
+                        "To: %@\r\n"
+                        "Call-ID: %@\r\n"
+                        "CSeq: 100 ACK\r\n"
+                        "Content-Length: 0\r\n\r\n",
+                        self.clientContact ?: @"sip:alice@127.0.0.1",
+                        self.port,
+                        self.peerTo,
+                        self.clientFrom,
+                        self.lastCallId];
+                    sendto(self.sockFd, ack.UTF8String,
+                           [ack lengthOfBytesUsingEncoding:NSUTF8StringEncoding],
+                           0, (struct sockaddr *)&peer, peerLen);
+                }
+                continue;
+            }
+            BOOL invite = [msg hasPrefix:@"INVITE "];
+            if (!invite && ![msg hasPrefix:@"BYE "]) continue;
+
+            if (invite) {
+                self.clientSockAddr = peer;
+                self.clientSockLen = peerLen;
+                self.lastCallId = sipHeader(msg, @"Call-ID");
+                self.clientContact = sipHeader(msg, @"Contact");
+                if ([self.clientContact hasPrefix:@"<"] && [self.clientContact hasSuffix:@">"]) {
+                    self.clientContact = [self.clientContact substringWithRange:NSMakeRange(1, self.clientContact.length - 2)];
+                }
+                self.clientFrom = sipHeader(msg, @"From");
+
+                NSRegularExpression *vRegex = [NSRegularExpression
+                    regularExpressionWithPattern:@"m=video (\\d+) RTP/AVP"
+                    options:NSRegularExpressionCaseInsensitive error:nil];
+                NSTextCheckingResult *vMatch = [vRegex firstMatchInString:msg options:0 range:NSMakeRange(0, msg.length)];
+                if (vMatch) {
+                    self.clientVideoPort = (uint16_t)[[msg substringWithRange:[vMatch rangeAtIndex:1]] intValue];
+                }
+            }
+
+            NSMutableString *body = [NSMutableString string];
+            if (invite) {
+                [body appendString:@"v=0\r\no=peer 1 1 IN IP4 127.0.0.1\r\ns=Answer test\r\n"
+                                    "c=IN IP4 127.0.0.1\r\nt=0 0\r\n"
+                                    "m=audio 16000 RTP/AVP 0\r\na=rtpmap:0 PCMU/8000\r\na=sendrecv\r\n"];
+                NSRegularExpression *regex = [NSRegularExpression
+                    regularExpressionWithPattern:@"a=rtpmap:(\\d+) H264/90000"
+                    options:NSRegularExpressionCaseInsensitive error:nil];
+                NSTextCheckingResult *match = [regex firstMatchInString:msg options:0
+                                                                 range:NSMakeRange(0, msg.length)];
+                if (match) {
+                    NSString *pt = [msg substringWithRange:[match rangeAtIndex:1]];
+                    [body appendFormat:@"m=video 16002 RTP/AVP %@\r\na=rtpmap:%@ H264/90000\r\n"
+                                        "a=fmtp:%@ packetization-mode=1;profile-level-id=42e01f\r\na=sendrecv\r\n",
+                                        pt, pt, pt];
+                }
+            }
+            NSString *to = sipHeader(msg, @"To");
+            if (![to containsString:@";tag="]) to = [to stringByAppendingString:@";tag=reinvite-peer"];
+            self.peerTo = to;
+            NSString *response = [NSString stringWithFormat:
+                @"SIP/2.0 200 OK\r\nVia: %@\r\nFrom: %@\r\nTo: %@\r\nCall-ID: %@\r\nCSeq: %@\r\n"
+                 "Contact: <sip:peer@127.0.0.1:%u>\r\nContent-Type: application/sdp\r\n"
+                 "Content-Length: %lu\r\n\r\n%@",
+                sipHeader(msg, @"Via"), sipHeader(msg, @"From"), to,
+                sipHeader(msg, @"Call-ID"), sipHeader(msg, @"CSeq"),
+                self.port,
+                (unsigned long)[body lengthOfBytesUsingEncoding:NSUTF8StringEncoding], body];
+            sendto(self.sockFd, response.UTF8String,
+                   [response lengthOfBytesUsingEncoding:NSUTF8StringEncoding],
+                   0, (struct sockaddr *)&peer, peerLen);
+        }
+    }
+}
+
+- (void)sendReinviteRecvonly
+{
+    NSString *sdp = [NSString stringWithFormat:
+        @"v=0\r\no=peer 1 2 IN IP4 127.0.0.1\r\ns=Reinvite recvonly test\r\n"
+        "c=IN IP4 127.0.0.1\r\nt=0 0\r\n"
+        "m=audio 16000 RTP/AVP 0\r\na=rtpmap:0 PCMU/8000\r\na=sendrecv\r\n"
+        "m=video 16002 RTP/AVP 96\r\na=rtpmap:96 H264/90000\r\n"
+        "a=fmtp:96 packetization-mode=1;profile-level-id=42e01f\r\n"
+        "a=recvonly\r\n"];
+
+    NSString *reinvite = [NSString stringWithFormat:
+        @"INVITE %@ SIP/2.0\r\n"
+        "Via: SIP/2.0/UDP 127.0.0.1:%u;branch=z9hG4bK-reinvite-100;rport\r\n"
+        "Max-Forwards: 70\r\n"
+        "From: %@\r\n"
+        "To: %@\r\n"
+        "Call-ID: %@\r\n"
+        "CSeq: 100 INVITE\r\n"
+        "Contact: <sip:peer@127.0.0.1:%u>\r\n"
+        "Content-Type: application/sdp\r\n"
+        "Content-Length: %lu\r\n\r\n%@",
+        self.clientContact ?: @"sip:alice@127.0.0.1",
+        self.port,
+        self.peerTo,
+        self.clientFrom,
+        self.lastCallId,
+        self.port,
+        (unsigned long)[sdp lengthOfBytesUsingEncoding:NSUTF8StringEncoding],
+        sdp];
+
+    sendto(self.sockFd, reinvite.UTF8String,
+           [reinvite lengthOfBytesUsingEncoding:NSUTF8StringEncoding],
+           0, (struct sockaddr *)&_clientSockAddr, _clientSockLen);
+}
+@end
+
 @interface AnswerProbe : NSObject <SipClientDelegate>
 @property (nonatomic) BOOL established;
 @property (nonatomic) BOOL closed;
@@ -222,6 +371,84 @@ static void testAnsweredCall(SipClient *client, BOOL withVideo)
            probe.established, probe.closed, peer.acknowledged]);
     [call hangup:0 reason:@"Test complete"];
     NSDate *closeDeadline = [NSDate dateWithTimeIntervalSinceNow:2];
+    while (!probe.closed && closeDeadline.timeIntervalSinceNow > 0) {
+        [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];
+    }
+    [peer stop];
+    client.delegate = nil;
+}
+
+static void testReinviteVideoCall(SipClient *client)
+{
+    LoopbackReinvitePeer *peer = [[LoopbackReinvitePeer alloc] initWithPort:15098];
+    check(peer.isBound, @"Re-INVITE loopback peer binds port 15098", @"15098");
+    if (!peer.isBound) return;
+    [peer start];
+
+    AnswerProbe *probe = [AnswerProbe new];
+    client.delegate = probe;
+    SipVideoView *remoteView = [[SipVideoView alloc] initWithFrame:CGRectMake(0, 0, 320, 240)];
+    client.remoteVideoView = remoteView;
+
+    SipCall *call = [client makeCall:@"sip:peer@127.0.0.1:15098" withVideo:YES];
+    NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:5.0];
+    while (!probe.closed && !probe.established && deadline.timeIntervalSinceNow > 0) {
+        [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];
+    }
+    check(call != nil && probe.established && !probe.closed && peer.acknowledged && peer.clientVideoPort > 0,
+          @"Video call establishes and client advertises video port",
+          [NSString stringWithFormat:@"est=%d port=%u", probe.established, peer.clientVideoPort]);
+
+    // Send 2 video frames to the client before re-INVITE
+    uint16_t seq = 1;
+    uint32_t ts = 90000;
+    uint32_t ssrc = 0x11223344;
+    BOOL sent1 = [SipClient sendH264TestFrameToPort:peer.clientVideoPort ssrc:ssrc seq:&seq ts:ts width:640 height:480 idr:YES];
+    ts += 3000;
+    BOOL sent2 = [SipClient sendH264TestFrameToPort:peer.clientVideoPort ssrc:ssrc seq:&seq ts:ts width:640 height:480 idr:NO];
+    check(sent1 && sent2, @"Sent test H.264 video frames before re-INVITE", @"");
+
+    // Wait for initial frames before re-INVITE to fully render
+    NSDate *renderDeadline1 = [NSDate dateWithTimeIntervalSinceNow:1.5];
+    while (remoteView.renderedFrameCount < 2 && renderDeadline1.timeIntervalSinceNow > 0) {
+        [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];
+    }
+    NSUInteger framesBefore = remoteView.renderedFrameCount;
+    check(framesBefore >= 2, @"Remote video view receives and renders frames before re-INVITE",
+          [NSString stringWithFormat:@"count=%lu", (unsigned long)framesBefore]);
+
+    // Peer sends mid-call re-INVITE with a=recvonly (simulating Linphone / Asterisk mid-call re-INVITE)
+    [peer sendReinviteRecvonly];
+    NSDate *reinviteDeadline = [NSDate dateWithTimeIntervalSinceNow:2.0];
+    while (!peer.reinviteAnswered && reinviteDeadline.timeIntervalSinceNow > 0) {
+        [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];
+    }
+    check(peer.reinviteAnswered, @"Client answers mid-call re-INVITE with a=recvonly", @"200 OK");
+
+    // Allow re-INVITE transaction and media update to fully take effect
+    NSDate *settleDeadline = [NSDate dateWithTimeIntervalSinceNow:0.3];
+    while (settleDeadline.timeIntervalSinceNow > 0) {
+        [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];
+    }
+    NSUInteger framesAtReinvite = remoteView.renderedFrameCount;
+
+    // Send 2 more video frames AFTER re-INVITE (like Linphone streaming video through Asterisk)
+    ts += 3000;
+    [SipClient sendH264TestFrameToPort:peer.clientVideoPort ssrc:ssrc seq:&seq ts:ts width:640 height:480 idr:YES];
+    ts += 3000;
+    [SipClient sendH264TestFrameToPort:peer.clientVideoPort ssrc:ssrc seq:&seq ts:ts width:640 height:480 idr:NO];
+
+    NSDate *renderDeadline2 = [NSDate dateWithTimeIntervalSinceNow:1.5];
+    while (remoteView.renderedFrameCount == framesAtReinvite && renderDeadline2.timeIntervalSinceNow > 0) {
+        [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];
+    }
+    NSUInteger framesAfter = remoteView.renderedFrameCount;
+    check(framesAfter > framesAtReinvite,
+          @"Remote video view continues to render video frames after mid-call re-INVITE (no freeze)",
+          [NSString stringWithFormat:@"atReinvite=%lu after=%lu", (unsigned long)framesAtReinvite, (unsigned long)framesAfter]);
+
+    [call hangup:0 reason:@"Test complete"];
+    NSDate *closeDeadline = [NSDate dateWithTimeIntervalSinceNow:2.0];
     while (!probe.closed && closeDeadline.timeIntervalSinceNow > 0) {
         [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];
     }
@@ -318,11 +545,18 @@ int main(int argc, char *argv[])
 
         testAnsweredCall(client, NO);
         testAnsweredCall(client, YES);
+        testReinviteVideoCall(client);
 
         // 4. Test VideoToolbox H.264 encode -> RFC 6184 RTP packetize -> depacketize -> decode round-trip
         BOOL h264Ok = [SipClient testH264RoundTripWithWidth:640 height:480];
         check(h264Ok,
               @"VideoToolbox H.264 encoder + RFC 6184 RTP packetizer/depacketizer + decoder round-trip reconstructs 640x480 YUV420P frame",
+              @"640x480");
+
+        // 4b. Packet loss in the remote H.264 stream must not freeze video forever
+        BOOL lossOk = [SipClient testH264PacketLossRecoveryWithWidth:640 height:480];
+        check(lossOk,
+              @"H.264 decoder reports RTP packet loss, hides broken frames, and recovers on next IDR",
               @"640x480");
 
         // 5. Test audio & video device controls on SipClient

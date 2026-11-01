@@ -371,6 +371,18 @@ struct viddec_state {
     unsigned decoded_w;
     unsigned decoded_h;
     bool has_decoded_frame;
+    // Packet-loss recovery. A lost RTP packet breaks the H.264 reference
+    // chain; VideoToolbox then shows a frozen picture until the next IDR.
+    // Peers like Linphone only send an IDR when asked (RTCP PLI/FIR), and
+    // Baresip asks only when dech returns an error.
+    bool have_seq;
+    uint16_t last_seq;
+    bool have_au_ts;
+    uint32_t au_ts;
+    bool au_corrupt;
+    bool need_idr;
+    bool decode_failed;
+    uint64_t last_picup_ms;
 };
 
 static void sendRfc6184Nal(struct videnc_state *ves,
@@ -717,12 +729,13 @@ static void vtDecompressionOutputCallback(void *decompressionOutputRefCon,
                                           CMTime presentationTimeStamp,
                                           CMTime presentationDuration)
 {
-    if (status != noErr || !imageBuffer) {
-        return;
-    }
-
     auto *vds = static_cast<struct viddec_state *>(decompressionOutputRefCon);
     if (!vds) {
+        return;
+    }
+    if (status != noErr || !imageBuffer) {
+        std::lock_guard<std::mutex> lock(vds->decode_mutex);
+        vds->decode_failed = true;
         return;
     }
 
@@ -823,6 +836,14 @@ static int h264_dec_update(struct viddec_state **vdsp,
         vds->decoded_w = 0;
         vds->decoded_h = 0;
         vds->has_decoded_frame = false;
+        vds->have_seq = false;
+        vds->last_seq = 0;
+        vds->have_au_ts = false;
+        vds->au_ts = 0;
+        vds->au_corrupt = false;
+        vds->need_idr = true; // nothing decodes before the first IDR
+        vds->decode_failed = false;
+        vds->last_picup_ms = 0;
         *vdsp = vds;
     }
     return 0;
@@ -935,6 +956,29 @@ static int h264_dec_decode(struct viddec_state *vds,
         return 0;
     }
 
+    if (pkt->hdr) {
+        // A new RTP timestamp while an access unit is still open means the
+        // marker packet of the previous frame was lost.
+        if (vds->have_au_ts && pkt->hdr->ts != vds->au_ts &&
+            (!vds->au_buffer.empty() || vds->fu_active)) {
+            vds->au_buffer.clear();
+            vds->au_is_idr = false;
+            vds->fu_buffer.clear();
+            vds->fu_active = false;
+            vds->need_idr = true;
+        }
+        vds->au_ts = pkt->hdr->ts;
+        vds->have_au_ts = true;
+
+        if (vds->have_seq && pkt->hdr->seq != (uint16_t)(vds->last_seq + 1)) {
+            vds->au_corrupt = true;
+            vds->fu_buffer.clear();
+            vds->fu_active = false;
+        }
+        vds->last_seq = pkt->hdr->seq;
+        vds->have_seq = true;
+    }
+
     uint8_t nalType = buf[0] & 0x1F;
     if (nalType >= 1 && nalType <= 23) {
         appendNalToAccessUnit(vds, buf, len);
@@ -964,6 +1008,8 @@ static int h264_dec_decode(struct viddec_state *vds,
             vds->fu_active = true;
         } else if (vds->fu_active) {
             vds->fu_buffer.insert(vds->fu_buffer.end(), buf + 2, buf + len);
+        } else {
+            vds->au_corrupt = true; // middle/end fragment without its start
         }
 
         if (endBit && vds->fu_active) {
@@ -978,12 +1024,35 @@ static int h264_dec_decode(struct viddec_state *vds,
         return 0;
     }
 
-    if (vds->au_buffer.empty()) {
+    bool corrupt = vds->au_corrupt;
+    vds->au_corrupt = false;
+    if (corrupt) {
+        vds->need_idr = true;
+    }
+
+    if (vds->au_buffer.empty() && !vds->need_idr) {
         return 0;
     }
 
     pkt->intra = vds->au_is_idr;
 
+    if (vds->au_is_idr && !corrupt) {
+        vds->need_idr = false;
+    }
+    if (vds->need_idr) {
+        // Drop frames that reference missing data. Return an error so Baresip
+        // sends RTCP PLI/FIR; limit it to one request per 500 ms.
+        vds->au_buffer.clear();
+        vds->au_is_idr = false;
+        uint64_t now = tmr_jiffies();
+        if (vds->last_picup_ms == 0 || now - vds->last_picup_ms >= 500) {
+            vds->last_picup_ms = now;
+            return EPROTO;
+        }
+        return 0;
+    }
+
+    int result = 0;
     if (ensureDecoderSession(vds) == 0) {
         CMBlockBufferRef blockBuffer = nullptr;
         size_t auSize = vds->au_buffer.size();
@@ -1012,9 +1081,13 @@ static int h264_dec_decode(struct viddec_state *vds,
                 &sampleSize,
                 &sampleBuffer);
             if (status == noErr && sampleBuffer) {
-                vds->has_decoded_frame = false;
+                {
+                    std::lock_guard<std::mutex> lock(vds->decode_mutex);
+                    vds->has_decoded_frame = false;
+                    vds->decode_failed = false;
+                }
                 VTDecodeInfoFlags flagOut = 0;
-                VTDecompressionSessionDecodeFrame(
+                OSStatus decStatus = VTDecompressionSessionDecodeFrame(
                     vds->session,
                     sampleBuffer,
                     0,
@@ -1024,7 +1097,11 @@ static int h264_dec_decode(struct viddec_state *vds,
                 CFRelease(sampleBuffer);
 
                 std::lock_guard<std::mutex> lock(vds->decode_mutex);
-                if (vds->has_decoded_frame && vds->decoded_w > 0 && vds->decoded_h > 0) {
+                if (decStatus != noErr || vds->decode_failed) {
+                    vds->need_idr = true;
+                    vds->last_picup_ms = tmr_jiffies();
+                    result = EPROTO;
+                } else if (vds->has_decoded_frame && vds->decoded_w > 0 && vds->decoded_h > 0) {
                     struct vidsz sz = { vds->decoded_w, vds->decoded_h };
                     vidframe_init_buf(frame, VID_FMT_YUV420P, &sz, vds->decoded_yuv.data());
                 }
@@ -1035,7 +1112,7 @@ static int h264_dec_decode(struct viddec_state *vds,
 
     vds->au_buffer.clear();
     vds->au_is_idr = false;
-    return 0;
+    return result;
 }
 
 static struct vidcodec gH264CodecMode1 = {
@@ -1653,6 +1730,55 @@ static void invalidateSipCallsForClient(SipClient *sipSdk)
     }
 }
 
+// Internal layout matching libre's struct sdp_media (src/sdp/sdp.h)
+struct sdp_media_internal {
+    struct le le;
+    struct list lfmtl;
+    struct list rfmtl;
+    struct list lattrl;
+    struct list rattrl;
+    struct sa laddr;
+    struct sa raddr;
+    struct sa laddr_rtcp;
+    struct sa raddr_rtcp;
+    int32_t lbwv[SDP_BANDWIDTH_MAX];
+    int32_t rbwv[SDP_BANDWIDTH_MAX];
+    char *name;
+    char *proto;
+    char *protov[8];
+    char *uproto;
+    sdp_media_enc_h *ench;
+    void *arg;
+    enum sdp_dir ldir;
+    enum sdp_dir rdir;
+    bool fmt_ignore;
+    bool disabled;
+    int dynpt;
+};
+
+static void preserveVideoRxAndDisplay(struct call *call, SipCall *sipCall)
+{
+    if (call == nullptr || sipCall == nil || !sipCall.callHasVideo) {
+        return;
+    }
+    struct video *vid = call_video(call);
+    if (!vid) return;
+    struct stream *strm = video_strm(vid);
+    if (!strm) return;
+    struct sdp_media *m = stream_sdpmedia(strm);
+    if (!m || sdp_media_disabled(m)) return;
+
+    // Verify struct layout matches libre's internal sdp_media before writing
+    auto *im = reinterpret_cast<struct sdp_media_internal *>(m);
+    if (im->ldir == sdp_media_ldir(m) && im->rdir == sdp_media_rdir(m)) {
+        im->rdir = SDP_SENDRECV;
+    }
+
+    (void)stream_enable_rx(strm, true);
+    (void)video_start_display(vid, call_peeruri(call));
+    video_req_keyframe(vid);
+}
+
 static void ua_event_handler(enum bevent_ev ev, struct bevent *event, void *arg)
 {
     SipClient *sipSdk = (__bridge SipClient *)arg;
@@ -1833,6 +1959,37 @@ static void ua_event_handler(enum bevent_ev ev, struct bevent *event, void *arg)
                     [delegate onCallDtmfEnd:sipCall];
                 }
             });
+            break;
+        }
+
+        case BEVENT_CALL_REMOTE_SDP: {
+            // Emitted right before call_update_media(call).
+            // When remote answers an offer with recvonly, ensure rdir is restored
+            // so call_update_media doesn't disable video RX or tear down vidisp.
+            if (call != nullptr && [textParam isEqualToString:@"answer"] && sipCall.callHasVideo) {
+                struct video *vid = call_video(call);
+                struct stream *strm = vid ? video_strm(vid) : nullptr;
+                struct sdp_media *m = strm ? stream_sdpmedia(strm) : nullptr;
+                if (m && !sdp_media_disabled(m)) {
+                    auto *im = reinterpret_cast<struct sdp_media_internal *>(m);
+                    if (im->ldir == sdp_media_ldir(m) && im->rdir == sdp_media_rdir(m)) {
+                        im->rdir = SDP_SENDRECV;
+                    }
+                }
+            }
+            break;
+        }
+
+        case BEVENT_CALL_LOCAL_SDP: {
+            // Emitted right after sdp_encode encodes the local SDP.
+            // When answering an in-dialog re-INVITE (e.g. from Asterisk PBX or peer
+            // offering recvonly), sdp_encode has already written the RFC 3264 compliant
+            // answer ("a=sendonly") into the response.
+            // Now ensure video RX and vidisp display are restored and a keyframe requested
+            // so incoming video RTP packets continue to be received and rendered without freeze.
+            if (call != nullptr) {
+                preserveVideoRxAndDisplay(call, sipCall);
+            }
             break;
         }
 
@@ -2731,6 +2888,157 @@ static int roundTripPacketHandler(bool marker,
     mem_deref(vds);
     mem_deref(ves);
     return ok;
+}
+
++ (BOOL)testH264PacketLossRecoveryWithWidth:(int)width height:(int)height
+{
+    struct videnc_param encPrm = { .bitrate = 512000, .pktsize = 1200, .fps = 30.0, .max_fs = 0 };
+    struct videnc_state *ves = nullptr;
+    if (h264_enc_update(&ves, &gH264CodecMode1, &encPrm, gH264CodecMode1.fmtp, roundTripPacketHandler, nullptr) != 0 || !ves) {
+        return NO;
+    }
+    struct viddec_state *vds = nullptr;
+    if (h264_dec_update(&vds, &gH264CodecMode1, gH264CodecMode1.fmtp, nullptr) != 0 || !vds) {
+        mem_deref(ves);
+        return NO;
+    }
+
+    struct vidsz sz = { (unsigned)width, (unsigned)height };
+    std::vector<uint8_t> yuvBuf(vidframe_size(VID_FMT_YUV420P, &sz), 0);
+    uint8_t *yPlane = yuvBuf.data();
+    uint8_t *uPlane = yPlane + (size_t)width * (size_t)height;
+    uint8_t *vPlane = uPlane + (size_t)(width / 2) * (size_t)(height / 2);
+
+    // Frames: 0 = IDR, 1..5 = P, 6 = forced IDR. Packet loss hits frame 2.
+    const int frameCount = 7;
+    const int lossFrame = 2;
+    const int idrFrame = 6;
+    std::vector<std::vector<H264RoundTripPacket>> frames(frameCount);
+    for (int i = 0; i < frameCount; i++) {
+        fillSyntheticYUV420Pattern(yPlane, uPlane, vPlane, width, height, i + 1);
+        struct vidframe srcFrame;
+        vidframe_init_buf(&srcFrame, VID_FMT_YUV420P, &sz, yuvBuf.data());
+        gRoundTripPackets = &frames[i];
+        int err = h264_enc_encode(ves, i == idrFrame, &srcFrame, 1000000ULL + (uint64_t)i * 33333ULL);
+        gRoundTripPackets = nullptr;
+        if (err != 0 || frames[i].empty()) {
+            mem_deref(vds);
+            mem_deref(ves);
+            return NO;
+        }
+    }
+
+    BOOL ok = YES;
+    uint16_t seq = 1;
+    for (int i = 0; i < frameCount; i++) {
+        struct vidframe dstFrame;
+        memset(&dstFrame, 0, sizeof(dstFrame));
+        int markerErr = 0;
+        for (size_t p = 0; p < frames[i].size(); p++) {
+            const auto &rtpPkt = frames[i][p];
+            uint16_t pktSeq = seq++;
+            if (i == lossFrame && p == 0) {
+                continue; // lost on the network
+            }
+            struct mbuf *mb = mbuf_alloc(rtpPkt.payload.size());
+            if (!mb) {
+                ok = NO;
+                continue;
+            }
+            mbuf_write_mem(mb, rtpPkt.payload.data(), rtpPkt.payload.size());
+            mb->pos = 0;
+            struct rtp_header hdr;
+            memset(&hdr, 0, sizeof(hdr));
+            hdr.m = rtpPkt.marker;
+            hdr.seq = pktSeq;
+            hdr.ts = (uint32_t)rtpPkt.rtp_ts;
+            struct viddec_packet decPkt = { .intra = false, .hdr = &hdr, .timestamp = 1000000ULL, .mb = mb };
+            int err = h264_dec_decode(vds, &dstFrame, &decPkt);
+            if (rtpPkt.marker) {
+                markerErr = err;
+            }
+            mem_deref(mb);
+        }
+        BOOL shown = vidframe_isvalid(&dstFrame);
+        if (i < lossFrame && (!shown || markerErr != 0)) ok = NO;
+        if (i == lossFrame && markerErr == 0) ok = NO;   // loss must be reported
+        if (i >= lossFrame && i < idrFrame && shown) ok = NO; // no broken frames
+        if (i == idrFrame && (!shown || markerErr != 0)) ok = NO; // recovers
+        NSLog(@"[h264-loss-test] frame %d packets=%zu err=%d shown=%d", i, frames[i].size(), markerErr, shown);
+    }
+
+    mem_deref(vds);
+    mem_deref(ves);
+    return ok;
+}
+
++ (BOOL)sendH264TestFrameToPort:(uint16_t)port
+                           ssrc:(uint32_t)ssrc
+                            seq:(uint16_t *)seq
+                             ts:(uint32_t)ts
+                          width:(int)width
+                         height:(int)height
+                            idr:(BOOL)idr
+{
+    if (port == 0 || seq == nullptr) return NO;
+
+    struct videnc_param encPrm = { .bitrate = 512000, .pktsize = 1200, .fps = 30.0, .max_fs = 0 };
+    struct videnc_state *ves = nullptr;
+    if (h264_enc_update(&ves, &gH264CodecMode1, &encPrm, gH264CodecMode1.fmtp, roundTripPacketHandler, nullptr) != 0 || !ves) {
+        return NO;
+    }
+
+    struct vidsz sz = { (unsigned)width, (unsigned)height };
+    std::vector<uint8_t> yuvBuf(vidframe_size(VID_FMT_YUV420P, &sz), 0);
+    uint8_t *yPlane = yuvBuf.data();
+    uint8_t *uPlane = yPlane + (size_t)width * (size_t)height;
+    uint8_t *vPlane = uPlane + (size_t)(width / 2) * (size_t)(height / 2);
+    fillSyntheticYUV420Pattern(yPlane, uPlane, vPlane, width, height, (int)(ts & 0xff));
+
+    struct vidframe srcFrame;
+    vidframe_init_buf(&srcFrame, VID_FMT_YUV420P, &sz, yuvBuf.data());
+
+    std::vector<H264RoundTripPacket> pkts;
+    gRoundTripPackets = &pkts;
+    int err = h264_enc_encode(ves, idr, &srcFrame, (uint64_t)ts);
+    gRoundTripPackets = nullptr;
+    mem_deref(ves);
+
+    if (err != 0 || pkts.empty()) {
+        return NO;
+    }
+
+    int sock = socket(AF_INET, SOCK_DGRAM, 0);
+    if (sock < 0) return NO;
+
+    struct sockaddr_in dst = {0};
+    dst.sin_family = AF_INET;
+    dst.sin_port = htons(port);
+    dst.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+
+    for (const auto &p : pkts) {
+        uint8_t rtpPkt[1500];
+        if (12 + p.payload.size() > sizeof(rtpPkt)) continue;
+        rtpPkt[0] = 0x80;
+        rtpPkt[1] = (p.marker ? 0x80 : 0x00) | (96 & 0x7f);
+        uint16_t s = (*seq)++;
+        rtpPkt[2] = (s >> 8) & 0xff;
+        rtpPkt[3] = s & 0xff;
+        rtpPkt[4] = (ts >> 24) & 0xff;
+        rtpPkt[5] = (ts >> 16) & 0xff;
+        rtpPkt[6] = (ts >> 8) & 0xff;
+        rtpPkt[7] = ts & 0xff;
+        rtpPkt[8] = (ssrc >> 24) & 0xff;
+        rtpPkt[9] = (ssrc >> 16) & 0xff;
+        rtpPkt[10] = (ssrc >> 8) & 0xff;
+        rtpPkt[11] = ssrc & 0xff;
+        memcpy(rtpPkt + 12, p.payload.data(), p.payload.size());
+
+        sendto(sock, rtpPkt, 12 + p.payload.size(), 0, (struct sockaddr *)&dst, sizeof(dst));
+    }
+
+    close(sock);
+    return YES;
 }
 
 @end
