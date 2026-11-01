@@ -45,6 +45,8 @@ public:
     int send_dtmf(sip_call_t *call, const char *digits);
     int set_client_mic_muted(bool muted);
     bool is_client_mic_muted() const;
+    int set_audio_driver(const char *src_mod, const char *src_dev, const char *play_mod, const char *play_dev);
+    int get_audio_driver(char *src_mod, size_t src_mod_sz, char *play_mod, size_t play_mod_sz) const;
     void destroy_call(sip_call_t *call);
     int request_keyframe(sip_call_t *call);
 

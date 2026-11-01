@@ -797,6 +797,38 @@ bool Engine::is_client_mic_muted() const
     return m_mic_muted.load();
 }
 
+int Engine::set_audio_driver(const char *src_mod, const char *src_dev, const char *play_mod, const char *play_dev)
+{
+    struct config *cfg = conf_config();
+    if (!cfg) return -1;
+    if (src_mod && std::strlen(src_mod) > 0) {
+        snprintf(cfg->audio.src_mod, sizeof(cfg->audio.src_mod), "%s", src_mod);
+    }
+    if (src_dev) {
+        snprintf(cfg->audio.src_dev, sizeof(cfg->audio.src_dev), "%s", src_dev);
+    }
+    if (play_mod && std::strlen(play_mod) > 0) {
+        snprintf(cfg->audio.play_mod, sizeof(cfg->audio.play_mod), "%s", play_mod);
+    }
+    if (play_dev) {
+        snprintf(cfg->audio.play_dev, sizeof(cfg->audio.play_dev), "%s", play_dev);
+    }
+    return 0;
+}
+
+int Engine::get_audio_driver(char *src_mod, size_t src_mod_sz, char *play_mod, size_t play_mod_sz) const
+{
+    struct config *cfg = conf_config();
+    if (!cfg) return -1;
+    if (src_mod && src_mod_sz > 0) {
+        snprintf(src_mod, src_mod_sz, "%s", cfg->audio.src_mod);
+    }
+    if (play_mod && play_mod_sz > 0) {
+        snprintf(play_mod, play_mod_sz, "%s", cfg->audio.play_mod);
+    }
+    return 0;
+}
+
 void Engine::destroy_call(sip_call_t *call)
 {
     if (!call) return;

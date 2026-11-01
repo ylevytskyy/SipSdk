@@ -122,6 +122,18 @@ SIP_ABI_EXPORT bool sip_client_is_mic_muted(const sip_client_t *client)
     return client->engine->is_client_mic_muted();
 }
 
+SIP_ABI_EXPORT int sip_client_set_audio_driver(sip_client_t *client, const char *src_mod, const char *src_dev, const char *play_mod, const char *play_dev)
+{
+    if (!client || !client->engine) return EINVAL;
+    return client->engine->set_audio_driver(src_mod, src_dev, play_mod, play_dev);
+}
+
+SIP_ABI_EXPORT int sip_client_get_audio_driver(const sip_client_t *client, char *src_mod, size_t src_mod_sz, char *play_mod, size_t play_mod_sz)
+{
+    if (!client || !client->engine) return EINVAL;
+    return client->engine->get_audio_driver(src_mod, src_mod_sz, play_mod, play_mod_sz);
+}
+
 SIP_ABI_EXPORT const char *sip_call_get_id(const sip_call_t *call)
 {
     if (!call) return "";

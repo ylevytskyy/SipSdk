@@ -4,6 +4,7 @@
 #include "../include/media_driver.h"
 #include "sip_abi.h"
 
+#include <atomic>
 #include <memory>
 #include <mutex>
 

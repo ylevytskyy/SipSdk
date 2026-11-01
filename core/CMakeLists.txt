@@ -172,5 +172,20 @@ if(BARESIP_LIBRARY)
                 z
                 m
         )
+    else()
+        find_package(Threads REQUIRED)
+        set(CORE_TEST_LINUX_LIBS
+            Threads::Threads
+            asound
+            pulse
+            dl
+            m
+            z
+        )
+
+        target_link_libraries(sip_core_lifecycle_test PRIVATE ${CORE_TEST_LINUX_LIBS})
+        target_link_libraries(sip_core_registration_test PRIVATE ${CORE_TEST_LINUX_LIBS})
+        target_link_libraries(sip_core_audio_call_test PRIVATE ${CORE_TEST_LINUX_LIBS})
+        target_link_libraries(sip_core_video_streaming_test PRIVATE ${CORE_TEST_LINUX_LIBS})
     endif()
 endif()

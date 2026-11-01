@@ -1,0 +1,3 @@
+# Desktop prebuilt static libraries
+prebuilt/*/lib/
+build/

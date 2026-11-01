@@ -275,6 +275,16 @@ typedef struct sip_video_codec_driver_t {
 } sip_video_codec_driver_t;
 
 /**
+ * Configures the active audio driver and devices (e.g. "pulse", "alsa", "audiounit").
+ */
+SIP_ABI_EXPORT int sip_client_set_audio_driver(sip_client_t *client, const char *src_mod, const char *src_dev, const char *play_mod, const char *play_dev);
+
+/**
+ * Retrieves the currently active audio driver names.
+ */
+SIP_ABI_EXPORT int sip_client_get_audio_driver(const sip_client_t *client, char *src_mod, size_t src_mod_sz, char *play_mod, size_t play_mod_sz);
+
+/**
  * Registers video capture driver for camera hardware integration.
  */
 SIP_ABI_EXPORT int sip_client_set_video_capture_driver(sip_client_t *client, const sip_video_capture_driver_t *driver);
