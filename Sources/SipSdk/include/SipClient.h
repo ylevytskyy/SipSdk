@@ -1,17 +1,42 @@
 //
 //  SipClient.h
-//  TareSIPDemo
+//  SipSdk
 //
 //  Created by Yuriy Levytskyy on 2/27/19.
 //  Copyright © 2019 Yuriy Levytskyy. All rights reserved.
 //
 
 #import <Foundation/Foundation.h>
+#import <UIKit/UIKit.h>
+#import <CoreGraphics/CoreGraphics.h>
 
 NS_ASSUME_NONNULL_BEGIN
 
 @class SipCall;
 @class SipClient;
+@class SipVideoView;
+
+typedef NS_ENUM(NSInteger, SipCameraPosition) {
+    SipCameraPositionFront = 0,
+    SipCameraPositionBack = 1
+};
+
+/// Native iOS video rendering view for local camera preview and remote SIP video streams.
+@interface SipVideoView : UIView
+@property (nonatomic, readonly) CGSize videoSize;
+@property (nonatomic, readonly) NSUInteger renderedFrameCount;
+
+- (void)renderYUV420WithY:(const uint8_t *)yPlane
+                        u:(const uint8_t *)uPlane
+                        v:(const uint8_t *)vPlane
+                  yStride:(int)yStride
+                  uStride:(int)uStride
+                  vStride:(int)vStride
+                    width:(int)width
+                   height:(int)height;
+- (void)renderTestPatternWithWidth:(int)width height:(int)height;
+- (void)clearVideo;
+@end
 
 /// SIP Events
 @protocol SipClientDelegate<NSObject>
@@ -29,18 +54,33 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)onCallTransferFailed:(SipCall*)sipCall;
 - (void)onCallDtmfStart:(SipCall*)sipCall;
 - (void)onCallDtmfEnd:(SipCall*)sipCall;
+
+- (void)onCallHoldChanged:(SipCall*)sipCall isOnHold:(BOOL)isOnHold;
+- (void)onCallVideoSizeChanged:(SipCall*)sipCall width:(int)width height:(int)height;
+- (void)onDtmfReceived:(SipCall*)sipCall digit:(NSString*)digit;
 @end
 
 /// SIP Client
 @interface SipClient : NSObject
 @property (readonly, nonatomic, nonnull) NSString* username;
 @property (readonly, nonatomic, nonnull) NSString* domain;
-@property (nonatomic) NSString* password;
+@property (nonatomic, nullable) NSString* password;
+@property (nonatomic, copy, nullable) NSString* displayName;
+@property (nonatomic, copy, nullable) NSString* transport;
 @property (nonatomic) int port;
 
 @property (readonly, nonatomic) NSString* aor;
 
-@property (nonatomic) id<SipClientDelegate> delegate;
+@property (nonatomic, weak, nullable) id<SipClientDelegate> delegate;
+
+@property (nonatomic, assign) BOOL videoEnabledByDefault;
+@property (nonatomic, assign, getter=isMicrophoneMuted) BOOL microphoneMuted;
+@property (nonatomic, assign, getter=isSpeakerEnabled) BOOL speakerEnabled;
+@property (nonatomic, assign, getter=isLocalVideoEnabled) BOOL localVideoEnabled;
+@property (nonatomic, assign) SipCameraPosition cameraPosition;
+
+@property (nonatomic, strong, nullable) SipVideoView* remoteVideoView;
+@property (nonatomic, strong, nullable) SipVideoView* localVideoView;
 
 - (instancetype)initWithUsername:(NSString*)username domain:(NSString*)domain;
 
@@ -52,15 +92,59 @@ NS_ASSUME_NONNULL_BEGIN
 - (bool)isRegistered;
 
 - (nullable SipCall *)makeCall:(NSString *)uri;
+- (nullable SipCall *)makeCall:(NSString *)uri withVideo:(BOOL)withVideo;
+
+- (void)setMuted:(BOOL)muted;
+- (void)setSpeakerphone:(BOOL)enabled;
+- (void)switchCamera;
+
+/// Standalone local camera preview rendered into `localVideoView` without an
+/// active SIP call. Falls back to the synthetic pattern where no camera is
+/// available (e.g. iOS Simulator).
+- (void)startLocalVideoPreview;
+- (void)stopLocalVideoPreview;
+@property (nonatomic, readonly, getter=isLocalVideoPreviewActive) BOOL localVideoPreviewActive;
+/// YES while the hardware AVCaptureSession is delivering frames (NO when the
+/// preview is fed by the synthetic pattern).
+@property (nonatomic, readonly, getter=isLiveCameraFeedActive) BOOL liveCameraFeedActive;
+
+- (BOOL)hasVideoCodecRegistered;
+- (BOOL)hasVideoSourceRegistered;
+- (BOOL)hasVideoDisplayRegistered;
++ (BOOL)testH264RoundTripWithWidth:(int)width height:(int)height;
+/// Test hook: drops one RTP packet mid-stream. Returns YES when the decoder
+/// reports the loss (so Baresip requests a keyframe), hides frames until the
+/// next IDR, and decodes again after it.
++ (BOOL)testH264PacketLossRecoveryWithWidth:(int)width height:(int)height;
+/// Test hook: sends one synthetic H.264 video frame packetized as RFC 6184 RTP
+/// over UDP to a target loopback port.
++ (BOOL)sendH264TestFrameToPort:(uint16_t)port
+                           ssrc:(uint32_t)ssrc
+                            seq:(uint16_t *)seq
+                             ts:(uint32_t)ts
+                          width:(int)width
+                         height:(int)height
+                            idr:(BOOL)idr;
 @end
 
 /// SIP Call
 @interface SipCall : NSObject
 @property (nonatomic, readonly) NSString* remoteUri;
+@property (nonatomic, readonly) NSString* callId;
+@property (nonatomic, readonly) NSUUID* uuid;
+@property (nonatomic, readonly) BOOL hasVideo;
+@property (nonatomic, readonly) BOOL isOutgoing;
+@property (nonatomic, readonly, getter=isOnHold) BOOL onHold;
+@property (nonatomic, readonly) uint32_t durationSeconds;
 
 - (void)answer;
+- (void)answerWithVideo:(BOOL)withVideo;
 - (void)hangup:(unsigned short)statusCode reason:(NSString*)reason;
 - (void)holdAnswer;
+- (int)setHold:(BOOL)hold;
+- (int)sendDtmf:(NSString*)digits;
+- (int)setVideoEnabled:(BOOL)enabled;
+- (void)requestKeyframe;
 @end
 
 NS_ASSUME_NONNULL_END

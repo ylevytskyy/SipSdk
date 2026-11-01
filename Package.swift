@@ -13,7 +13,7 @@ let package = Package(
         .binaryTarget(
             name: "BaresipCore",
             url: "https://github.com/ylevytskyy/SipSdk/releases/download/baresip-core-v4.12.0/BaresipCore.xcframework.zip",
-            checksum: "2cfebbbf4c5e750ee46c17a344e0cd266d03c3890d0059e0f93f689742287715"
+            checksum: "822a981895ad00c1fc9a3bfe3f82838be55e292277ce70e8755857f2d71204ad"
         ),
         .target(
             name: "SipSdkResources",
@@ -27,6 +27,7 @@ let package = Package(
             publicHeadersPath: "include",
             linkerSettings: [
                 .linkedFramework("Foundation"),
+                .linkedFramework("UIKit"),
                 .linkedFramework("CoreFoundation"),
                 .linkedFramework("SystemConfiguration"),
                 .linkedFramework("CoreAudio"),
@@ -34,6 +35,11 @@ let package = Package(
                 .linkedFramework("AVFoundation"),
                 .linkedFramework("CFNetwork"),
                 .linkedFramework("CoreMedia"),
+                .linkedFramework("CoreVideo"),
+                .linkedFramework("CoreGraphics"),
+                .linkedFramework("VideoToolbox"),
+                .linkedFramework("QuartzCore"),
+                .linkedFramework("CallKit"),
                 .linkedLibrary("z"),
                 .linkedLibrary("m")
             ]

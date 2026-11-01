@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="390" height="844" viewBox="0 0 390 844" font-family="Arial, sans-serif" fill="#F4F7FC">
+<rect width="390" height="844" fill="#101827"/><text x="24" y="30" font-size="14" font-weight="700">9:41</text><text x="195" y="102" text-anchor="middle" font-size="14" fill="#B7C3D8" letter-spacing="1">OUTGOING VIDEO CALL</text>
+<circle cx="195" cy="231" r="76" fill="none" stroke="#34445F"/><circle cx="195" cy="231" r="65" fill="#1C2940"/><text x="195" y="246" text-anchor="middle" font-size="44" fill="#A8C1FF">10</text>
+<text x="195" y="346" text-anchor="middle" font-size="34" font-weight="700">1002</text><text x="195" y="381" text-anchor="middle" font-size="16" fill="#B7C3D8">sip:1002@sip.example.com</text><text x="195" y="440" text-anchor="middle" font-size="18" fill="#A8C1FF">Ringing…</text>
+<rect x="24" y="500" width="342" height="141" rx="24" fill="#1C2940"/><text x="195" y="540" text-anchor="middle" font-size="16" font-weight="700">Waiting for an answer</text><text x="195" y="575" text-anchor="middle" font-size="15" fill="#B7C3D8">The call timer starts when connected.</text><text x="195" y="605" text-anchor="middle" font-size="15" fill="#B7C3D8">You can cancel at any time.</text>
+<rect x="24" y="720" width="342" height="56" rx="16" fill="#C93245"/><text x="195" y="755" text-anchor="middle" font-size="17" font-weight="700" fill="white">Cancel call</text><rect x="129" y="829" width="132" height="5" rx="3" fill="#F4F7FC"/>
+</svg>

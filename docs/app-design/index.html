@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SipSdk — App Design</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#e7ebf2;color:#162139;font:16px Arial,sans-serif}header{max-width:1368px;margin:40px auto;padding:0 24px}h1{font-size:40px;letter-spacing:-1px;margin-bottom:12px}p{line-height:1.6;max-width:1000px}a{color:#1943b5}nav{display:flex;gap:24px;flex-wrap:wrap;margin:24px 0}.sheet{max-width:1368px;padding:36px 48px;margin:24px auto;background:#f4f6fa;border-radius:24px}.sheet h2{font-size:28px;margin:0 0 12px;letter-spacing:-.5px}.intro{margin:0 0 26px;color:#526079;font-size:15px}.screens{display:grid;grid-template-columns:repeat(3,390px);gap:36px}figure{margin:0}figure img{display:block;width:390px;height:844px;border-radius:28px;box-shadow:0 8px 28px #16213914}figcaption{font-size:14px;font-weight:700;margin:16px 0 0}figcaption a{text-decoration:none}.notes{max-width:1320px;margin:40px auto;padding:24px;background:white;border-radius:20px}.notes h2{font-size:25px}.notes h3{margin-top:28px}.notes li{line-height:1.6;margin:8px 0;max-width:1080px}footer{padding:0 24px 40px;max-width:1368px;margin:auto;color:#526079}@media(max-width:1300px){.screens{grid-template-columns:repeat(2,390px);justify-content:center}}@media(max-width:880px){.screens{grid-template-columns:minmax(0,390px)}.sheet{padding:24px 16px}figure img{width:100%;height:auto}h1{font-size:32px}}
+@page{size:1368px 1060px;margin:0}@media print{body{background:white}header,.notes,footer{display:none}.sheet{width:1368px;height:1060px;max-width:none;padding:32px 48px;margin:0;border-radius:0;break-after:page}.sheet:last-of-type{break-after:auto}.screens{grid-template-columns:repeat(3,390px);gap:36px;justify-content:start}.sheet h2{font-size:28px}.intro{margin-bottom:22px}figure img{width:390px;height:844px;box-shadow:none}figcaption{margin-top:14px}}
+</style>
+<header>
+<h1>SipSdk. A clearer way to call.</h1>
+<p>18 app screens built on the SipSdk design system. A calm home, guided account setup, private camera preview, and focused call controls. English copy, 390 × 844 screen frames, and standalone SVGs.</p>
+<nav><a href="SipSdk-app-design.pdf">Open the full PDF</a><a href="../design-system/index.html">Design system</a><a href="#flows">Navigation and behavior</a><a href="#handoff">Figma handoff</a></nav>
+<p>Static design proposal, not a working app or clickable prototype. Camera imagery is an original vector placeholder. Account addresses and names are examples. Click a screen title to open its SVG.</p>
+</header>
+<section class="sheet">
+<h2>01 / A home for every connection state</h2>
+<p class="intro">Start with one clear action. Keep the number in place while the account connects.</p>
+<div class="screens">
+<figure><img src="01-home-no-account.svg" alt="Home with no account and an Add SIP account action"><figcaption><a href="01-home-no-account.svg">Home · No account</a></figcaption></figure>
+<figure><img src="02-home-ready.svg" alt="Registered home with number field and video and audio call actions"><figcaption><a href="02-home-ready.svg">Home · Registered</a></figcaption></figure>
+<figure><img src="03-home-connecting.svg" alt="Connecting home with disabled call actions and preserved number"><figcaption><a href="03-home-connecting.svg">Home · Connecting</a></figcaption></figure>
+</div></section>
+<section class="sheet">
+<h2>02 / Account setup without the guesswork</h2>
+<p class="intro">Explain connection errors, keep entered details, and offer a clear route back to calling.</p>
+<div class="screens">
+<figure><img src="04-home-offline.svg" alt="Offline home with retry and edit account actions"><figcaption><a href="04-home-offline.svg">Home · Server unavailable</a></figcaption></figure>
+<figure><img src="05-sip-account.svg" alt="SIP account form with username, server, password, and display name"><figcaption><a href="05-sip-account.svg">SIP account · Edit details</a></figcaption></figure>
+<figure><img src="18-account-error.svg" alt="SIP account form with sign-in failure and preserved details"><figcaption><a href="18-account-error.svg">SIP account · Sign-in failed</a></figcaption></figure>
+</div></section>
+<section class="sheet">
+<h2>03 / Settings that stay out of your way</h2>
+<p class="intro">Keep account settings separate from camera preferences. Advanced connection options stay one level deeper.</p>
+<div class="screens">
+<figure><img src="06-settings.svg" alt="Settings hub with account and video settings"><figcaption><a href="06-settings.svg">Settings · Overview</a></figcaption></figure>
+<figure><img src="13-connection-settings.svg" alt="Connection settings with port, UDP, and a TLS limitation notice"><figcaption><a href="13-connection-settings.svg">SIP account · Connection</a></figcaption></figure>
+<figure><img src="07-video-settings.svg" alt="Video settings with local preview, default camera, and permissions"><figcaption><a href="07-video-settings.svg">Video settings · Preview</a></figcaption></figure>
+</div></section>
+<section class="sheet">
+<h2>04 / Put the person in control</h2>
+<p class="intro">Ask before sharing video. Offer an audio route when the camera is unavailable.</p>
+<div class="screens">
+<figure><img src="08-camera-permission.svg" alt="Camera denied screen linking to iOS Settings"><figcaption><a href="08-camera-permission.svg">Camera · Access denied</a></figcaption></figure>
+<figure><img src="09-incoming-call.svg" alt="Incoming video call with video, audio, and decline options"><figcaption><a href="09-incoming-call.svg">Call · Incoming in-app</a></figcaption></figure>
+<figure><img src="14-outgoing-call.svg" alt="Outgoing call ringing with a cancel action"><figcaption><a href="14-outgoing-call.svg">Call · Ringing</a></figcaption></figure>
+</div></section>
+<section class="sheet">
+<h2>05 / Stay present in the conversation</h2>
+<p class="intro">Keep call controls on a solid panel. Ending the call is always one tap away.</p>
+<div class="screens">
+<figure><img src="10-ongoing-call.svg" alt="Active video call with local preview and six call controls"><figcaption><a href="10-ongoing-call.svg">Call · Connected</a></figcaption></figure>
+<figure><img src="15-call-on-hold.svg" alt="Call on hold with resume and end actions"><figcaption><a href="15-call-on-hold.svg">Call · On hold</a></figcaption></figure>
+<figure><img src="11-call-keypad.svg" alt="In-call DTMF keypad with hide keypad and end call actions"><figcaption><a href="11-call-keypad.svg">Call · Keypad</a></figcaption></figure>
+</div></section>
+<section class="sheet">
+<h2>06 / Make the next conversation easy</h2>
+<p class="intro">Close the call clearly. Keep history useful without calling someone by accident.</p>
+<div class="screens">
+<figure><img src="16-call-ended.svg" alt="Ended call summary with call again and return home actions"><figcaption><a href="16-call-ended.svg">Call · Ended</a></figcaption></figure>
+<figure><img src="12-history.svg" alt="Call history grouped by day with missed call filter"><figcaption><a href="12-history.svg">History · Recent calls</a></figcaption></figure>
+<figure><img src="17-call-details.svg" alt="Call details with time, duration, and callback actions"><figcaption><a href="17-call-details.svg">History · Call details</a></figcaption></figure>
+</div></section>
+<section class="notes" id="flows">
+<h2>Navigation and behavior</h2>
+<ul>
+<li><strong>First call:</strong> Home → Add SIP account → Save and connect → Connecting → Registered → enter a destination → Video call or Audio call → Ringing → Connected → Ended.</li>
+<li><strong>Settings:</strong> Settings → SIP account → Connection settings. “Done” returns changes to the account draft; only “Save and connect” reconnects. Leaving an edited draft asks whether to discard changes.</li>
+<li><strong>Connection:</strong> A network/server failure offers Try again. Authentication failure opens the account form with an explanation. Use the actual failure reason; never label every failure as a bad password. A connection timeout must end the loading state and show a retry action.</li>
+<li><strong>Validation:</strong> Require username and domain; keep display name optional. Show “Enter a username” or “Enter a server” below the affected field. Validate port as 1–65535. Keep other values. Password rules follow the provider, not an invented minimum length. Reveal is temporary and off by default.</li>
+<li><strong>Video:</strong> Preview runs only while this screen is open. Front/Back is the proposed default for the next call. The history call preference changes which explicit call action is primary; both audio and video remain available. It never auto-answers or silently enables incoming video.</li>
+<li><strong>Permissions:</strong> On first use, explain the need and then use the native iOS prompt. The drawn screen is for access already denied, not a replacement permission dialog. Recheck access on return from iOS Settings. If microphone access is denied, explain that audio calling needs it and offer Open iOS Settings or Cancel.</li>
+<li><strong>Incoming:</strong> This is an in-app screen. Locked/background calls use the system CallKit interface, not a custom lock screen. Audio-only answering and camera privacy behavior must be verified in implementation.</li>
+<li><strong>Active call:</strong> Mute changes to Unmute with a selected fill and crossed-out icon. Camera off changes to Camera on; hidden remote video uses an avatar and a clear status. Speaker opens available audio routes rather than promising a device that is not connected. Hold preserves prior mute/camera choices when resumed.</li>
+<li><strong>Keypad:</strong> Every tap sends DTMF immediately; the entered sequence is not an editable dial field. Hide keypad returns to the active call without ending it.</li>
+<li><strong>Call failure:</strong> Busy, declined, no answer, and connection lost replace the end summary with the actual reason. Retry stays explicit, never automatic. Disable callback when the SIP account is offline and offer a route to Home.</li>
+<li><strong>History:</strong> Tapping a row opens details, not an immediate call. No records: show “No calls yet” and “Make a call”. No missed calls: show “You’re all caught up” and keep the All calls filter available. Filters, details, and the end summary are proposed UI additions.</li>
+</ul>
+<h3>Accessibility and layout</h3>
+<p>Use native controls with at least 44 × 44 pt touch areas, including text links and tab items. Support Dynamic Type by growing rows and moving controls into fewer columns; never shrink text to fit. Forms scroll above the keyboard. Keep the active field visible and provide Next/Done actions. Adapt safe areas to each device. The 390 × 844 frames show one portrait size, not tested device layouts.</p>
+<p>VoiceOver reads the caller, connection state, then controls. Announce state changes, not every timer tick. Toggle state is explicit. Focus and disabled states follow the design system. Respect reduced motion. Use icons and text alongside color.</p>
+<h3>What is existing, and what is proposed?</h3>
+<p>The reviewed app has account fields, a stored port/transport/video preference, audio and video calling, local preview, call history, and mute/camera/flip/speaker/hold/keypad controls. This design adds a new tab structure and dedicated settings pages. Saved default camera, permission recovery, history filters/details, deferred account changes during calls, explicit audio-only answers, and call summaries are proposals, not verified runtime features.</p>
+<p>No resolution, frame-rate, or bitrate controls are offered without an established app API. UDP is shown as the current mode; this proposal does not claim it is the only transport the engine can support. SIP over TLS is unavailable in the current project configuration. Illustrations are placeholders, not real camera captures.</p>
+</section>
+<section class="notes" id="handoff">
+<h2>Figma handoff</h2>
+<p>Open a screen’s SVG using its caption, then try dragging the file into Figma. Each SVG is standalone, with text and vector shapes and no external assets. Import is not verified in this environment. Whether text remains editable depends on Figma’s importer. Create native components, variables, variants, and Auto Layout after import.</p>
+<p>The PDF contains six presentation pages with three screens each. PNGs are visual previews, not editable design sources. Use the existing design system for colors, typography, spacing, and reusable controls.</p>
+</section>
+<footer>SipSdk app design · Proposal 0.1 · English · 18 screens · App code unchanged</footer>
+</html>

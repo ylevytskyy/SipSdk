@@ -1,0 +1,11 @@
+{
+  "schema": 1,
+  "command": "curl -s http://localhost:5101/ -o /tmp/sipsdk-page.html && grep -c 'SipSdk test client' /tmp/sipsdk-page.html",
+  "cwd": "/Users/lion/Documents/Projects/mine/SipSdk",
+  "root": "/Users/lion/Documents/Projects/mine/SipSdk",
+  "before": "c792bf0560e1994ba6743e5d5a335bb2c374be77aef8c847dbb57c03620a7bbc",
+  "after": "c792bf0560e1994ba6743e5d5a335bb2c374be77aef8c847dbb57c03620a7bbc",
+  "exit_code": 0,
+  "log_sha256": "d1fa0dadc010c17780d722a313b3add02c4695c32bdb4c2a48d792aeb0098e59",
+  "artifacts": {}
+}

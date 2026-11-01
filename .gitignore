@@ -16,10 +16,15 @@ xcuserdata/
 # CocoaPods generated files
 Pods/
 
+# SwiftPM build products
+.build/
+
 # macOS
 .DS_Store
 
 # Editor / local tooling
 .idea/
 .vscode/
-TareSIPDemo/SipCredentials.plist
+SipSdk/SipCredentials.plist
+.env
+specs/*/evidence/

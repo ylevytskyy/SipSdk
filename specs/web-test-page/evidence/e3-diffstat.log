@@ -1,0 +1,11 @@
+$ git diff master --stat
+ .gitignore                            |  4 ++
+ AGENTS.md                             | 90 +++++++++++++++++++++++++++++++++++
+ CLAUDE.md                             |  1 +
+ Podfile                               |  4 +-
+ Podfile.lock                          |  2 +-
+ README.md                             |  2 +-
+ TareSIPDemo.xcodeproj/project.pbxproj |  6 +--
+ 7 files changed, 102 insertions(+), 7 deletions(-)
+
+exit: 0

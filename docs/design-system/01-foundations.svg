@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="900" viewBox="0 0 1200 900">
+<rect width="1200" height="900" fill="#F4F6FA"/>
+<g font-family="Arial, sans-serif" fill="#162139">
+<text x="48" y="52" font-size="14" font-weight="700" letter-spacing="2">SIPSDK / DESIGN SYSTEM / 01</text>
+<text x="48" y="112" font-size="44" font-weight="700">Closer with every call.</text>
+<text x="48" y="148" font-size="18" fill="#526079">A calm interface. Clear connection status. One obvious next step.</text>
+<rect x="48" y="184" width="1104" height="268" rx="24" fill="white"/>
+<text x="72" y="223" font-size="23" font-weight="700">Color with a purpose</text>
+<g font-size="15">
+<rect x="72" y="245" width="156" height="88" rx="14" fill="#2457DE"/><text x="84" y="297" fill="white">Primary action</text>
+<rect x="252" y="245" width="156" height="88" rx="14" fill="#16734B"/><text x="264" y="297" fill="white">Connected</text>
+<rect x="432" y="245" width="156" height="88" rx="14" fill="#9A5800"/><text x="444" y="297" fill="white">Waiting</text>
+<rect x="612" y="245" width="156" height="88" rx="14" fill="#C93245"/><text x="624" y="297" fill="white">End call</text>
+<rect x="792" y="245" width="156" height="88" rx="14" fill="#162139"/><text x="804" y="297" fill="white">Primary text</text>
+<rect x="972" y="245" width="156" height="88" rx="14" fill="#526079"/><text x="984" y="297" fill="white">Secondary text</text>
+<text x="72" y="359">#2457DE</text><text x="252" y="359">#16734B</text><text x="432" y="359">#9A5800</text><text x="612" y="359">#C93245</text><text x="792" y="359">#162139</text><text x="972" y="359">#526079</text>
+<text x="72" y="405" fill="#526079">Background #F4F6FA · Surface #FFFFFF · Field border #73819A · Always pair color with a label or icon.</text>
+</g>
+<rect x="48" y="476" width="536" height="328" rx="24" fill="white"/>
+<text x="72" y="518" font-size="23" font-weight="700">Typography</text>
+<text x="72" y="568" font-size="34" font-weight="700">Video call</text><text x="396" y="565" font-size="14" fill="#526079">34 / 41 · 700</text>
+<text x="72" y="612" font-size="24" font-weight="700">Call history</text><text x="396" y="610" font-size="14" fill="#526079">24 / 30 · 700</text>
+<text x="72" y="654" font-size="17">Ready to talk</text><text x="396" y="654" font-size="14" fill="#526079">17 / 24 · 400</text>
+<text x="72" y="691" font-size="15" fill="#526079">Microphone muted</text><text x="396" y="691" font-size="14" fill="#526079">15 / 20 · 400</text>
+<text x="72" y="739" font-size="14" fill="#526079">Sheets: Arial. App: iOS system font.</text>
+<text x="72" y="765" font-size="14" fill="#526079">Support larger text. Keep key actions fully visible.</text>
+<rect x="608" y="476" width="544" height="328" rx="24" fill="#101827"/>
+<text x="632" y="518" font-size="23" font-weight="700" fill="#F4F7FC">Dark theme and spacing</text>
+<g font-size="15" fill="#B7C3D8">
+<text x="632" y="558">Background #101827 · Surface #1C2940</text>
+<text x="632" y="586">Text #F4F7FC · Secondary text #B7C3D8</text>
+<text x="632" y="614">Accent #A8C1FF · Text on accent #101827</text>
+<text x="632" y="660">Spacing: 4 · 8 · 12 · 16 · 24 · 32 · 48</text>
+<text x="632" y="690">Corner radius: 12 fields · 16 buttons · 24 cards</text>
+<text x="632" y="720">Minimum touch target: 44 × 44 pt</text>
+<text x="632" y="750">Screen side margins: 24 pt · Grid: 4 pt</text>
+</g>
+<text x="48" y="853" font-size="14" fill="#526079">Proposal 0.1 · 1 Nov 2026 · Component sizes are in pt. Sheets are presentation layouts.</text>
+<text x="1100" y="853" font-size="14" fill="#526079">01 / 03</text>
+</g></svg>
