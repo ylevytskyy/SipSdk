@@ -1,0 +1,10 @@
+{
+    global:
+        Java_com_sipsdk_*;
+        JNI_OnLoad;
+        JNI_OnUnload;
+        sip_*;
+        _sip_*;
+    local:
+        *;
+};

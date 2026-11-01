@@ -40,6 +40,10 @@ no SIP over TLS in `BaresipCore`.
   `SipCredentials.plist`.
 
 ## Commands
+- Build and verify Android Platform SDK (`sipsdk.aar`), multi-arch slices (`arm64-v8a`, `armeabi-v7a`, `x86_64`), symbol export audit, registration & audio calling test suites against Asterisk PBX:
+  `bash scripts/verify-android-sdk.sh`
+- Compile Baresip v4.12.0 and libre v4.12.0 static prebuilt libraries for Android ABIs (`arm64-v8a`, `armeabi-v7a`, `x86_64`):
+  `bash scripts/build-baresip-android.sh`
 - Verify SwiftPM SDK & Baresip v4 adapter across all slices (`device-arm64`, `simulator-arm64`, `simulator-x86_64`):
   `bash scripts/verify-spm-video-sdk.sh`
 - Run automated iOS Simulator test suite (Baresip v4 engine, VideoToolbox H.264 RTP round-trip, `SipVideoView`, `SipClient`/`SipCall` controls, `SipCallKitManager`, `SipAccountStore`, `SipCallHistoryStore`):
