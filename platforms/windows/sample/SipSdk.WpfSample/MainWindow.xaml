@@ -1,0 +1,132 @@
+<Window x:Class="SipSdk.WpfSample.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:vm="clr-namespace:SipSdk.WpfSample.ViewModels"
+        xmlns:controls="clr-namespace:SipSdk.WpfSample.Controls"
+        mc:Ignorable="d"
+        Title="SipSdk - Windows Video Phone" Height="700" Width="1000"
+        Background="#0F172A" WindowStartupLocation="CenterScreen">
+
+    <Window.DataContext>
+        <vm:MainViewModel />
+    </Window.DataContext>
+
+    <Grid Margin="16">
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="360" />
+            <ColumnDefinition Width="*" />
+        </Grid.ColumnDefinitions>
+
+        <!-- Left Column: Controls & Telephony -->
+        <Border Grid.Column="0" Background="#1E293B" CornerRadius="12" Padding="16" Margin="0,0,16,0">
+            <ScrollViewer VerticalScrollBarVisibility="Auto">
+                <StackPanel>
+                    <TextBlock Text="SIP Account Settings" FontSize="18" FontWeight="Bold" Foreground="#F8FAFC" Margin="0,0,0,12" />
+
+                    <TextBlock Text="Username / Extension:" Foreground="#94A3B8" Margin="0,4,0,2" />
+                    <TextBox Text="{Binding Username, UpdateSourceTrigger=PropertyChanged}" Background="#0F172A" Foreground="#F8FAFC" BorderBrush="#334155" Padding="8,6" />
+
+                    <TextBlock Text="Domain / Registrar Host:" Foreground="#94A3B8" Margin="0,8,0,2" />
+                    <TextBox Text="{Binding Domain, UpdateSourceTrigger=PropertyChanged}" Background="#0F172A" Foreground="#F8FAFC" BorderBrush="#334155" Padding="8,6" />
+
+                    <TextBlock Text="Password:" Foreground="#94A3B8" Margin="0,8,0,2" />
+                    <TextBox Text="{Binding Password, UpdateSourceTrigger=PropertyChanged}" Background="#0F172A" Foreground="#F8FAFC" BorderBrush="#334155" Padding="8,6" />
+
+                    <Grid Margin="0,8,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0" Margin="0,0,4,0">
+                            <TextBlock Text="Port:" Foreground="#94A3B8" Margin="0,0,0,2" />
+                            <TextBox Text="{Binding Port, UpdateSourceTrigger=PropertyChanged}" Background="#0F172A" Foreground="#F8FAFC" BorderBrush="#334155" Padding="8,6" />
+                        </StackPanel>
+                        <StackPanel Grid.Column="1" Margin="4,0,0,0">
+                            <TextBlock Text="Transport:" Foreground="#94A3B8" Margin="0,0,0,2" />
+                            <TextBox Text="{Binding Transport, UpdateSourceTrigger=PropertyChanged}" Background="#0F172A" Foreground="#F8FAFC" BorderBrush="#334155" Padding="8,6" />
+                        </StackPanel>
+                    </Grid>
+
+                    <Grid Margin="0,12,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Button Grid.Column="0" Content="Register" Command="{Binding RegisterCommand}" Background="#2563EB" Foreground="White" FontWeight="SemiBold" Padding="8" Margin="0,0,4,0" BorderThickness="0" />
+                        <Button Grid.Column="1" Content="Unregister" Command="{Binding UnregisterCommand}" Background="#475569" Foreground="White" Padding="8" Margin="4,0,0,0" BorderThickness="0" />
+                    </Grid>
+
+                    <TextBlock Text="{Binding RegistrationStatus}" FontWeight="Medium" Foreground="#38BDF8" Margin="0,8,0,16" TextWrapping="Wrap" />
+
+                    <Separator Background="#334155" Margin="0,8,0,16" />
+
+                    <!-- Dialer & Call Controls -->
+                    <TextBlock Text="Call Dialer" FontSize="18" FontWeight="Bold" Foreground="#F8FAFC" Margin="0,0,0,12" />
+
+                    <TextBlock Text="Destination URI:" Foreground="#94A3B8" Margin="0,4,0,2" />
+                    <TextBox Text="{Binding TargetUri, UpdateSourceTrigger=PropertyChanged}" Background="#0F172A" Foreground="#F8FAFC" BorderBrush="#334155" Padding="8,6" />
+
+                    <Grid Margin="0,12,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Button Grid.Column="0" Content="Audio Call" Command="{Binding AudioCallCommand}" Background="#16A34A" Foreground="White" FontWeight="SemiBold" Padding="10" Margin="0,0,4,0" BorderThickness="0" />
+                        <Button Grid.Column="1" Content="Video Call" Command="{Binding VideoCallCommand}" Background="#0284C7" Foreground="White" FontWeight="SemiBold" Padding="10" Margin="4,0,0,0" BorderThickness="0" />
+                    </Grid>
+
+                    <!-- Active Call Panel -->
+                    <Border Background="#0F172A" CornerRadius="8" Padding="12" Margin="0,16,0,0">
+                        <StackPanel>
+                            <TextBlock Text="{Binding CallStateText}" FontSize="15" FontWeight="Bold" Foreground="#F8FAFC" TextWrapping="Wrap" />
+                            <TextBlock Text="{Binding CallDurationText}" FontSize="14" Foreground="#94A3B8" Margin="0,4,0,8" />
+
+                            <Grid Margin="0,4,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <Button Grid.Column="0" Content="Hold" Command="{Binding ToggleHoldCommand}" Background="#D97706" Foreground="White" Padding="6" Margin="0,0,2,0" BorderThickness="0" />
+                                <Button Grid.Column="1" Content="Mute" Command="{Binding ToggleMuteCommand}" Background="#64748B" Foreground="White" Padding="6" Margin="2,0,2,0" BorderThickness="0" />
+                                <Button Grid.Column="2" Content="Hangup" Command="{Binding HangupCommand}" Background="#DC2626" Foreground="White" FontWeight="SemiBold" Padding="6" Margin="2,0,0,0" BorderThickness="0" />
+                            </Grid>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- DTMF Keypad -->
+                    <TextBlock Text="DTMF Keypad" FontSize="14" FontWeight="SemiBold" Foreground="#94A3B8" Margin="0,16,0,8" />
+                    <UniformGrid Columns="3" Rows="4" Margin="0,0,0,8">
+                        <Button Content="1" Command="{Binding SendDtmfCommand}" CommandParameter="1" Background="#334155" Foreground="White" Margin="2" Padding="8" />
+                        <Button Content="2" Command="{Binding SendDtmfCommand}" CommandParameter="2" Background="#334155" Foreground="White" Margin="2" Padding="8" />
+                        <Button Content="3" Command="{Binding SendDtmfCommand}" CommandParameter="3" Background="#334155" Foreground="White" Margin="2" Padding="8" />
+                        <Button Content="4" Command="{Binding SendDtmfCommand}" CommandParameter="4" Background="#334155" Foreground="White" Margin="2" Padding="8" />
+                        <Button Content="5" Command="{Binding SendDtmfCommand}" CommandParameter="5" Background="#334155" Foreground="White" Margin="2" Padding="8" />
+                        <Button Content="6" Command="{Binding SendDtmfCommand}" CommandParameter="6" Background="#334155" Foreground="White" Margin="2" Padding="8" />
+                        <Button Content="7" Command="{Binding SendDtmfCommand}" CommandParameter="7" Background="#334155" Foreground="White" Margin="2" Padding="8" />
+                        <Button Content="8" Command="{Binding SendDtmfCommand}" CommandParameter="8" Background="#334155" Foreground="White" Margin="2" Padding="8" />
+                        <Button Content="9" Command="{Binding SendDtmfCommand}" CommandParameter="9" Background="#334155" Foreground="White" Margin="2" Padding="8" />
+                        <Button Content="*" Command="{Binding SendDtmfCommand}" CommandParameter="*" Background="#334155" Foreground="White" Margin="2" Padding="8" />
+                        <Button Content="0" Command="{Binding SendDtmfCommand}" CommandParameter="0" Background="#334155" Foreground="White" Margin="2" Padding="8" />
+                        <Button Content="#" Command="{Binding SendDtmfCommand}" CommandParameter="#" Background="#334155" Foreground="White" Margin="2" Padding="8" />
+                    </UniformGrid>
+                </StackPanel>
+            </ScrollViewer>
+        </Border>
+
+        <!-- Right Column: Video Viewport -->
+        <Border Grid.Column="1" Background="#020617" CornerRadius="12" ClipToBounds="True">
+            <Grid>
+                <!-- Remote Video Viewport -->
+                <controls:SipVideoPanel x:Name="RemoteVideoPanel" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" />
+
+                <!-- Local Preview Picture-in-Picture (PiP) -->
+                <Border Width="180" Height="135" HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="16" Background="#1E293B" CornerRadius="8" BorderBrush="#475569" BorderThickness="2" ClipToBounds="True">
+                    <controls:SipVideoPanel x:Name="LocalPreviewPanel" />
+                </Border>
+            </Grid>
+        </Border>
+    </Grid>
+</Window>

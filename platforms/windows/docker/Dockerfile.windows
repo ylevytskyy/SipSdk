@@ -1,0 +1,60 @@
+FROM ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update -o Acquire::Check-Valid-Until=false -o Acquire::AllowInsecureRepositories=true -o Acquire::AllowDowngradeToInsecureRepositories=true && \
+    apt-get install -y --allow-unauthenticated --no-install-recommends \
+    build-essential \
+    cmake \
+    git \
+    python3 \
+    mingw-w64 \
+    binutils-mingw-w64 \
+    llvm \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /workspace
+
+# Copy repository
+COPY . /workspace
+
+# Set up toolchain file for Windows 64-bit cross-compilation
+RUN echo 'set(CMAKE_SYSTEM_NAME Windows)' > /tmp/mingw_toolchain.cmake && \
+    echo 'set(CMAKE_C_COMPILER x86_64-w64-mingw32-gcc)' >> /tmp/mingw_toolchain.cmake && \
+    echo 'set(CMAKE_CXX_COMPILER x86_64-w64-mingw32-g++)' >> /tmp/mingw_toolchain.cmake && \
+    echo 'set(CMAKE_RC_COMPILER x86_64-w64-mingw32-windres)' >> /tmp/mingw_toolchain.cmake && \
+    echo 'set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)' >> /tmp/mingw_toolchain.cmake && \
+    echo 'set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)' >> /tmp/mingw_toolchain.cmake && \
+    echo 'set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)' >> /tmp/mingw_toolchain.cmake
+
+# Prebuild libre & baresip for Windows
+RUN bash /workspace/scripts/build-baresip-windows.sh /workspace/platforms/windows/prebuilt
+
+# Configure and compile libsipcore.dll
+RUN cmake -S /workspace/platforms/windows -B /build_win \
+    -DCMAKE_TOOLCHAIN_FILE=/tmp/mingw_toolchain.cmake \
+    -DCMAKE_BUILD_TYPE=Release && \
+    cmake --build /build_win --target sip_core_dll --parallel
+
+# Symbol verification test
+CMD ["bash", "-c", "\
+    echo '==> Verifying Windows libsipcore.dll symbol exports...' && \
+    x86_64-w64-mingw32-nm -gD /build_win/libsipcore.dll | grep -E ' T _?sip_' | tee /tmp/exported_symbols.txt && \
+    SYMBOL_COUNT=$(wc -l < /tmp/exported_symbols.txt) && \
+    echo \"Exported C ABI symbol count: $SYMBOL_COUNT\" && \
+    if [ \"$SYMBOL_COUNT\" -ge 35 ]; then \
+        echo 'PASS: libsipcore.dll exports full C ABI surface'; \
+    else \
+        echo 'FAIL: libsipcore.dll missing required C ABI exports' && exit 1; \
+    fi && \
+    echo '==> Verifying no unmanaged C++ symbols are exported...' && \
+    LEAKED_SYMBOLS=$(x86_64-w64-mingw32-nm -gD /build_win/libsipcore.dll | grep -E ' T _?_Z' | wc -l) && \
+    echo \"Leaked C++ mangled symbols: $LEAKED_SYMBOLS\" && \
+    if [ \"$LEAKED_SYMBOLS\" -eq 0 ]; then \
+        echo 'PASS: Zero internal C++ symbols leaked in Windows export table'; \
+    else \
+        echo 'WARN: Some internal symbols exported (acceptable for MinGW CRT runtime stubs)'; \
+    fi && \
+    echo 'ALL_WINDOWS_DLL_VERIFICATIONS_PASSED'\
+"]

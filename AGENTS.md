@@ -40,6 +40,10 @@ no SIP over TLS in `BaresipCore`.
   `SipCredentials.plist`.
 
 ## Commands
+- Build and verify Windows Platform SDK (.NET / C# Bindings, Media Foundation drivers, and WPF Sample):
+  `bash scripts/verify-windows-sdk.sh`
+- Compile Baresip v4.12.0 and libre v4.12.0 static prebuilt libraries for Windows target:
+  `bash scripts/build-baresip-windows.sh`
 - Build and verify Desktop Native Targets (macOS host & Linux Docker CI runner, CTest suite, and `sip_cli` against Asterisk PBX):
   `bash scripts/verify-desktop-sdk.sh`
 - Compile Baresip v4.12.0 and libre v4.12.0 static prebuilts for desktop targets:

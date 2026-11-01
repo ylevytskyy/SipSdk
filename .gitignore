@@ -29,3 +29,10 @@ platforms/desktop/prebuilt/
 SipSdk/SipCredentials.plist
 .env
 specs/*/evidence/
+
+# .NET / C# build products
+**/bin/
+**/obj/
+
+# Windows prebuilts
+platforms/windows/prebuilt/

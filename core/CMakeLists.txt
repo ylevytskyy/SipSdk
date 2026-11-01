@@ -45,6 +45,75 @@ target_compile_definitions(sip_core
         SIP_CORE_BUILDING_LIB=1
 )
 
+# Core shared library (Windows DLL, macOS dylib, Linux so)
+add_library(sip_core_shared SHARED
+    src/call_session.cpp
+    src/engine.cpp
+    src/media_driver.cpp
+    src/sip_abi.cpp
+)
+
+set_target_properties(sip_core_shared PROPERTIES
+    OUTPUT_NAME "sipcore"
+    PREFIX "lib"
+)
+
+target_include_directories(sip_core_shared
+    PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+        $<INSTALL_INTERFACE:include>
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${BARESIP_INCLUDE_DIR}
+)
+
+target_compile_definitions(sip_core_shared
+    PRIVATE
+        SIP_CORE_BUILDING_LIB=1
+        SIP_CORE_BUILDING_DLL=1
+)
+
+if(WIN32 OR MINGW)
+    target_link_libraries(sip_core_shared
+        PRIVATE
+            ws2_32
+            iphlpapi
+    )
+elseif(APPLE)
+    if(BARESIP_LIBRARY)
+        target_link_libraries(sip_core_shared
+            PRIVATE
+                ${BARESIP_LIBRARY}
+                "-framework Foundation"
+                "-framework CoreFoundation"
+                "-framework SystemConfiguration"
+                "-framework CoreAudio"
+                "-framework AudioToolbox"
+                "-framework AVFoundation"
+                "-framework CFNetwork"
+                "-framework CoreMedia"
+                "-framework CoreVideo"
+                "-framework VideoToolbox"
+                z
+                m
+        )
+    endif()
+else()
+    if(BARESIP_LIBRARY)
+        find_package(Threads REQUIRED)
+        target_link_libraries(sip_core_shared
+            PRIVATE
+                ${BARESIP_LIBRARY}
+                Threads::Threads
+                asound
+                pulse
+                dl
+                m
+                z
+        )
+    endif()
+endif()
+
 # Test runners
 if(BARESIP_LIBRARY)
     add_executable(sip_core_lifecycle_test

@@ -1,0 +1,73 @@
+name: Windows Platform SDK (.NET & MSVC)
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'core/**'
+      - 'platforms/windows/**'
+      - '.github/workflows/windows-build.yml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'core/**'
+      - 'platforms/windows/**'
+      - '.github/workflows/windows-build.yml'
+
+jobs:
+  build-and-test:
+    name: Build & Verify Windows Platform SDK
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup .NET SDK 8.0
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Setup MSVC Developer Command Prompt
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Prebuild libre & Baresip for Windows
+        shell: bash
+        run: |
+          bash scripts/build-baresip-windows.sh platforms/windows/prebuilt
+
+      - name: Configure CMake for Windows (MSVC x64)
+        run: |
+          cmake -S platforms/windows -B build_win -A x64 -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build Native Windows DLL & Driver Tests
+        run: |
+          cmake --build build_win --config Release --parallel
+
+      - name: Audit DLL Exported C ABI Symbols
+        run: |
+          dumpbin /exports build_win\Release\libsipcore.dll
+
+      - name: Run Windows C ABI Native Tests
+        run: |
+          build_win\Release\test_windows_abi.exe
+
+      - name: Run Windows Media Foundation Driver Tests
+        run: |
+          build_win\Release\test_mf_drivers.exe
+
+      - name: Build .NET SDK Class Library
+        run: |
+          dotnet build platforms/windows/dotnet/SipSdk.sln -c Release
+
+      - name: Run .NET Unit Tests
+        run: |
+          dotnet test platforms/windows/dotnet/tests/SipSdk.Tests/SipSdk.Tests.csproj -c Release --verbosity normal
+
+      - name: Build Sample Desktop WPF Application
+        run: |
+          dotnet build platforms/windows/sample/SipSdk.WpfSample/SipSdk.WpfSample.csproj -c Release

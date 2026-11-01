@@ -1,0 +1,7 @@
+.build
+.git
+Pods
+.build*
+*.xcworkspace
+*.xcodeproj
+derived_data
