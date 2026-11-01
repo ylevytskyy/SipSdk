@@ -21,6 +21,7 @@ endif()
 
 # Core static library
 add_library(sip_core STATIC
+    src/call_session.cpp
     src/engine.cpp
     src/sip_abi.cpp
 )
@@ -75,6 +76,21 @@ if(BARESIP_LIBRARY)
             ${BARESIP_LIBRARY}
     )
 
+    add_executable(sip_core_audio_call_test
+        tests/test_audio_call.cpp
+    )
+
+    target_include_directories(sip_core_audio_call_test
+        PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+
+    target_link_libraries(sip_core_audio_call_test
+        PRIVATE
+            sip_core
+            ${BARESIP_LIBRARY}
+    )
+
     if(APPLE)
         target_link_libraries(sip_core_lifecycle_test
             PRIVATE
@@ -93,6 +109,22 @@ if(BARESIP_LIBRARY)
         )
 
         target_link_libraries(sip_core_registration_test
+            PRIVATE
+                "-framework Foundation"
+                "-framework CoreFoundation"
+                "-framework SystemConfiguration"
+                "-framework CoreAudio"
+                "-framework AudioToolbox"
+                "-framework AVFoundation"
+                "-framework CFNetwork"
+                "-framework CoreMedia"
+                "-framework CoreVideo"
+                "-framework VideoToolbox"
+                z
+                m
+        )
+
+        target_link_libraries(sip_core_audio_call_test
             PRIVATE
                 "-framework Foundation"
                 "-framework CoreFoundation"

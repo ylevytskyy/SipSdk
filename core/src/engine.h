@@ -9,10 +9,12 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <vector>
 
 struct mqueue;
 struct ua;
 struct bevent;
+struct call;
 
 namespace sip_core {
 
@@ -31,6 +33,16 @@ public:
     int unregister_account();
     bool is_registered() const;
 
+    sip_call_t *make_call(const char *target_uri, bool with_video);
+    int answer_call(sip_call_t *call, bool with_video);
+    int hangup_call(sip_call_t *call, int code, const char *reason);
+    int hold_call(sip_call_t *call, bool hold);
+    int mute_call(sip_call_t *call, bool muted);
+    int send_dtmf(sip_call_t *call, const char *digits);
+    int set_client_mic_muted(bool muted);
+    bool is_client_mic_muted() const;
+    void destroy_call(sip_call_t *call);
+
     bool is_started() const { return m_started.load(); }
     sip_client_t *owner() const { return m_owner; }
     void *user_data() const { return m_user_data; }
@@ -44,6 +56,17 @@ public:
 
     void handle_ua_event(int ev, struct bevent *event);
     void dispatch_reg_state(sip_reg_state_t state, int code, const char *reason);
+    void dispatch_call_state(sip_call_t *call, sip_call_state_t state, int code, const char *reason);
+    void dispatch_incoming_call(sip_call_t *call);
+    void dispatch_call_media(sip_call_t *call, int width, int height, bool on_hold, bool is_muted);
+    void dispatch_dtmf_digit(sip_call_t *call, const char *digit);
+
+    bool prepare_audio_session();
+    void release_audio_session_if_idle();
+
+    sip_call_t *find_or_create_call_session(struct call *c, const char *remote_uri, bool is_outgoing, bool with_video);
+    sip_call_t *find_call_session(struct call *c);
+    void remove_call_session(struct call *c);
 
 private:
     int init_on_loop_thread(const char *config_path);
@@ -62,12 +85,17 @@ private:
 
     std::atomic<bool> m_started{false};
     std::atomic<bool> m_stopping{false};
+    std::atomic<bool> m_mic_muted{false};
+    std::atomic<bool> m_audio_session_active{false};
 
     struct mqueue *m_mq{nullptr};
     struct ua *m_ua{nullptr};
     bool m_events_registered{false};
     int m_start_result{0};
     bool m_start_signaled{false};
+
+    mutable std::mutex m_calls_mutex;
+    std::vector<sip_call_t *> m_all_calls;
 };
 
 } // namespace sip_core

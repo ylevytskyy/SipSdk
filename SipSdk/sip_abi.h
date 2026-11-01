@@ -3,6 +3,7 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 
 #if defined(_WIN32) || defined(__CYGWIN__)
   #ifdef SIP_CORE_BUILDING_DLL
@@ -50,6 +51,12 @@ typedef struct sip_callbacks_t {
     void (*on_call_state)(sip_call_t *call, sip_call_state_t state, int code, const char *reason, void *user_data);
     void (*on_call_media)(sip_call_t *call, int width, int height, bool on_hold, bool is_muted, void *user_data);
     void (*on_dtmf_digit)(sip_call_t *call, const char *digit, void *user_data);
+
+    /** Optional hook to prepare audio hardware session (e.g. AVAudioSession / AudioManager). */
+    bool (*prepare_audio_session)(sip_client_t *client, void *user_data);
+
+    /** Optional hook to release audio hardware session when all calls finish. */
+    void (*release_audio_session)(sip_client_t *client, void *user_data);
 } sip_callbacks_t;
 
 /**
@@ -100,6 +107,132 @@ SIP_ABI_EXPORT bool sip_client_is_registered(const sip_client_t *client);
  * and frees the sip_client_t instance. Safe to pass nullptr.
  */
 SIP_ABI_EXPORT void sip_client_destroy(sip_client_t *client);
+
+/**
+ * Initiates an outgoing call to the specified target SIP URI.
+ *
+ * @param client Valid client instance returned from sip_client_create.
+ * @param target_uri Destination SIP URI (e.g. "sip:1002@127.0.0.1:5060").
+ * @param with_video True to offer video (VIDMODE_ON); false for audio-only (VIDMODE_OFF).
+ * @return Opaque handle to the created sip_call_t session, or nullptr on failure.
+ */
+SIP_ABI_EXPORT sip_call_t *sip_call_make(sip_client_t *client, const char *target_uri, bool with_video);
+
+/**
+ * Answers an incoming call.
+ *
+ * @param call Valid call session handle.
+ * @param with_video True to answer with video; false for audio-only.
+ * @return 0 on success, or non-zero error code.
+ */
+SIP_ABI_EXPORT int sip_call_answer(sip_call_t *call, bool with_video);
+
+/**
+ * Hangs up, cancels, or rejects an active or incoming call.
+ *
+ * @param call Valid call session handle.
+ * @param code SIP status code to send (e.g. 0 for default BYE/CANCEL, 486 for Busy Here, 603 for Decline).
+ * @param reason Reason phrase (or nullptr for default).
+ * @return 0 on success, or non-zero error code.
+ */
+SIP_ABI_EXPORT int sip_call_hangup(sip_call_t *call, int code, const char *reason);
+
+/**
+ * Places the call on hold or resumes it.
+ *
+ * @param call Valid call session handle.
+ * @param hold True to hold; false to resume.
+ * @return 0 on success, or non-zero error code.
+ */
+SIP_ABI_EXPORT int sip_call_set_hold(sip_call_t *call, bool hold);
+
+/**
+ * Mutes or unmutes the local microphone for this call.
+ *
+ * @param call Valid call session handle.
+ * @param muted True to mute; false to unmute.
+ * @return 0 on success, or non-zero error code.
+ */
+SIP_ABI_EXPORT int sip_call_set_muted(sip_call_t *call, bool muted);
+
+/**
+ * Sends DTMF digits across the active call via RFC 4733.
+ *
+ * @param call Valid call session handle.
+ * @param digits String of DTMF digits (e.g. "123#*").
+ * @return 0 on success, or non-zero error code.
+ */
+SIP_ABI_EXPORT int sip_call_send_dtmf(sip_call_t *call, const char *digits);
+
+/**
+ * Sets client-wide microphone mute state.
+ */
+SIP_ABI_EXPORT int sip_client_set_mic_muted(sip_client_t *client, bool muted);
+
+/**
+ * Checks client-wide microphone mute state.
+ */
+SIP_ABI_EXPORT bool sip_client_is_mic_muted(const sip_client_t *client);
+
+/**
+ * Returns the unique SIP Call-ID string. Pointer valid until call session destroyed.
+ */
+SIP_ABI_EXPORT const char *sip_call_get_id(const sip_call_t *call);
+
+/**
+ * Returns the remote peer SIP URI string.
+ */
+SIP_ABI_EXPORT const char *sip_call_get_remote_uri(const sip_call_t *call);
+
+/**
+ * Returns the remote peer display name string (if present in From/To header).
+ */
+SIP_ABI_EXPORT const char *sip_call_get_peer_display_name(const sip_call_t *call);
+
+/**
+ * Returns whether the call has negotiated video capability.
+ */
+SIP_ABI_EXPORT bool sip_call_has_video(const sip_call_t *call);
+
+/**
+ * Returns whether this call was initiated locally (outgoing).
+ */
+SIP_ABI_EXPORT bool sip_call_is_outgoing(const sip_call_t *call);
+
+/**
+ * Returns whether the call is currently on hold.
+ */
+SIP_ABI_EXPORT bool sip_call_is_on_hold(const sip_call_t *call);
+
+/**
+ * Returns whether the call microphone is currently muted.
+ */
+SIP_ABI_EXPORT bool sip_call_is_muted(const sip_call_t *call);
+
+/**
+ * Returns whether the call has reached the CLOSED state.
+ */
+SIP_ABI_EXPORT bool sip_call_is_closed(const sip_call_t *call);
+
+/**
+ * Returns the active call duration in seconds.
+ */
+SIP_ABI_EXPORT uint32_t sip_call_get_duration(const sip_call_t *call);
+
+/**
+ * Gets user data associated with this call handle.
+ */
+SIP_ABI_EXPORT void *sip_call_get_user_data(const sip_call_t *call);
+
+/**
+ * Sets user data associated with this call handle.
+ */
+SIP_ABI_EXPORT void sip_call_set_user_data(sip_call_t *call, void *user_data);
+
+/**
+ * Releases memory for a closed call session handle.
+ */
+SIP_ABI_EXPORT void sip_call_destroy(sip_call_t *call);
 
 #ifdef __cplusplus
 }

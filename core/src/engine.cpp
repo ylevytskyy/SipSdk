@@ -1,4 +1,5 @@
 #include "engine.h"
+#include "call_session.h"
 
 #include <re.h>
 #include <baresip.h>
@@ -13,6 +14,8 @@
 
 #if defined(__APPLE__)
 #include <dispatch/dispatch.h>
+#include <objc/message.h>
+#include <objc/runtime.h>
 #endif
 
 namespace sip_core {
@@ -37,6 +40,13 @@ Engine::Engine(sip_client_t *owner, const sip_callbacks_t *callbacks, void *user
 Engine::~Engine()
 {
     destroy();
+    std::lock_guard<std::mutex> lock(m_calls_mutex);
+    for (auto *c : m_all_calls) {
+        if (c) {
+            c->release();
+        }
+    }
+    m_all_calls.clear();
 }
 
 int Engine::init(const char *config_path)
@@ -226,6 +236,17 @@ void Engine::run_loop(std::string config_path)
 
 void Engine::cleanup_on_loop_thread()
 {
+    {
+        std::lock_guard<std::mutex> lock(m_calls_mutex);
+        for (auto *sess : m_all_calls) {
+            if (sess) {
+                sess->set_closed(0);
+                sess->detach_raw_call();
+            }
+        }
+    }
+    release_audio_session_if_idle();
+
     if (m_mq != nullptr) {
         m_mq = (struct mqueue *)mem_deref(m_mq);
     }
@@ -332,6 +353,7 @@ void Engine::handle_ua_event(int ev, struct bevent *event)
 
     const struct sip_msg *msg = bevent_get_msg(event);
     const char *text = bevent_get_text(event);
+    struct call *bcall = bevent_get_call(event);
 
     auto extract_reason = [msg, text](const char *default_reason) -> std::string {
         if (msg && msg->reason.p && msg->reason.l > 0) {
@@ -361,6 +383,103 @@ void Engine::handle_ua_event(int ev, struct bevent *event)
         case BEVENT_UNREGISTERING: {
             int scode = msg ? static_cast<int>(msg->scode) : 0;
             dispatch_reg_state(SIP_REG_STATE_UNREGISTERED, scode, extract_reason("Unregistered").c_str());
+            break;
+        }
+        case BEVENT_CALL_INCOMING: {
+            if (bcall) {
+                const char *peer_uri = call_peeruri(bcall);
+                bool with_video = call_has_video(bcall);
+                sip_call_t *sess = find_or_create_call_session(bcall, peer_uri, false, with_video);
+                sess->attach_raw_call(bcall);
+                dispatch_incoming_call(sess);
+                dispatch_call_state(sess, SIP_CALL_STATE_INCOMING, 180, extract_reason("Incoming Call").c_str());
+            }
+            break;
+        }
+        case BEVENT_CALL_OUTGOING: {
+            if (bcall) {
+                sip_call_t *sess = find_or_create_call_session(bcall, call_peeruri(bcall), true, call_has_video(bcall));
+                sess->attach_raw_call(bcall);
+                dispatch_call_state(sess, SIP_CALL_STATE_CONNECTING, 100, extract_reason("Connecting").c_str());
+            }
+            break;
+        }
+        case BEVENT_CALL_RINGING: {
+            if (bcall) {
+                sip_call_t *sess = find_or_create_call_session(bcall, call_peeruri(bcall), true, call_has_video(bcall));
+                dispatch_call_state(sess, SIP_CALL_STATE_RINGING, 180, extract_reason("Ringing").c_str());
+            }
+            break;
+        }
+        case BEVENT_CALL_PROGRESS: {
+            if (bcall) {
+                sip_call_t *sess = find_or_create_call_session(bcall, call_peeruri(bcall), true, call_has_video(bcall));
+                dispatch_call_state(sess, SIP_CALL_STATE_CONNECTING, 183, extract_reason("Session Progress").c_str());
+            }
+            break;
+        }
+        case BEVENT_CALL_ANSWERED:
+        case BEVENT_CALL_ESTABLISHED: {
+            if (bcall) {
+                sip_call_t *sess = find_or_create_call_session(bcall, call_peeruri(bcall), false, call_has_video(bcall));
+                sess->set_established();
+                dispatch_call_state(sess, SIP_CALL_STATE_ESTABLISHED, 200, extract_reason("Established").c_str());
+            }
+            break;
+        }
+        case BEVENT_CALL_HOLD: {
+            if (bcall) {
+                sip_call_t *sess = find_call_session(bcall);
+                if (sess) {
+                    sess->set_on_hold(true);
+                    dispatch_call_state(sess, SIP_CALL_STATE_HOLD, 200, "Hold");
+                    dispatch_call_media(sess, 0, 0, true, sess->is_muted());
+                }
+            }
+            break;
+        }
+        case BEVENT_CALL_RESUME: {
+            if (bcall) {
+                sip_call_t *sess = find_call_session(bcall);
+                if (sess) {
+                    sess->set_on_hold(false);
+                    dispatch_call_state(sess, SIP_CALL_STATE_ESTABLISHED, 200, "Resumed");
+                    dispatch_call_media(sess, 0, 0, false, sess->is_muted());
+                }
+            }
+            break;
+        }
+        case BEVENT_CALL_CLOSED: {
+            if (bcall) {
+                sip_call_t *sess = find_call_session(bcall);
+                if (sess) {
+                    uint32_t dur = call_duration(bcall);
+                    sess->set_closed(dur);
+                    int scode = (msg && msg->scode > 0) ? static_cast<int>(msg->scode) : static_cast<int>(call_scode(bcall));
+                    dispatch_call_state(sess, SIP_CALL_STATE_CLOSED, scode, extract_reason("Call Closed").c_str());
+                    remove_call_session(bcall);
+                }
+            }
+            release_audio_session_if_idle();
+            break;
+        }
+        case BEVENT_CALL_DTMF_START: {
+            if (bcall && text && std::strlen(text) > 0) {
+                sip_call_t *sess = find_call_session(bcall);
+                if (sess) {
+                    dispatch_dtmf_digit(sess, text);
+                }
+            }
+            break;
+        }
+        case BEVENT_SIPSESS_CONN: {
+            struct ua *bua = bevent_get_ua(event);
+            if (!bua) {
+                bua = m_ua;
+            }
+            if (bua && msg) {
+                (void)ua_accept(bua, msg);
+            }
             break;
         }
         default:
@@ -412,6 +531,499 @@ void Engine::dispatch_reg_state(sip_reg_state_t state, int code, const char *rea
     dispatch_async_f(dispatch_get_main_queue(), args, run_reg_state_task);
 #else
     run_reg_state_task(args);
+#endif
+}
+
+sip_call_t *Engine::make_call(const char *target_uri, bool with_video)
+{
+    if (!target_uri || std::strlen(target_uri) == 0 || !m_started.load()) {
+        return nullptr;
+    }
+
+    std::string uri_str = target_uri;
+    auto *call_session = find_or_create_call_session(nullptr, uri_str.c_str(), true, with_video);
+
+    prepare_audio_session();
+
+    call_session->retain();
+    post_task([this, call_session, uri_str, with_video]() {
+        if (!m_ua) {
+            call_session->set_closed(0);
+            dispatch_call_state(call_session, SIP_CALL_STATE_CLOSED, EINVAL, "No UA available");
+            release_audio_session_if_idle();
+            call_session->release();
+            return;
+        }
+
+        struct call *baresip_call = nullptr;
+        enum vidmode vmode = with_video ? VIDMODE_ON : VIDMODE_OFF;
+        int rc = ua_connect(m_ua, &baresip_call, nullptr, uri_str.c_str(), vmode);
+        if (rc != 0 || baresip_call == nullptr) {
+            call_session->set_closed(0);
+            dispatch_call_state(call_session, SIP_CALL_STATE_CLOSED, rc != 0 ? rc : EIO, "Connect failed");
+            release_audio_session_if_idle();
+            call_session->release();
+            return;
+        }
+
+        call_session->attach_raw_call(baresip_call);
+        dispatch_call_state(call_session, SIP_CALL_STATE_CONNECTING, 100, "Connecting");
+        call_session->release();
+    });
+
+    return call_session;
+}
+
+int Engine::answer_call(sip_call_t *call, bool with_video)
+{
+    if (!call) return EINVAL;
+
+    prepare_audio_session();
+
+    call->retain();
+    post_task([this, call, with_video]() {
+        struct call *c = call->raw_call();
+        if (m_ua != nullptr && c != nullptr) {
+            enum vidmode vmode = with_video ? VIDMODE_ON : VIDMODE_OFF;
+            (void)ua_answer(m_ua, c, vmode);
+        } else {
+            release_audio_session_if_idle();
+        }
+        call->release();
+    });
+
+    return 0;
+}
+
+int Engine::hangup_call(sip_call_t *call, int code, const char *reason)
+{
+    if (!call) return EINVAL;
+
+    std::string reason_str = reason ? reason : "";
+    uint16_t scode = code > 0 ? static_cast<uint16_t>(code) : 0;
+
+    call->retain();
+    post_task([this, call, scode, reason_str]() {
+        struct call *c = call->raw_call();
+        if (m_ua != nullptr && c != nullptr) {
+            ua_hangup(m_ua, c, scode, reason_str.empty() ? nullptr : reason_str.c_str());
+        } else {
+            call->set_closed(0);
+            dispatch_call_state(call, SIP_CALL_STATE_CLOSED, scode, reason_str.c_str());
+            release_audio_session_if_idle();
+        }
+        call->release();
+    });
+
+    return 0;
+}
+
+int Engine::hold_call(sip_call_t *call, bool hold)
+{
+    if (!call) return EINVAL;
+
+    call->retain();
+    post_task([this, call, hold]() {
+        struct call *c = call->raw_call();
+        if (c != nullptr) {
+            (void)call_hold(c, hold);
+            call->set_on_hold(hold);
+            dispatch_call_state(call, hold ? SIP_CALL_STATE_HOLD : SIP_CALL_STATE_ESTABLISHED,
+                                200, hold ? "Hold" : "Resumed");
+            dispatch_call_media(call, 0, 0, hold, call->is_muted());
+        }
+        call->release();
+    });
+
+    return 0;
+}
+
+int Engine::mute_call(sip_call_t *call, bool muted)
+{
+    if (!call) return EINVAL;
+
+    call->retain();
+    post_task([this, call, muted]() {
+        struct call *c = call->raw_call();
+        if (c != nullptr) {
+            struct audio *au = call_audio(c);
+            if (au != nullptr) {
+                audio_mute(au, muted);
+            }
+            call->set_muted(muted);
+            dispatch_call_media(call, 0, 0, call->is_on_hold(), muted);
+        }
+        call->release();
+    });
+
+    return 0;
+}
+
+int Engine::send_dtmf(sip_call_t *call, const char *digits)
+{
+    if (!call || !digits || std::strlen(digits) == 0) return EINVAL;
+
+    std::string digits_str = digits;
+
+    call->retain();
+    post_task([call, digits_str]() {
+        struct call *c = call->raw_call();
+        if (c != nullptr) {
+            for (char ch : digits_str) {
+                (void)call_send_digit(c, ch);
+            }
+            (void)call_send_digit(c, KEYCODE_REL);
+        }
+        call->release();
+    });
+
+    return 0;
+}
+
+int Engine::set_client_mic_muted(bool muted)
+{
+    m_mic_muted = muted;
+    post_task([this, muted]() {
+        std::lock_guard<std::mutex> lock(m_calls_mutex);
+        for (auto *sess : m_all_calls) {
+            if (sess && sess->raw_call() != nullptr) {
+                struct audio *au = call_audio(sess->raw_call());
+                if (au != nullptr) {
+                    audio_mute(au, muted);
+                }
+                sess->set_muted(muted);
+                dispatch_call_media(sess, 0, 0, sess->is_on_hold(), muted);
+            }
+        }
+    });
+    return 0;
+}
+
+bool Engine::is_client_mic_muted() const
+{
+    return m_mic_muted.load();
+}
+
+void Engine::destroy_call(sip_call_t *call)
+{
+    if (!call) return;
+    {
+        std::lock_guard<std::mutex> lock(m_calls_mutex);
+        for (auto it = m_all_calls.begin(); it != m_all_calls.end(); ++it) {
+            if (*it == call) {
+                m_all_calls.erase(it);
+                break;
+            }
+        }
+    }
+    call->release();
+}
+
+bool Engine::prepare_audio_session()
+{
+    if (m_callbacks.prepare_audio_session) {
+        bool ok = m_callbacks.prepare_audio_session(m_owner, m_user_data);
+        if (ok) {
+            m_audio_session_active = true;
+        }
+        return ok;
+    }
+#if defined(__APPLE__)
+    Class cls = objc_getClass("AVAudioSession");
+    if (cls) {
+        SEL sharedSel = sel_registerName("sharedInstance");
+        auto sharedFn = reinterpret_cast<id (*)(Class, SEL)>(objc_msgSend);
+        id session = sharedFn(cls, sharedSel);
+        if (session) {
+            Class nsStringCls = objc_getClass("NSString");
+            SEL strWithUtf8Sel = sel_registerName("stringWithUTF8String:");
+            auto strFn = reinterpret_cast<id (*)(Class, SEL, const char *)>(objc_msgSend);
+            id cat = strFn(nsStringCls, strWithUtf8Sel, "AVAudioSessionCategoryPlayAndRecord");
+            id mode = strFn(nsStringCls, strWithUtf8Sel, "AVAudioSessionModeVoiceChat");
+
+            SEL setCatModeOptSel = sel_registerName("setCategory:mode:options:error:");
+            auto setCatFn = reinterpret_cast<bool (*)(id, SEL, id, id, unsigned long, id *)>(objc_msgSend);
+            setCatFn(session, setCatModeOptSel, cat, mode, 1 /* DefaultToSpeaker */, nullptr);
+
+            SEL setActiveSel = sel_registerName("setActive:error:");
+            auto setActiveFn = reinterpret_cast<bool (*)(id, SEL, bool, id *)>(objc_msgSend);
+            setActiveFn(session, setActiveSel, true, nullptr);
+        }
+    }
+#endif
+    m_audio_session_active = true;
+    return true;
+}
+
+void Engine::release_audio_session_if_idle()
+{
+    {
+        std::lock_guard<std::mutex> lock(m_calls_mutex);
+        for (auto *c : m_all_calls) {
+            if (c && !c->is_closed()) {
+                return;
+            }
+        }
+    }
+    if (m_audio_session_active.exchange(false)) {
+        if (m_callbacks.release_audio_session) {
+            m_callbacks.release_audio_session(m_owner, m_user_data);
+        }
+#if defined(__APPLE__)
+        Class cls = objc_getClass("AVAudioSession");
+        if (cls) {
+            SEL sharedSel = sel_registerName("sharedInstance");
+            auto sharedFn = reinterpret_cast<id (*)(Class, SEL)>(objc_msgSend);
+            id session = sharedFn(cls, sharedSel);
+            if (session) {
+                SEL setActiveSel = sel_registerName("setActive:error:");
+                auto setActiveFn = reinterpret_cast<bool (*)(id, SEL, bool, id *)>(objc_msgSend);
+                setActiveFn(session, setActiveSel, false, nullptr);
+            }
+        }
+#endif
+    }
+}
+
+sip_call_t *Engine::find_or_create_call_session(struct call *c, const char *remote_uri, bool is_outgoing, bool with_video)
+{
+    std::lock_guard<std::mutex> lock(m_calls_mutex);
+    if (c != nullptr) {
+        for (auto *sess : m_all_calls) {
+            if (sess && sess->raw_call() == c) {
+                return sess;
+            }
+        }
+        if (is_outgoing) {
+            for (auto *sess : m_all_calls) {
+                if (sess && sess->raw_call() == nullptr && sess->is_outgoing()) {
+                    sess->attach_raw_call(c);
+                    return sess;
+                }
+            }
+        }
+    }
+    auto *new_sess = new sip_call_t(m_owner, this, c, remote_uri, is_outgoing, with_video);
+    m_all_calls.push_back(new_sess);
+    return new_sess;
+}
+
+sip_call_t *Engine::find_call_session(struct call *c)
+{
+    std::lock_guard<std::mutex> lock(m_calls_mutex);
+    for (auto *sess : m_all_calls) {
+        if (sess && sess->raw_call() == c) {
+            return sess;
+        }
+    }
+    return nullptr;
+}
+
+void Engine::remove_call_session(struct call *c)
+{
+    std::lock_guard<std::mutex> lock(m_calls_mutex);
+    for (auto *sess : m_all_calls) {
+        if (sess && sess->raw_call() == c) {
+            sess->detach_raw_call();
+        }
+    }
+}
+
+struct CallStateTaskArgs {
+    sip_call_t *call{nullptr};
+    sip_call_state_t state{SIP_CALL_STATE_CLOSED};
+    int code{0};
+    std::string reason;
+    void (*on_call_state)(sip_call_t *, sip_call_state_t, int, const char *, void *){nullptr};
+    void *user_data{nullptr};
+};
+
+static void run_call_state_task(void *arg)
+{
+    auto *args = static_cast<CallStateTaskArgs *>(arg);
+    if (args) {
+        if (args->on_call_state) {
+            args->on_call_state(args->call, args->state, args->code, args->reason.c_str(), args->user_data);
+        }
+        if (args->call) {
+            args->call->release();
+        }
+        delete args;
+    }
+}
+
+void Engine::dispatch_call_state(sip_call_t *call, sip_call_state_t state, int code, const char *reason)
+{
+    if (!m_callbacks.on_call_state) return;
+
+    if (call) {
+        call->retain();
+    }
+    auto *args = new CallStateTaskArgs{
+        call,
+        state,
+        code,
+        reason ? reason : "",
+        m_callbacks.on_call_state,
+        m_user_data
+    };
+
+    if (m_callbacks.dispatch_to_main) {
+        m_callbacks.dispatch_to_main(run_call_state_task, args, m_user_data);
+        return;
+    }
+
+#if defined(__APPLE__)
+    dispatch_async_f(dispatch_get_main_queue(), args, run_call_state_task);
+#else
+    run_call_state_task(args);
+#endif
+}
+
+struct IncomingCallTaskArgs {
+    sip_client_t *client{nullptr};
+    sip_call_t *call{nullptr};
+    void (*on_incoming_call)(sip_client_t *, sip_call_t *, void *){nullptr};
+    void *user_data{nullptr};
+};
+
+static void run_incoming_call_task(void *arg)
+{
+    auto *args = static_cast<IncomingCallTaskArgs *>(arg);
+    if (args) {
+        if (args->on_incoming_call) {
+            args->on_incoming_call(args->client, args->call, args->user_data);
+        }
+        if (args->call) {
+            args->call->release();
+        }
+        delete args;
+    }
+}
+
+void Engine::dispatch_incoming_call(sip_call_t *call)
+{
+    if (!m_callbacks.on_incoming_call) return;
+
+    if (call) {
+        call->retain();
+    }
+    auto *args = new IncomingCallTaskArgs{
+        m_owner,
+        call,
+        m_callbacks.on_incoming_call,
+        m_user_data
+    };
+
+    if (m_callbacks.dispatch_to_main) {
+        m_callbacks.dispatch_to_main(run_incoming_call_task, args, m_user_data);
+        return;
+    }
+
+#if defined(__APPLE__)
+    dispatch_async_f(dispatch_get_main_queue(), args, run_incoming_call_task);
+#else
+    run_incoming_call_task(args);
+#endif
+}
+
+struct CallMediaTaskArgs {
+    sip_call_t *call{nullptr};
+    int width{0};
+    int height{0};
+    bool on_hold{false};
+    bool is_muted{false};
+    void (*on_call_media)(sip_call_t *, int, int, bool, bool, void *){nullptr};
+    void *user_data{nullptr};
+};
+
+static void run_call_media_task(void *arg)
+{
+    auto *args = static_cast<CallMediaTaskArgs *>(arg);
+    if (args) {
+        if (args->on_call_media) {
+            args->on_call_media(args->call, args->width, args->height, args->on_hold, args->is_muted, args->user_data);
+        }
+        if (args->call) {
+            args->call->release();
+        }
+        delete args;
+    }
+}
+
+void Engine::dispatch_call_media(sip_call_t *call, int width, int height, bool on_hold, bool is_muted)
+{
+    if (!m_callbacks.on_call_media) return;
+
+    if (call) {
+        call->retain();
+    }
+    auto *args = new CallMediaTaskArgs{
+        call,
+        width,
+        height,
+        on_hold,
+        is_muted,
+        m_callbacks.on_call_media,
+        m_user_data
+    };
+
+    if (m_callbacks.dispatch_to_main) {
+        m_callbacks.dispatch_to_main(run_call_media_task, args, m_user_data);
+        return;
+    }
+
+#if defined(__APPLE__)
+    dispatch_async_f(dispatch_get_main_queue(), args, run_call_media_task);
+#else
+    run_call_media_task(args);
+#endif
+}
+
+struct DtmfDigitTaskArgs {
+    sip_call_t *call{nullptr};
+    std::string digit;
+    void (*on_dtmf_digit)(sip_call_t *, const char *, void *){nullptr};
+    void *user_data{nullptr};
+};
+
+static void run_dtmf_digit_task(void *arg)
+{
+    auto *args = static_cast<DtmfDigitTaskArgs *>(arg);
+    if (args) {
+        if (args->on_dtmf_digit) {
+            args->on_dtmf_digit(args->call, args->digit.c_str(), args->user_data);
+        }
+        if (args->call) {
+            args->call->release();
+        }
+        delete args;
+    }
+}
+
+void Engine::dispatch_dtmf_digit(sip_call_t *call, const char *digit)
+{
+    if (!m_callbacks.on_dtmf_digit) return;
+
+    if (call) {
+        call->retain();
+    }
+    auto *args = new DtmfDigitTaskArgs{
+        call,
+        digit ? digit : "",
+        m_callbacks.on_dtmf_digit,
+        m_user_data
+    };
+
+    if (m_callbacks.dispatch_to_main) {
+        m_callbacks.dispatch_to_main(run_dtmf_digit_task, args, m_user_data);
+        return;
+    }
+
+#if defined(__APPLE__)
+    dispatch_async_f(dispatch_get_main_queue(), args, run_dtmf_digit_task);
+#else
+    run_dtmf_digit_task(args);
 #endif
 }
 
