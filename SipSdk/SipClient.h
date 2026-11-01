@@ -135,6 +135,7 @@ typedef NS_ENUM(NSInteger, SipCameraPosition) {
 @property (nonatomic, readonly) BOOL hasVideo;
 @property (nonatomic, readonly) BOOL isOutgoing;
 @property (nonatomic, readonly, getter=isOnHold) BOOL onHold;
+@property (nonatomic, readonly, getter=isClosed) BOOL closed;
 @property (nonatomic, readonly) uint32_t durationSeconds;
 
 - (void)answer;

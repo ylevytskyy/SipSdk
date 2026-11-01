@@ -247,6 +247,8 @@ static void fillSyntheticYUV420Pattern(uint8_t *yPlane,
 @property (nonatomic, assign) BOOL callHasVideo;
 @property (nonatomic, assign) BOOL callIsOutgoing;
 @property (nonatomic, assign) BOOL callOnHold;
+@property (nonatomic, assign) BOOL closed;
+@property (nonatomic, assign) uint32_t cachedDuration;
 @property (nonatomic, strong) NSDate *establishedAt;
 @end
 
@@ -1907,6 +1909,13 @@ static void ua_event_handler(enum bevent_ev ev, struct bevent *event, void *arg)
         }
 
         case BEVENT_CALL_CLOSED: {
+            sipCall.closed = YES;
+            if (call != nullptr) {
+                uint32_t dur = call_duration(call);
+                if (dur > 0) {
+                    sipCall.cachedDuration = dur;
+                }
+            }
             dispatch_async(dispatch_get_main_queue(), ^{
                 if (sipSdk.remoteVideoView != nil) {
                     [sipSdk.remoteVideoView clearVideo];
@@ -2060,6 +2069,11 @@ static void ua_event_handler(enum bevent_ev ev, struct bevent *event, void *arg)
     return self.callOnHold;
 }
 
+- (BOOL)isClosed
+{
+    return _closed;
+}
+
 - (uint32_t)durationSeconds
 {
     if (self.call != nullptr) {
@@ -2067,6 +2081,9 @@ static void ua_event_handler(enum bevent_ev ev, struct bevent *event, void *arg)
         if (dur > 0) {
             return dur;
         }
+    }
+    if (self.cachedDuration > 0) {
+        return self.cachedDuration;
     }
     if (self.establishedAt != nil) {
         NSTimeInterval elapsed = [[NSDate date] timeIntervalSinceDate:self.establishedAt];

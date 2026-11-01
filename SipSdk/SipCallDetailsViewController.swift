@@ -9,10 +9,13 @@
 import UIKit
 
 class SipCallDetailsViewController: UIViewController {
+    static let callDidEndNotification = Notification.Name("SipCallDidEndNotification")
+
     var sipCall: SipCall!
     weak var sipClient: SipClient?
     var isSimulatedVideoPreview: Bool = false
     var onCallEnded: (() -> Void)?
+    private(set) var isCallEnded: Bool = false
 
     private let remoteVideoView = SipVideoView(frame: .zero)
     private let localVideoView = SipVideoView(frame: .zero)
@@ -51,6 +54,17 @@ class SipCallDetailsViewController: UIViewController {
         attachVideoViewsToClient()
         refreshControlStates()
         startCallTimers()
+
+        NotificationCenter.default.addObserver(self,
+                                               selector: #selector(handleCallDidEndNotification(_:)),
+                                               name: SipCallDetailsViewController.callDidEndNotification,
+                                               object: nil)
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+        durationTimer?.invalidate()
+        syntheticFrameTimer?.invalidate()
     }
 
     override func viewWillDisappear(_ animated: Bool) {
@@ -73,15 +87,42 @@ class SipCallDetailsViewController: UIViewController {
     }
 
     @IBAction func hangup(_ sender: Any) {
-        if let call = sipCall {
+        if let call = sipCall, !call.isClosed {
             call.hangup(487, reason: "Request Terminated")
             SipCallKitManager.shared.reportCallEnded(call, reason: .remoteEnded)
         }
+        dismissInCallScreen()
+    }
+
+    func dismissInCallScreen() {
+        guard !isCallEnded else { return }
+        isCallEnded = true
+        durationTimer?.invalidate()
+        durationTimer = nil
+        syntheticFrameTimer?.invalidate()
+        syntheticFrameTimer = nil
+        sipClient?.stopLocalVideoPreview()
+        sipClient?.remoteVideoView = nil
+        callStateSubtitleLabel.text = "Call Ended"
         onCallEnded?()
         if let nav = navigationController {
             nav.popViewController(animated: true)
-        } else {
+        } else if presentingViewController != nil {
             dismiss(animated: true)
+        }
+    }
+
+    @objc private func handleCallDidEndNotification(_ notification: Notification) {
+        if let endedCall = notification.object as? SipCall {
+            if sipCall == nil || endedCall === sipCall || endedCall.uuid == sipCall?.uuid || (!endedCall.callId.isEmpty && endedCall.callId == sipCall?.callId) {
+                dismissInCallScreen()
+            }
+        } else if let endedUuid = notification.object as? UUID {
+            if sipCall == nil || endedUuid == sipCall?.uuid {
+                dismissInCallScreen()
+            }
+        } else {
+            dismissInCallScreen()
         }
     }
 
@@ -336,6 +377,11 @@ class SipCallDetailsViewController: UIViewController {
     }
 
     private func updateHeaderSubtitle() {
+        guard !isCallEnded else { return }
+        if sipCall?.isClosed == true {
+            dismissInCallScreen()
+            return
+        }
         let secs = Int(sipCall?.durationSeconds ?? 0) > 0 ? Int(sipCall?.durationSeconds ?? 0) : elapsedSeconds
         let mins = secs / 60
         let rem = secs % 60

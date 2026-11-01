@@ -102,6 +102,24 @@ INCALL_PNG="$EVIDENCE_DIR/sim-incall-video-screen.png"
 xcrun simctl io "$SIM_UDID" screenshot "$INCALL_PNG"
 test -s "$INCALL_PNG"
 
+echo "==> Launching SipSdk.app in Remote Hangup Dismissal mode"
+xcrun simctl terminate "$SIM_UDID" "$BUNDLE_ID" >/dev/null 2>&1 || true
+rm -f "$STATUS_FILE"
+
+SIMCTL_CHILD_SIPSDK_UITEST_MODE="remote_hangup" \
+SIMCTL_CHILD_SIPSDK_UITEST_STATUS_FILE="$STATUS_FILE" \
+  xcrun simctl launch "$SIM_UDID" "$BUNDLE_ID"
+
+for _ in {1..30}; do
+  if [[ -f "$STATUS_FILE" ]] && grep -q "REMOTE_HANGUP_DISMISSED_OK" "$STATUS_FILE"; then
+    break
+  fi
+  sleep 0.5
+done
+
+grep -q "REMOTE_HANGUP_DISMISSED_OK" "$STATUS_FILE"
+echo "    PASS: Remote hangup automatically dismisses in-call screen and clears active call"
+
 echo "Screenshots saved:"
 ls -lh "$DIALER_PNG" "$ACCOUNT_PNG" "$INCALL_PNG"
 echo "SIM_APP_LAUNCH_VERIFIED"

@@ -20,6 +20,9 @@ class SipCallsViewController: UIViewController {
     private var didHandleLaunchUiTestMode = false
     private var wirelessDataAlertVisible = false
 
+    private weak var activeCallDetailsVC: SipCallDetailsViewController?
+    private weak var incomingCallAlert: UIAlertController?
+
     private let statusHeaderBadge = UILabel()
     private let videoCallActionButton = UIButton(type: .system)
     private let audioCallActionButton = UIButton(type: .system)
@@ -303,6 +306,7 @@ class SipCallsViewController: UIViewController {
         detailsVC.onCallEnded = { [weak self] in
             self?.reloadCallHistory()
         }
+        activeCallDetailsVC = detailsVC
 
         if let nav = navigationController {
             nav.pushViewController(detailsVC, animated: !simulated)
@@ -360,6 +364,26 @@ class SipCallsViewController: UIViewController {
         } else if mode == "incall_video" {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
                 self?.openSimulatedInCallVideoScreen()
+            }
+        } else if mode == "remote_hangup" {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+                guard let self = self else { return }
+                self.openSimulatedInCallVideoScreen()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+                    guard let self = self else { return }
+                    guard let call = self.calls.first else { return }
+                    self.onCallClosed(call)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+                        guard let self = self else { return }
+                        let callClosed = self.calls.isEmpty
+                        let inCallDismissed = self.activeCallDetailsVC == nil &&
+                            !(self.navigationController?.topViewController is SipCallDetailsViewController) &&
+                            !(self.presentedViewController is SipCallDetailsViewController)
+                        if callClosed && inCallDismissed {
+                            self.writeUiTestStatusIfNeeded(marker: "REMOTE_HANGUP_DISMISSED_OK")
+                        }
+                    }
+                }
             }
         } else if mode == "device_verify" {
             let targetUri = env["SIPSDK_DEVICE_CALL_URI"] ?? "9001"
@@ -551,6 +575,7 @@ extension SipCallsViewController: SipClientDelegate {
             SipCallKitManager.shared.reportCallEnded(sipCall, reason: .declinedElsewhere)
         })
 
+        incomingCallAlert = alertController
         present(alertController, animated: true, completion: nil)
 
         if !calls.contains(where: { $0 === sipCall }) {
@@ -581,7 +606,24 @@ extension SipCallsViewController: SipClientDelegate {
                                               durationSeconds: Int(sipCall.durationSeconds),
                                               outcome: sipCall.durationSeconds > 0 ? "Completed" : "Ended")
 
-        calls.removeAll(where: { $0 === sipCall })
+        if let alert = incomingCallAlert, alert.presentingViewController != nil {
+            alert.dismiss(animated: true)
+            incomingCallAlert = nil
+        }
+
+        NotificationCenter.default.post(name: SipCallDetailsViewController.callDidEndNotification, object: sipCall)
+        if let details = activeCallDetailsVC, details.sipCall === sipCall || details.sipCall?.uuid == sipCall.uuid || details.sipCall == nil {
+            details.dismissInCallScreen()
+            activeCallDetailsVC = nil
+        } else if let top = navigationController?.topViewController as? SipCallDetailsViewController,
+                  top.sipCall === sipCall || top.sipCall?.uuid == sipCall.uuid || top.sipCall == nil {
+            top.dismissInCallScreen()
+        } else if let presented = presentedViewController as? SipCallDetailsViewController,
+                  presented.sipCall === sipCall || presented.sipCall?.uuid == sipCall.uuid || presented.sipCall == nil {
+            presented.dismissInCallScreen()
+        }
+
+        calls.removeAll(where: { $0 === sipCall || $0.uuid == sipCall.uuid || (!sipCall.callId.isEmpty && $0.callId == sipCall.callId) })
         reloadCallHistory()
     }
 
@@ -606,6 +648,23 @@ extension SipCallsViewController: SipCallKitManagerDelegate {
     }
 
     func callKitDidEndCall(uuid: UUID) {
+        if let alert = incomingCallAlert, alert.presentingViewController != nil {
+            alert.dismiss(animated: true)
+            incomingCallAlert = nil
+        }
+
+        NotificationCenter.default.post(name: SipCallDetailsViewController.callDidEndNotification, object: uuid)
+        if let details = activeCallDetailsVC, details.sipCall?.uuid == uuid || details.sipCall == nil {
+            details.dismissInCallScreen()
+            activeCallDetailsVC = nil
+        } else if let top = navigationController?.topViewController as? SipCallDetailsViewController,
+                  top.sipCall?.uuid == uuid || top.sipCall == nil {
+            top.dismissInCallScreen()
+        } else if let presented = presentedViewController as? SipCallDetailsViewController,
+                  presented.sipCall?.uuid == uuid || presented.sipCall == nil {
+            presented.dismissInCallScreen()
+        }
+
         calls.removeAll(where: { $0.uuid == uuid })
         reloadCallHistory()
     }
@@ -649,5 +708,13 @@ extension SipCallsViewController: UITableViewDataSource, UITableViewDelegate {
             return nil
         }
         return indexPath
+    }
+
+    func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
+        tableView.deselectRow(at: indexPath, animated: true)
+        if indexPath.section == 0 && indexPath.row < calls.count {
+            let call = calls[indexPath.row]
+            presentInCallScreen(for: call, simulated: false)
+        }
     }
 }

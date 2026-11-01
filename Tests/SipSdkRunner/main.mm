@@ -198,6 +198,7 @@ static NSString *sipHeader(NSString *msg, NSString *name)
 @property (nonatomic) struct sockaddr_in clientSockAddr;
 @property (nonatomic) socklen_t clientSockLen;
 - (void)sendReinviteRecvonly;
+- (void)sendBye;
 @end
 
 @implementation LoopbackReinvitePeer
@@ -332,6 +333,28 @@ static NSString *sipHeader(NSString *msg, NSString *name)
            [reinvite lengthOfBytesUsingEncoding:NSUTF8StringEncoding],
            0, (struct sockaddr *)&_clientSockAddr, _clientSockLen);
 }
+
+- (void)sendBye
+{
+    NSString *bye = [NSString stringWithFormat:
+        @"BYE %@ SIP/2.0\r\n"
+        "Via: SIP/2.0/UDP 127.0.0.1:%u;branch=z9hG4bK-bye-200;rport\r\n"
+        "Max-Forwards: 70\r\n"
+        "From: %@\r\n"
+        "To: %@\r\n"
+        "Call-ID: %@\r\n"
+        "CSeq: 200 BYE\r\n"
+        "Content-Length: 0\r\n\r\n",
+        self.clientContact ?: @"sip:alice@127.0.0.1",
+        self.port,
+        self.peerTo,
+        self.clientFrom,
+        self.lastCallId];
+
+    sendto(self.sockFd, bye.UTF8String,
+           [bye lengthOfBytesUsingEncoding:NSUTF8StringEncoding],
+           0, (struct sockaddr *)&_clientSockAddr, _clientSockLen);
+}
 @end
 
 @interface AnswerProbe : NSObject <SipClientDelegate>
@@ -374,6 +397,43 @@ static void testAnsweredCall(SipClient *client, BOOL withVideo)
     while (!probe.closed && closeDeadline.timeIntervalSinceNow > 0) {
         [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];
     }
+    [peer stop];
+    client.delegate = nil;
+}
+
+static void testRemotePartyTerminatesCall(SipClient *client)
+{
+    LoopbackReinvitePeer *peer = [[LoopbackReinvitePeer alloc] initWithPort:15096];
+    check(peer.isBound, @"Answering SIP peer binds loopback port for remote BYE test", @"15096");
+    if (!peer.isBound) return;
+    [peer start];
+    AnswerProbe *probe = [AnswerProbe new];
+    client.delegate = probe;
+    SipCall *call = [client makeCall:@"sip:peer@127.0.0.1:15096" withVideo:YES];
+    NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:5];
+    while (!probe.closed && !probe.established && deadline.timeIntervalSinceNow > 0) {
+        [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];
+    }
+    check(call != nil && probe.established && !probe.closed && peer.acknowledged,
+          @"Call established before remote BYE",
+          [NSString stringWithFormat:@"established=%d closed=%d", probe.established, probe.closed]);
+
+    [NSThread sleepForTimeInterval:1.1];
+
+    // Remote party terminates call with BYE
+    [peer sendBye];
+
+    NSDate *closeDeadline = [NSDate dateWithTimeIntervalSinceNow:3];
+    while (!probe.closed && closeDeadline.timeIntervalSinceNow > 0) {
+        [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];
+    }
+    check(probe.closed,
+          @"Remote party terminating call sends BYE and triggers onCallClosed",
+          [NSString stringWithFormat:@"closed=%d", probe.closed]);
+    check(call.isClosed == YES, @"Terminated call marks isClosed=YES", @"isClosed=YES");
+    check(call.durationSeconds >= 1,
+          @"Closed call duration is recorded",
+          [NSString stringWithFormat:@"duration=%u", call.durationSeconds]);
     [peer stop];
     client.delegate = nil;
 }
@@ -545,6 +605,7 @@ int main(int argc, char *argv[])
 
         testAnsweredCall(client, NO);
         testAnsweredCall(client, YES);
+        testRemotePartyTerminatesCall(client);
         testReinviteVideoCall(client);
 
         // 4. Test VideoToolbox H.264 encode -> RFC 6184 RTP packetize -> depacketize -> decode round-trip
