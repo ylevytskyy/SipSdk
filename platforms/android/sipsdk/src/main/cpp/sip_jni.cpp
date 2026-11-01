@@ -1,8 +1,10 @@
 #include <jni.h>
 #include <android/log.h>
+#include <android/native_window_jni.h>
 #include <string>
 #include <mutex>
 #include "sip_abi.h"
+#include "media_codec_driver.h"
 
 #define LOG_TAG "SipSdkJni"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
@@ -38,6 +40,54 @@ struct JniEnvGuard {
     }
 };
 
+struct AndroidCaptureState {
+    void (*frame_handler)(const sip_video_frame_t *frame, void *arg){nullptr};
+    void *frame_arg{nullptr};
+    std::atomic<bool> enabled{true};
+    std::atomic<int> camera_position{0};
+    std::mutex mutex;
+};
+
+static int android_capture_start(void *user_data, int width, int height, int fps) {
+    (void)user_data; (void)width; (void)height; (void)fps;
+    return 0;
+}
+
+static void android_capture_stop(void *user_data) {
+    (void)user_data;
+}
+
+static void android_capture_set_frame_handler(void *user_data, void (*handler)(const sip_video_frame_t *, void *), void *arg) {
+    auto *st = static_cast<AndroidCaptureState *>(user_data);
+    if (!st) return;
+    std::lock_guard<std::mutex> lock(st->mutex);
+    st->frame_handler = handler;
+    st->frame_arg = arg;
+}
+
+static void android_capture_switch_camera(void *user_data) {
+    auto *st = static_cast<AndroidCaptureState *>(user_data);
+    if (!st) return;
+    st->camera_position = (st->camera_position.load() == 0) ? 1 : 0;
+}
+
+static void android_capture_set_camera(void *user_data, int position) {
+    auto *st = static_cast<AndroidCaptureState *>(user_data);
+    if (!st) return;
+    st->camera_position = position;
+}
+
+static void android_capture_set_enabled(void *user_data, bool enabled) {
+    auto *st = static_cast<AndroidCaptureState *>(user_data);
+    if (!st) return;
+    st->enabled = enabled;
+}
+
+static bool android_capture_is_enabled(void *user_data) {
+    auto *st = static_cast<AndroidCaptureState *>(user_data);
+    return st ? st->enabled.load() : true;
+}
+
 struct ClientJniContext {
     jobject javaClientGlobalRef = nullptr;
     jobject mainHandlerGlobalRef = nullptr;
@@ -55,6 +105,7 @@ struct ClientJniContext {
     jmethodID releaseAudioSessionMethodId = nullptr;
 
     sip_client_t *coreClient = nullptr;
+    AndroidCaptureState captureState;
     std::mutex mutex;
 };
 
@@ -256,6 +307,21 @@ Java_com_sipsdk_SipClient_nativeCreate(JNIEnv *env, jobject thiz) {
     callbacks.release_audio_session = jni_release_audio_session;
 
     ctx->coreClient = sip_client_create(&callbacks, ctx);
+    if (ctx->coreClient) {
+        sip_video_codec_driver_t codecDriver = sipsdk::AndroidMediaCodecDriver::get_c_driver();
+        sip_client_set_video_codec_driver(ctx->coreClient, &codecDriver);
+
+        sip_video_capture_driver_t capDriver{};
+        capDriver.user_data = &ctx->captureState;
+        capDriver.start = android_capture_start;
+        capDriver.stop = android_capture_stop;
+        capDriver.set_frame_handler = android_capture_set_frame_handler;
+        capDriver.switch_camera = android_capture_switch_camera;
+        capDriver.set_camera = android_capture_set_camera;
+        capDriver.set_enabled = android_capture_set_enabled;
+        capDriver.is_enabled = android_capture_is_enabled;
+        sip_client_set_video_capture_driver(ctx->coreClient, &capDriver);
+    }
     return reinterpret_cast<jlong>(ctx);
 }
 
@@ -458,6 +524,123 @@ Java_com_sipsdk_SipCall_nativeIsOnHold(JNIEnv *env, jobject thiz, jlong callHand
     (void)thiz;
     auto *call = reinterpret_cast<sip_call_t *>(callHandle);
     return (call && sip_call_is_on_hold(call)) ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jint JNICALL
+Java_com_sipsdk_SipClient_nativeSetRemoteSurface(JNIEnv *env, jobject thiz, jlong handle, jobject surface) {
+    (void)thiz;
+    auto *ctx = reinterpret_cast<ClientJniContext *>(handle);
+    if (!ctx) return -1;
+
+    ANativeWindow *window = surface ? ANativeWindow_fromSurface(env, surface) : nullptr;
+    sipsdk::AndroidMediaCodecDriver::set_remote_window(window);
+    return 0;
+}
+
+JNIEXPORT jint JNICALL
+Java_com_sipsdk_SipCall_nativeRequestKeyframe(JNIEnv *env, jobject thiz, jlong callHandle) {
+    (void)env;
+    (void)thiz;
+    auto *call = reinterpret_cast<sip_call_t *>(callHandle);
+    if (!call) return -1;
+    return sip_call_request_keyframe(call);
+}
+
+JNIEXPORT jint JNICALL
+Java_com_sipsdk_SipClient_nativeSwitchCamera(JNIEnv *env, jobject thiz, jlong handle) {
+    (void)env;
+    (void)thiz;
+    auto *ctx = reinterpret_cast<ClientJniContext *>(handle);
+    if (!ctx || !ctx->coreClient) return -1;
+    return sip_client_switch_camera(ctx->coreClient);
+}
+
+JNIEXPORT jint JNICALL
+Java_com_sipsdk_SipClient_nativeSetCamera(JNIEnv *env, jobject thiz, jlong handle, jint position) {
+    (void)env;
+    (void)thiz;
+    auto *ctx = reinterpret_cast<ClientJniContext *>(handle);
+    if (!ctx || !ctx->coreClient) return -1;
+    return sip_client_set_camera(ctx->coreClient, position);
+}
+
+JNIEXPORT jint JNICALL
+Java_com_sipsdk_SipClient_nativeSetLocalVideoEnabled(JNIEnv *env, jobject thiz, jlong handle, jboolean enabled) {
+    (void)env;
+    (void)thiz;
+    auto *ctx = reinterpret_cast<ClientJniContext *>(handle);
+    if (!ctx || !ctx->coreClient) return -1;
+    return sip_client_set_local_video_enabled(ctx->coreClient, enabled == JNI_TRUE);
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_sipsdk_SipClient_nativeIsLocalVideoEnabled(JNIEnv *env, jobject thiz, jlong handle) {
+    (void)env;
+    (void)thiz;
+    auto *ctx = reinterpret_cast<ClientJniContext *>(handle);
+    if (!ctx || !ctx->coreClient) return JNI_FALSE;
+    return sip_client_is_local_video_enabled(ctx->coreClient) ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jint JNICALL
+Java_com_sipsdk_SipClient_nativeStartLocalPreview(JNIEnv *env, jobject thiz, jlong handle) {
+    (void)env;
+    (void)thiz;
+    auto *ctx = reinterpret_cast<ClientJniContext *>(handle);
+    if (!ctx || !ctx->coreClient) return -1;
+    return sip_client_start_local_preview(ctx->coreClient);
+}
+
+JNIEXPORT jint JNICALL
+Java_com_sipsdk_SipClient_nativeStopLocalPreview(JNIEnv *env, jobject thiz, jlong handle) {
+    (void)env;
+    (void)thiz;
+    auto *ctx = reinterpret_cast<ClientJniContext *>(handle);
+    if (!ctx || !ctx->coreClient) return -1;
+    return sip_client_stop_local_preview(ctx->coreClient);
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_sipsdk_SipClient_nativeIsLocalPreviewActive(JNIEnv *env, jobject thiz, jlong handle) {
+    (void)env;
+    (void)thiz;
+    auto *ctx = reinterpret_cast<ClientJniContext *>(handle);
+    if (!ctx || !ctx->coreClient) return JNI_FALSE;
+    return sip_client_is_local_preview_active(ctx->coreClient) ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT void JNICALL
+Java_com_sipsdk_SipCameraCapture_nativeDeliverFrame(
+    JNIEnv *env, jclass clazz, jlong clientHandle,
+    jint width, jint height,
+    jobject yBuffer, jobject uBuffer, jobject vBuffer,
+    jint yStride, jint uStride, jint vStride,
+    jlong timestampNs)
+{
+    (void)clazz;
+    auto *ctx = reinterpret_cast<ClientJniContext *>(clientHandle);
+    if (!ctx || !ctx->coreClient) return;
+
+    const uint8_t *yPtr = static_cast<const uint8_t *>(env->GetDirectBufferAddress(yBuffer));
+    const uint8_t *uPtr = static_cast<const uint8_t *>(env->GetDirectBufferAddress(uBuffer));
+    const uint8_t *vPtr = static_cast<const uint8_t *>(env->GetDirectBufferAddress(vBuffer));
+    if (!yPtr || !uPtr || !vPtr) return;
+
+    sip_video_frame_t vf{};
+    vf.width = width;
+    vf.height = height;
+    vf.y = yPtr;
+    vf.u = uPtr;
+    vf.v = vPtr;
+    vf.y_stride = yStride;
+    vf.u_stride = uStride;
+    vf.v_stride = vStride;
+    vf.timestamp_ns = timestampNs > 0 ? static_cast<uint64_t>(timestampNs) : 0;
+
+    std::lock_guard<std::mutex> lock(ctx->captureState.mutex);
+    if (ctx->captureState.frame_handler) {
+        ctx->captureState.frame_handler(&vf, ctx->captureState.frame_arg);
+    }
 }
 
 } // extern "C"

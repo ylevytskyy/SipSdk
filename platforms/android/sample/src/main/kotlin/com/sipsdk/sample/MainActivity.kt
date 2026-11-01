@@ -11,6 +11,7 @@ import com.sipsdk.SipCallState
 import com.sipsdk.SipClient
 import com.sipsdk.SipClientListener
 import com.sipsdk.SipRegistrationState
+import com.sipsdk.SipSurfaceView
 
 class MainActivity : AppCompatActivity(), SipClientListener {
 
@@ -22,19 +23,24 @@ class MainActivity : AppCompatActivity(), SipClientListener {
     private lateinit var destinationInput: EditText
     private lateinit var registerBtn: Button
     private lateinit var callBtn: Button
+    private lateinit var videoCallBtn: Button
+    private lateinit var flipCameraBtn: Button
     private lateinit var hangupBtn: Button
+
+    private lateinit var remoteVideoView: SipSurfaceView
+    private lateinit var localVideoView: SipSurfaceView
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
         val layout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(32, 64, 32, 32)
+            setPadding(32, 48, 32, 32)
         }
 
         statusText = TextView(this).apply {
             text = "Status: Unregistered"
-            textSize = 18f
+            textSize = 16f
         }
         layout.addView(statusText)
 
@@ -52,14 +58,40 @@ class MainActivity : AppCompatActivity(), SipClientListener {
         }
         layout.addView(destinationInput)
 
+        val btnRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+        }
+
         callBtn = Button(this).apply {
-            text = "Call Echo (9001)"
+            text = "Audio Call"
             setOnClickListener {
                 val target = destinationInput.text.toString()
-                activeCall = sipClient?.makeCall(target)
+                activeCall = sipClient?.makeCall(target, withVideo = false)
             }
         }
-        layout.addView(callBtn)
+        btnRow.addView(callBtn)
+
+        videoCallBtn = Button(this).apply {
+            text = "Video Call (9001)"
+            setOnClickListener {
+                val target = destinationInput.text.toString()
+                activeCall = sipClient?.makeCall(target, withVideo = true)
+            }
+        }
+        btnRow.addView(videoCallBtn)
+        layout.addView(btnRow)
+
+        val controlRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+        }
+
+        flipCameraBtn = Button(this).apply {
+            text = "Flip Camera"
+            setOnClickListener {
+                sipClient?.switchCamera()
+            }
+        }
+        controlRow.addView(flipCameraBtn)
 
         hangupBtn = Button(this).apply {
             text = "Hangup"
@@ -68,13 +100,31 @@ class MainActivity : AppCompatActivity(), SipClientListener {
                 activeCall?.hangup()
             }
         }
-        layout.addView(hangupBtn)
+        controlRow.addView(hangupBtn)
+        layout.addView(controlRow)
 
         callStatusText = TextView(this).apply {
             text = "Call: Idle"
-            textSize = 16f
+            textSize = 14f
         }
         layout.addView(callStatusText)
+
+        // Video views
+        remoteVideoView = SipSurfaceView(this).apply {
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                400
+            )
+        }
+        layout.addView(remoteVideoView)
+
+        localVideoView = SipSurfaceView(this).apply {
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                240
+            )
+        }
+        layout.addView(localVideoView)
 
         setContentView(layout)
 
@@ -89,6 +139,9 @@ class MainActivity : AppCompatActivity(), SipClientListener {
             listener = this@MainActivity
         }
         client.start()
+        client.remoteVideoView = remoteVideoView
+        client.localVideoView = localVideoView
+        client.startLocalPreview()
         sipClient = client
     }
 
@@ -105,14 +158,21 @@ class MainActivity : AppCompatActivity(), SipClientListener {
         callStatusText.text = "Call: $state ($code $reason)"
         hangupBtn.isEnabled = (state != SipCallState.CLOSED)
         callBtn.isEnabled = (state == SipCallState.CLOSED)
+        videoCallBtn.isEnabled = (state == SipCallState.CLOSED)
         if (state == SipCallState.CLOSED) {
             activeCall = null
         }
     }
 
+    override fun onCallMediaChanged(call: SipCall, width: Int, height: Int, onHold: Boolean, isMuted: Boolean) {
+        if (width > 0 && height > 0) {
+            callStatusText.text = "Call Media: ${width}x${height} (Hold=$onHold, Muted=$isMuted)"
+        }
+    }
+
     override fun onIncomingCall(call: SipCall) {
         activeCall = call
-        call.answer()
+        call.answer(withVideo = true)
     }
 
     override fun onDestroy() {

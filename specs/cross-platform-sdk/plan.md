@@ -67,7 +67,7 @@ The test seam attaches at the **Universal C ABI Boundary (`sip_abi.h`)**:
   - [x] **Slice 4 (Issue #14)**: Video Media Driver (`IVideoCaptureDriver`, `IVideoRendererDriver`, `IVideoCodecDriver`), Resilient Stream Recovery (re-INVITE `recvonly` preservation & RTCP PLI keyframe request on packet loss), and iOS Parity Lock
 - [ ] **Milestone 2 — Android Platform SDK (AAR + MediaCodec)**
   - [x] **Slice 5 (Issue #15)**: Android Platform SDK & Audio Calling Slice (detailed in [`../android-audio-calling/plan.md`](../android-audio-calling/plan.md))
-  - [ ] **Slice 6 (Issue #16)**: Android Hardware Video & SurfaceView Rendering Slice
+  - [x] **Slice 6 (Issue #16)**: Android Hardware Video & SurfaceView Rendering Slice (detailed in [`../android-hardware-video/plan.md`](../android-hardware-video/plan.md))
 - [ ] **Milestone 3 — Desktop Platform SDKs (macOS, Linux, Windows)** (Issues #17, #18)
 
 ---

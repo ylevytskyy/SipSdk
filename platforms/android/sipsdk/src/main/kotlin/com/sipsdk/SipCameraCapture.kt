@@ -1,0 +1,355 @@
+package com.sipsdk
+
+import android.content.Context
+import android.graphics.ImageFormat
+import android.hardware.camera2.*
+import android.media.ImageReader
+import android.os.Handler
+import android.os.HandlerThread
+import android.util.Log
+import java.nio.ByteBuffer
+import java.util.concurrent.atomic.AtomicBoolean
+
+class SipCameraCapture(
+    private val context: Context?,
+    private val clientHandle: Long
+) {
+    companion object {
+        private const val TAG = "SipCameraCapture"
+
+        init {
+            try {
+                System.loadLibrary("sipcore")
+            } catch (_: UnsatisfiedLinkError) {}
+        }
+
+        @JvmStatic
+        external fun nativeDeliverFrame(
+            clientHandle: Long,
+            width: Int,
+            height: Int,
+            yBuffer: ByteBuffer,
+            uBuffer: ByteBuffer,
+            vBuffer: ByteBuffer,
+            yStride: Int,
+            uStride: Int,
+            vStride: Int,
+            timestampNs: Long
+        )
+    }
+
+    private var backgroundThread: HandlerThread? = null
+    private var backgroundHandler: Handler? = null
+    private var cameraDevice: CameraDevice? = null
+    private var captureSession: CameraCaptureSession? = null
+    private var imageReader: ImageReader? = null
+    private var previewSurface: android.view.Surface? = null
+
+    private val isRunningFlag = AtomicBoolean(false)
+    private val isEnabledFlag = AtomicBoolean(true)
+    private var currentPositionVal = SipCameraPosition.FRONT
+
+    val isRunning: Boolean get() = isRunningFlag.get()
+    val isEnabled: Boolean get() = isEnabledFlag.get()
+    val currentPosition: SipCameraPosition get() = currentPositionVal
+
+    private var width: Int = 640
+    private var height: Int = 480
+    private var fps: Int = 30
+
+    fun start(width: Int = 640, height: Int = 480, fps: Int = 30): Int {
+        if (isRunningFlag.get()) return 0
+        this.width = width
+        this.height = height
+        this.fps = fps
+
+        startBackgroundThread()
+        isRunningFlag.set(true)
+
+        val cameraManager = context?.getSystemService(Context.CAMERA_SERVICE) as? CameraManager
+        if (cameraManager != null) {
+            try {
+                openCamera(cameraManager)
+            } catch (e: Exception) {
+                Log.w(TAG, "Camera2 open failed, falling back to synthetic generator: ${e.message}")
+                startSyntheticGenerator()
+            }
+        } else {
+            startSyntheticGenerator()
+        }
+        return 0
+    }
+
+    fun stop() {
+        if (!isRunningFlag.getAndSet(false)) return
+
+        stopSyntheticGenerator()
+        closeCamera()
+        stopBackgroundThread()
+    }
+
+    fun switchCamera(): Int {
+        val newPos = if (currentPositionVal == SipCameraPosition.FRONT) {
+            SipCameraPosition.BACK
+        } else {
+            SipCameraPosition.FRONT
+        }
+        return setCamera(newPos)
+    }
+
+    fun setCamera(position: SipCameraPosition): Int {
+        if (currentPositionVal == position) return 0
+        currentPositionVal = position
+        if (isRunningFlag.get()) {
+            closeCamera()
+            val cameraManager = context?.getSystemService(Context.CAMERA_SERVICE) as? CameraManager
+            if (cameraManager != null) {
+                try {
+                    openCamera(cameraManager)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Reopening camera failed: ${e.message}")
+                }
+            }
+        }
+        return 0
+    }
+
+    fun setEnabled(enabled: Boolean) {
+        isEnabledFlag.set(enabled)
+    }
+
+    fun setPreviewSurface(surface: android.view.Surface?) {
+        previewSurface = surface
+        if (isRunningFlag.get()) {
+            closeCamera()
+            val cameraManager = context?.getSystemService(Context.CAMERA_SERVICE) as? CameraManager
+            if (cameraManager != null) {
+                try {
+                    openCamera(cameraManager)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Reopening camera with preview surface failed: ${e.message}")
+                }
+            }
+        }
+    }
+
+    private fun openCamera(cameraManager: CameraManager) {
+        val targetFacing = if (currentPositionVal == SipCameraPosition.FRONT) {
+            CameraCharacteristics.LENS_FACING_FRONT
+        } else {
+            CameraCharacteristics.LENS_FACING_BACK
+        }
+
+        var selectedCameraId: String? = null
+        for (id in cameraManager.cameraIdList) {
+            val chars = cameraManager.getCameraCharacteristics(id)
+            val facing = chars.get(CameraCharacteristics.LENS_FACING)
+            if (facing == targetFacing) {
+                selectedCameraId = id
+                break
+            }
+        }
+        if (selectedCameraId == null && cameraManager.cameraIdList.isNotEmpty()) {
+            selectedCameraId = cameraManager.cameraIdList[0]
+        }
+        if (selectedCameraId == null) {
+            startSyntheticGenerator()
+            return
+        }
+
+        imageReader = ImageReader.newInstance(width, height, ImageFormat.YUV_420_888, 2).apply {
+            setOnImageAvailableListener({ reader ->
+                val image = try {
+                    reader.acquireLatestImage()
+                } catch (_: Exception) {
+                    null
+                } ?: return@setOnImageAvailableListener
+
+                if (isEnabledFlag.get() && clientHandle != 0L) {
+                    val planes = image.planes
+                    if (planes.size >= 3) {
+                        nativeDeliverFrame(
+                            clientHandle = clientHandle,
+                            width = image.width,
+                            height = image.height,
+                            yBuffer = planes[0].buffer,
+                            uBuffer = planes[1].buffer,
+                            vBuffer = planes[2].buffer,
+                            yStride = planes[0].rowStride,
+                            uStride = planes[1].rowStride,
+                            vStride = planes[2].rowStride,
+                            timestampNs = image.timestamp
+                        )
+                    }
+                }
+                image.close()
+            }, backgroundHandler)
+        }
+
+        try {
+            cameraManager.openCamera(selectedCameraId, object : CameraDevice.StateCallback() {
+                override fun onOpened(camera: CameraDevice) {
+                    cameraDevice = camera
+                    createCaptureSession(camera)
+                }
+
+                override fun onDisconnected(camera: CameraDevice) {
+                    camera.close()
+                    cameraDevice = null
+                }
+
+                override fun onError(camera: CameraDevice, error: Int) {
+                    camera.close()
+                    cameraDevice = null
+                    Log.w(TAG, "Camera error $error, switching to synthetic generator")
+                    startSyntheticGenerator()
+                }
+            }, backgroundHandler)
+        } catch (_: SecurityException) {
+            Log.w(TAG, "Missing CAMERA permission, falling back to synthetic generator")
+            startSyntheticGenerator()
+        }
+    }
+
+    private fun createCaptureSession(camera: CameraDevice) {
+        val readerSurface = imageReader?.surface ?: return
+        val targetSurfaces = mutableListOf(readerSurface)
+        previewSurface?.let { if (it.isValid) targetSurfaces.add(it) }
+
+        try {
+            camera.createCaptureSession(targetSurfaces, object : CameraCaptureSession.StateCallback() {
+                override fun onConfigured(session: CameraCaptureSession) {
+                    try {
+                        captureSession = session
+                        val requestBuilder = camera.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
+                            addTarget(readerSurface)
+                            previewSurface?.let { if (it.isValid) addTarget(it) }
+                        }
+                        session.setRepeatingRequest(requestBuilder.build(), null, backgroundHandler)
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Failed to set repeating request on configured session: ${e.message}")
+                    }
+                }
+
+                override fun onConfigureFailed(session: CameraCaptureSession) {
+                    Log.w(TAG, "Camera capture session configuration failed")
+                }
+            }, backgroundHandler)
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to create capture session: ${e.message}")
+        }
+    }
+
+    private fun closeCamera() {
+        try {
+            captureSession?.close()
+        } catch (_: Exception) {}
+        captureSession = null
+
+        try {
+            cameraDevice?.close()
+        } catch (_: Exception) {}
+        cameraDevice = null
+
+        imageReader?.close()
+        imageReader = null
+    }
+
+    // Synthetic frame generator fallback
+    private var syntheticThread: Thread? = null
+    private val syntheticRunning = AtomicBoolean(false)
+
+    private fun startSyntheticGenerator() {
+        if (syntheticRunning.getAndSet(true)) return
+        syntheticThread = Thread({
+            val ySize = width * height
+            val uvSize = (width / 2) * (height / 2)
+            val yBuf = ByteBuffer.allocateDirect(ySize)
+            val uBuf = ByteBuffer.allocateDirect(uvSize)
+            val vBuf = ByteBuffer.allocateDirect(uvSize)
+
+            var tick = 0
+            while (syntheticRunning.get() && isRunningFlag.get()) {
+                if (isEnabledFlag.get() && clientHandle != 0L) {
+                    yBuf.clear()
+                    uBuf.clear()
+                    vBuf.clear()
+
+                    val barWidth = (width / 8).coerceAtLeast(1)
+                    val kBarY = intArrayOf(235, 210, 170, 145, 106, 81, 41, 24)
+                    val kBarU = intArrayOf(128, 16, 166, 54, 202, 90, 240, 128)
+                    val kBarV = intArrayOf(128, 146, 16, 34, 222, 240, 110, 128)
+
+                    // Fill Y
+                    for (y in 0 until height) {
+                        for (x in 0 until width) {
+                            val barIdx = ((x / barWidth) + (tick / 10)) % 8
+                            yBuf.put(kBarY[barIdx].toByte())
+                        }
+                    }
+
+                    // Fill UV
+                    val uvW = width / 2
+                    val uvH = height / 2
+                    for (y in 0 until uvH) {
+                        for (x in 0 until uvW) {
+                            val barIdx = (((x * 2) / barWidth) + (tick / 10)) % 8
+                            uBuf.put(kBarU[barIdx].toByte())
+                            vBuf.put(kBarV[barIdx].toByte())
+                        }
+                    }
+
+                    yBuf.flip()
+                    uBuf.flip()
+                    vBuf.flip()
+
+                    nativeDeliverFrame(
+                        clientHandle = clientHandle,
+                        width = width,
+                        height = height,
+                        yBuffer = yBuf,
+                        uBuffer = uBuf,
+                        vBuffer = vBuf,
+                        yStride = width,
+                        uStride = uvW,
+                        vStride = uvW,
+                        timestampNs = System.nanoTime()
+                    )
+                    tick++
+                }
+
+                try {
+                    val sleepMs = if (fps > 0) 1000L / fps else 33L
+                    Thread.sleep(sleepMs)
+                } catch (_: InterruptedException) {
+                    break
+                }
+            }
+        }, "SipSyntheticCamera").apply {
+            isDaemon = true
+            start()
+        }
+    }
+
+    private fun stopSyntheticGenerator() {
+        syntheticRunning.set(false)
+        syntheticThread?.interrupt()
+        syntheticThread = null
+    }
+
+    private fun startBackgroundThread() {
+        backgroundThread = HandlerThread("SipCameraBackground").apply {
+            start()
+            backgroundHandler = Handler(looper)
+        }
+    }
+
+    private fun stopBackgroundThread() {
+        backgroundThread?.quitSafely()
+        try {
+            backgroundThread?.join(500)
+        } catch (_: InterruptedException) {}
+        backgroundThread = null
+        backgroundHandler = null
+    }
+}

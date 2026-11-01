@@ -29,6 +29,7 @@ set_target_properties(re PROPERTIES
 # Build shared library libsipcore.so
 add_library(sipcore SHARED
     sip_jni.cpp
+    media_codec_driver.cpp
     ${CORE_DIR}/src/call_session.cpp
     ${CORE_DIR}/src/engine.cpp
     ${CORE_DIR}/src/media_driver.cpp
@@ -36,17 +37,18 @@ add_library(sipcore SHARED
 )
 
 target_include_directories(sipcore
-    PUBLIC
-        ${CORE_DIR}/include
     PRIVATE
         ${CORE_DIR}/src
         ${PREBUILT_DIR}/include/re
         ${PREBUILT_DIR}/include/baresip
+    PUBLIC
+        ${CORE_DIR}/include
 )
 
 find_library(OPENSLES_LIB OpenSLES)
 find_library(LOG_LIB log)
 find_library(ANDROID_LIB android)
+find_library(MEDIANDK_LIB mediandk)
 
 target_link_libraries(sipcore
     PRIVATE
@@ -55,6 +57,7 @@ target_link_libraries(sipcore
         ${OPENSLES_LIB}
         ${LOG_LIB}
         ${ANDROID_LIB}
+        ${MEDIANDK_LIB}
         z
 )
 

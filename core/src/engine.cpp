@@ -285,6 +285,7 @@ void Engine::cleanup_on_loop_thread()
         ua_destroy(m_ua);
         m_ua = nullptr;
     }
+    m_is_registered.store(false);
 
     if (m_media_manager) {
         m_media_manager->unregister_baresip_plugins();
@@ -358,6 +359,7 @@ int Engine::register_account(const char *user, const char *domain, const char *p
 
 int Engine::unregister_account()
 {
+    m_is_registered.store(false);
     bool posted = post_task([this]() {
         if (m_ua != nullptr) {
             ua_unregister(m_ua);
@@ -371,7 +373,7 @@ int Engine::unregister_account()
 bool Engine::is_registered() const
 {
     std::lock_guard<std::mutex> lock(m_mutex);
-    return m_ua != nullptr && ua_isregistered(m_ua);
+    return m_is_registered.load() && m_ua != nullptr && ua_isregistered(m_ua);
 }
 
 struct sdp_media_internal {
@@ -425,16 +427,19 @@ void Engine::handle_ua_event(int ev, struct bevent *event)
             break;
         }
         case BEVENT_REGISTER_OK: {
+            m_is_registered.store(true);
             int scode = msg ? static_cast<int>(msg->scode) : 200;
             dispatch_reg_state(SIP_REG_STATE_REGISTERED, scode, extract_reason("OK").c_str());
             break;
         }
         case BEVENT_REGISTER_FAIL: {
+            m_is_registered.store(false);
             int scode = msg ? static_cast<int>(msg->scode) : 401;
             dispatch_reg_state(SIP_REG_STATE_FAILED, scode, extract_reason("Registration Failed").c_str());
             break;
         }
         case BEVENT_UNREGISTERING: {
+            m_is_registered.store(false);
             int scode = msg ? static_cast<int>(msg->scode) : 0;
             dispatch_reg_state(SIP_REG_STATE_UNREGISTERED, scode, extract_reason("Unregistered").c_str());
             break;
@@ -478,6 +483,17 @@ void Engine::handle_ua_event(int ev, struct bevent *event)
                 sip_call_t *sess = find_or_create_call_session(bcall, call_peeruri(bcall), false, call_has_video(bcall));
                 sess->set_established();
                 dispatch_call_state(sess, SIP_CALL_STATE_ESTABLISHED, 200, extract_reason("Established").c_str());
+                if (sess->has_video()) {
+                    preserve_video_rx_and_display(bcall);
+                    int width = 640;
+                    int height = 480;
+                    struct config *cfg = conf_config();
+                    if (cfg && cfg->video.width > 0 && cfg->video.height > 0) {
+                        width = cfg->video.width;
+                        height = cfg->video.height;
+                    }
+                    dispatch_call_media(sess, width, height, sess->is_on_hold(), sess->is_muted());
+                }
             }
             break;
         }

@@ -108,6 +108,7 @@ private:
     std::atomic<bool> m_stopping{false};
     std::atomic<bool> m_mic_muted{false};
     std::atomic<bool> m_audio_session_active{false};
+    std::atomic<bool> m_is_registered{false};
 
     struct mqueue *m_mq{nullptr};
     struct ua *m_ua{nullptr};

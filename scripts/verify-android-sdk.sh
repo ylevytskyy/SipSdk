@@ -139,6 +139,39 @@ if [[ "$TARGET_SLICE" == "all" || "$TARGET_SLICE" == "--slice" && "${2:-}" == "3
   echo "==> [Slice 3] ALL CHECKS PASSED!"
 fi
 
+# Step 5: Slice 4 verification (MediaCodec H.264 Codec Driver)
+if [[ "$TARGET_SLICE" == "all" || "$TARGET_SLICE" == "--slice" && "${2:-}" == "4" || "$TARGET_SLICE" == "4" ]]; then
+  echo "==> [Slice 4] Running MediaCodec H.264 Driver Tests..."
+  ensure_pbx_running
+  ensure_android_device_ready
+
+  cd "$ANDROID_DIR"
+  ./gradlew :sipsdk:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.sipsdk.SipMediaCodecTest
+  echo "==> [Slice 4] ALL CHECKS PASSED!"
+fi
+
+# Step 6: Slice 5 verification (Camera2 Capture Driver & Dynamic Controls)
+if [[ "$TARGET_SLICE" == "all" || "$TARGET_SLICE" == "--slice" && "${2:-}" == "5" || "$TARGET_SLICE" == "5" ]]; then
+  echo "==> [Slice 5] Running Camera2 Capture Driver Tests..."
+  ensure_android_device_ready
+
+  cd "$ANDROID_DIR"
+  ./gradlew :sipsdk:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.sipsdk.SipCameraCaptureTest
+  echo "==> [Slice 5] ALL CHECKS PASSED!"
+fi
+
+# Step 7: Slice 6 verification (Two-Way Video Calling & SipSurfaceView)
+if [[ "$TARGET_SLICE" == "all" || "$TARGET_SLICE" == "--slice" && "${2:-}" == "6" || "$TARGET_SLICE" == "6" ]]; then
+  echo "==> [Slice 6] Running Two-Way Video Calling & SurfaceView Tests..."
+  ensure_pbx_running
+  ensure_android_device_ready
+
+  cd "$ANDROID_DIR"
+  ./gradlew :sipsdk:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.sipsdk.SipCallVideoTest
+  ./gradlew :sample:assembleDebug
+  echo "==> [Slice 6] ALL CHECKS PASSED!"
+fi
+
 echo "=================================================="
 echo "==> ANDROID PLATFORM SDK VERIFICATION SUCCESSFUL <=="
 echo "=================================================="

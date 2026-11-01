@@ -50,6 +50,71 @@ class SipClient(
             audioManager?.setSpeakerphone(value)
         }
 
+    var cameraPosition: SipCameraPosition = SipCameraPosition.FRONT
+        set(value) {
+            field = value
+            if (nativeHandle != 0L) {
+                nativeSetCamera(nativeHandle, value.value)
+            }
+            cameraCapture?.setCamera(value)
+        }
+
+    var isLocalVideoEnabled: Boolean = true
+        set(value) {
+            field = value
+            if (nativeHandle != 0L) {
+                nativeSetLocalVideoEnabled(nativeHandle, value)
+            }
+            cameraCapture?.setEnabled(value)
+        }
+
+    val isLocalPreviewActive: Boolean
+        get() = if (nativeHandle != 0L) nativeIsLocalPreviewActive(nativeHandle) else false
+
+    var remoteVideoView: SipSurfaceView? = null
+        set(value) {
+            field?.setSurfaceListener(null)
+            field = value
+            value?.setSurfaceListener(object : SipSurfaceView.SurfaceListener {
+                override fun onSurfaceAvailable(surface: android.view.Surface) {
+                    if (nativeHandle != 0L) {
+                        nativeSetRemoteSurface(nativeHandle, surface)
+                    }
+                }
+
+                override fun onSurfaceDestroyed() {
+                    if (nativeHandle != 0L) {
+                        nativeSetRemoteSurface(nativeHandle, null)
+                    }
+                }
+            })
+            val cur = value?.currentSurface
+            if (cur != null && cur.isValid && nativeHandle != 0L) {
+                nativeSetRemoteSurface(nativeHandle, cur)
+            }
+        }
+
+    var localVideoView: SipSurfaceView? = null
+        set(value) {
+            field?.setSurfaceListener(null)
+            field = value
+            value?.setSurfaceListener(object : SipSurfaceView.SurfaceListener {
+                override fun onSurfaceAvailable(surface: android.view.Surface) {
+                    cameraCapture?.setPreviewSurface(surface)
+                }
+
+                override fun onSurfaceDestroyed() {
+                    cameraCapture?.setPreviewSurface(null)
+                }
+            })
+            val cur = value?.currentSurface
+            if (cur != null && cur.isValid) {
+                cameraCapture?.setPreviewSurface(cur)
+            }
+        }
+
+    private var cameraCapture: SipCameraCapture? = null
+
     private var nativeHandle: Long = 0L
     private val mainHandler: Handler? = try {
         val looper = Looper.getMainLooper()
@@ -69,16 +134,63 @@ class SipClient(
                 nativeHandle = 0L
                 return res
             }
+            val cur = remoteVideoView?.currentSurface
+            if (cur != null && cur.isValid) {
+                nativeSetRemoteSurface(nativeHandle, cur)
+            }
         }
         return 0
     }
 
     fun stop() {
         if (nativeHandle != 0L) {
+            cameraCapture?.stop()
+            cameraCapture = null
             audioManager?.releaseAudioSession()
             nativeDestroy(nativeHandle)
             nativeHandle = 0L
         }
+    }
+
+    fun switchCamera(): Int {
+        val newPos = if (cameraPosition == SipCameraPosition.FRONT) {
+            SipCameraPosition.BACK
+        } else {
+            SipCameraPosition.FRONT
+        }
+        cameraPosition = newPos
+        return if (nativeHandle != 0L) nativeSwitchCamera(nativeHandle) else 0
+    }
+
+    fun setCamera(position: SipCameraPosition): Int {
+        cameraPosition = position
+        return if (nativeHandle != 0L) nativeSetCamera(nativeHandle, position.value) else 0
+    }
+
+    fun setLocalVideoEnabled(enabled: Boolean): Int {
+        isLocalVideoEnabled = enabled
+        return if (nativeHandle != 0L) nativeSetLocalVideoEnabled(nativeHandle, enabled) else 0
+    }
+
+    fun startLocalPreview(): Int {
+        if (nativeHandle == 0L) {
+            val rc = start()
+            if (rc != 0) return rc
+        }
+        if (cameraCapture == null) {
+            cameraCapture = SipCameraCapture(context, nativeHandle)
+            val cur = localVideoView?.currentSurface
+            if (cur != null && cur.isValid) {
+                cameraCapture?.setPreviewSurface(cur)
+            }
+        }
+        cameraCapture?.start()
+        return nativeStartLocalPreview(nativeHandle)
+    }
+
+    fun stopLocalPreview(): Int {
+        cameraCapture?.stop()
+        return if (nativeHandle != 0L) nativeStopLocalPreview(nativeHandle) else 0
     }
 
     fun register(): Int {
@@ -101,12 +213,20 @@ class SipClient(
         return nativeUnregister(nativeHandle)
     }
 
-    fun makeCall(uri: String): SipCall? {
+    fun makeCall(uri: String, withVideo: Boolean = false): SipCall? {
         if (nativeHandle == 0L) {
             val rc = start()
             if (rc != 0) return null
         }
-        val callHandle = nativeMakeCall(nativeHandle, uri, false)
+        if (withVideo && cameraCapture == null) {
+            cameraCapture = SipCameraCapture(context, nativeHandle)
+            val cur = localVideoView?.currentSurface
+            if (cur != null && cur.isValid) {
+                cameraCapture?.setPreviewSurface(cur)
+            }
+            cameraCapture?.start()
+        }
+        val callHandle = nativeMakeCall(nativeHandle, uri, withVideo)
         if (callHandle == 0L) return null
         audioManager?.prepareAudioSession()
         return SipCall(
@@ -114,7 +234,7 @@ class SipClient(
             callId = nativeCallGetId(callHandle),
             remoteUri = nativeCallGetRemoteUri(callHandle),
             peerDisplayName = nativeCallGetPeerDisplayName(callHandle),
-            hasVideo = false,
+            hasVideo = withVideo,
             isOutgoing = true
         )
     }
@@ -170,15 +290,28 @@ class SipClient(
 
     @JvmSynthetic
     fun onNativeCallMedia(callHandle: Long, width: Int, height: Int, onHold: Boolean, isMuted: Boolean) {
-        val call = SipCall(
-            nativeHandle = callHandle,
-            callId = nativeCallGetId(callHandle),
-            remoteUri = nativeCallGetRemoteUri(callHandle),
-            peerDisplayName = nativeCallGetPeerDisplayName(callHandle),
-            hasVideo = (width > 0 && height > 0),
-            isOutgoing = nativeCallIsOutgoing(callHandle)
-        )
-        listener?.onCallMediaChanged(call, width, height, onHold, isMuted)
+        val action = Runnable {
+            if (width > 0 && height > 0) {
+                remoteVideoView?.setVideoDimensions(width, height)
+                remoteVideoView?.incrementRenderedFrameCount()
+            }
+            val call = SipCall(
+                nativeHandle = callHandle,
+                callId = nativeCallGetId(callHandle),
+                remoteUri = nativeCallGetRemoteUri(callHandle),
+                peerDisplayName = nativeCallGetPeerDisplayName(callHandle),
+                hasVideo = (width > 0 && height > 0),
+                isOutgoing = nativeCallIsOutgoing(callHandle)
+            )
+            listener?.onCallMediaChanged(call, width, height, onHold, isMuted)
+        }
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            action.run()
+        } else if (mainHandler != null) {
+            mainHandler.post(action)
+        } else {
+            action.run()
+        }
     }
 
     @JvmSynthetic
@@ -218,4 +351,13 @@ class SipClient(
     private external fun nativeCallGetRemoteUri(callHandle: Long): String
     private external fun nativeCallGetPeerDisplayName(callHandle: Long): String?
     private external fun nativeCallIsOutgoing(callHandle: Long): Boolean
+    internal external fun nativeSetRemoteSurface(handle: Long, surface: Any?): Int
+
+    private external fun nativeSwitchCamera(handle: Long): Int
+    private external fun nativeSetCamera(handle: Long, position: Int): Int
+    private external fun nativeSetLocalVideoEnabled(handle: Long, enabled: Boolean): Int
+    private external fun nativeIsLocalVideoEnabled(handle: Long): Boolean
+    private external fun nativeStartLocalPreview(handle: Long): Int
+    private external fun nativeStopLocalPreview(handle: Long): Int
+    private external fun nativeIsLocalPreviewActive(handle: Long): Boolean
 }
