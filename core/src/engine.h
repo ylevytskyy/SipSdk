@@ -11,6 +11,8 @@
 #include <thread>
 
 struct mqueue;
+struct ua;
+struct bevent;
 
 namespace sip_core {
 
@@ -25,6 +27,10 @@ public:
     int init(const char *config_path);
     void destroy();
 
+    int register_account(const char *user, const char *domain, const char *pwd, const char *transport, int port);
+    int unregister_account();
+    bool is_registered() const;
+
     bool is_started() const { return m_started.load(); }
     sip_client_t *owner() const { return m_owner; }
     void *user_data() const { return m_user_data; }
@@ -35,6 +41,9 @@ public:
      * Safe to invoke from any caller thread.
      */
     bool post_task(std::function<void()> task);
+
+    void handle_ua_event(int ev, struct bevent *event);
+    void dispatch_reg_state(sip_reg_state_t state, int code, const char *reason);
 
 private:
     int init_on_loop_thread(const char *config_path);
@@ -48,13 +57,14 @@ private:
     void *m_user_data{nullptr};
 
     std::thread m_loop_thread;
-    std::mutex m_mutex;
+    mutable std::mutex m_mutex;
     std::condition_variable m_start_cv;
 
     std::atomic<bool> m_started{false};
     std::atomic<bool> m_stopping{false};
 
     struct mqueue *m_mq{nullptr};
+    struct ua *m_ua{nullptr};
     bool m_events_registered{false};
     int m_start_result{0};
     bool m_start_signaled{false};

@@ -29,6 +29,35 @@ SIP_ABI_EXPORT int sip_client_init(sip_client_t *client, const char *config_path
     return client->engine->init(config_path);
 }
 
+SIP_ABI_EXPORT int sip_client_register(sip_client_t *client,
+                                      const char *user,
+                                      const char *domain,
+                                      const char *pwd,
+                                      const char *transport,
+                                      int port)
+{
+    if (!client || !client->engine) {
+        return EINVAL;
+    }
+    return client->engine->register_account(user, domain, pwd, transport, port);
+}
+
+SIP_ABI_EXPORT int sip_client_unregister(sip_client_t *client)
+{
+    if (!client || !client->engine) {
+        return EINVAL;
+    }
+    return client->engine->unregister_account();
+}
+
+SIP_ABI_EXPORT bool sip_client_is_registered(const sip_client_t *client)
+{
+    if (!client || !client->engine) {
+        return false;
+    }
+    return client->engine->is_registered();
+}
+
 SIP_ABI_EXPORT void sip_client_destroy(sip_client_t *client)
 {
     if (!client) {

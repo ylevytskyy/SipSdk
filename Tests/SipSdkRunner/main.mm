@@ -517,13 +517,17 @@ static void testReinviteVideoCall(SipClient *client)
 }
 
 @interface RegisterProbe : NSObject <SipClientDelegate>
+@property (nonatomic) BOOL willRegister;
 @property (nonatomic) BOOL registered;
 @property (nonatomic) BOOL failed;
+@property (nonatomic) BOOL unregistered;
 @end
 
 @implementation RegisterProbe
+- (void)onWillRegister:(SipClient *)sipSdk { self.willRegister = YES; }
 - (void)onDidRegister:(SipClient *)sipSdk { self.registered = YES; }
 - (void)onFailedRegister:(SipClient *)sipSdk { self.failed = YES; }
+- (void)onWillUnRegister:(SipClient *)sipSdk { self.unregistered = YES; }
 @end
 
 int main(int argc, char *argv[])
@@ -600,6 +604,27 @@ int main(int argc, char *argv[])
               [NSString stringWithFormat:@"registered=%d failed=%d", probe.registered, probe.failed]);
         check(client.isRegistered,
               @"SipClient reports registered state after 200 OK", @"");
+
+        // Test unregister transition
+        [client unregister];
+        NSDate *unregDeadline = [NSDate dateWithTimeIntervalSinceNow:3.0];
+        while (!probe.unregistered && [[NSDate date] compare:unregDeadline] == NSOrderedAscending) {
+            [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];
+        }
+        check(probe.unregistered, @"SipClient unregister triggers onWillUnRegister delegate callback", @"");
+
+        // Re-register for subsequent call tests
+        probe.registered = NO;
+        int reRegRc = [client registry];
+        check(reRegRc == 0, @"SipClient re-registers after unregistration", @"");
+        NSDate *reRegDeadline = [NSDate dateWithTimeIntervalSinceNow:5.0];
+        while (!probe.registered && !probe.failed &&
+               [[NSDate date] compare:reRegDeadline] == NSOrderedAscending) {
+            [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];
+        }
+        check(probe.registered && client.isRegistered,
+              @"SipClient re-established registration with registrar", @"");
+
         [registrar stop];
         client.delegate = nil;
 

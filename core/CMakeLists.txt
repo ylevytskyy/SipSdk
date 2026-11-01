@@ -43,7 +43,7 @@ target_compile_definitions(sip_core
         SIP_CORE_BUILDING_LIB=1
 )
 
-# Test runner
+# Test runners
 if(BARESIP_LIBRARY)
     add_executable(sip_core_lifecycle_test
         tests/test_lifecycle.cpp
@@ -60,8 +60,39 @@ if(BARESIP_LIBRARY)
             ${BARESIP_LIBRARY}
     )
 
+    add_executable(sip_core_registration_test
+        tests/test_registration.cpp
+    )
+
+    target_include_directories(sip_core_registration_test
+        PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+
+    target_link_libraries(sip_core_registration_test
+        PRIVATE
+            sip_core
+            ${BARESIP_LIBRARY}
+    )
+
     if(APPLE)
         target_link_libraries(sip_core_lifecycle_test
+            PRIVATE
+                "-framework Foundation"
+                "-framework CoreFoundation"
+                "-framework SystemConfiguration"
+                "-framework CoreAudio"
+                "-framework AudioToolbox"
+                "-framework AVFoundation"
+                "-framework CFNetwork"
+                "-framework CoreMedia"
+                "-framework CoreVideo"
+                "-framework VideoToolbox"
+                z
+                m
+        )
+
+        target_link_libraries(sip_core_registration_test
             PRIVATE
                 "-framework Foundation"
                 "-framework CoreFoundation"

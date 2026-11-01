@@ -42,6 +42,9 @@ typedef enum {
 } sip_call_state_t;
 
 typedef struct sip_callbacks_t {
+    /** Optional main-thread dispatcher hook for non-Apple platforms or custom event loops. */
+    void (*dispatch_to_main)(void (*task)(void *arg), void *arg, void *user_data);
+
     void (*on_reg_state)(sip_client_t *client, sip_reg_state_t state, int code, const char *reason, void *user_data);
     void (*on_incoming_call)(sip_client_t *client, sip_call_t *call, void *user_data);
     void (*on_call_state)(sip_call_t *call, sip_call_state_t state, int code, const char *reason, void *user_data);
@@ -61,6 +64,36 @@ SIP_ABI_EXPORT sip_client_t *sip_client_create(const sip_callbacks_t *callbacks,
  * Returns 0 on success, or a positive error code (errno/libre error) on failure.
  */
 SIP_ABI_EXPORT int sip_client_init(sip_client_t *client, const char *config_path);
+
+/**
+ * Registers a SIP account with the specified credentials and transport.
+ * Dispatches asynchronously onto the core worker event loop.
+ *
+ * @param client Valid client instance returned from sip_client_create.
+ * @param user SIP username / extension (e.g. "1001").
+ * @param domain SIP domain or registrar host (e.g. "127.0.0.1").
+ * @param pwd Account password for MD5 digest authentication.
+ * @param transport Protocol transport: "udp" or "tcp" (case-insensitive).
+ * @param port SIP port number (e.g. 5060).
+ * @return 0 if registration command was queued, or EINVAL on invalid arguments.
+ */
+SIP_ABI_EXPORT int sip_client_register(sip_client_t *client,
+                                      const char *user,
+                                      const char *domain,
+                                      const char *pwd,
+                                      const char *transport,
+                                      int port);
+
+/**
+ * Unregisters the currently registered account (Expires: 0).
+ * Dispatches asynchronously onto the core worker event loop.
+ */
+SIP_ABI_EXPORT int sip_client_unregister(sip_client_t *client);
+
+/**
+ * Checks whether the client currently has a registered SIP user agent.
+ */
+SIP_ABI_EXPORT bool sip_client_is_registered(const sip_client_t *client);
 
 /**
  * Shuts down the background worker event loop, releases all VoIP and networking resources,
