@@ -1,0 +1,444 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		1001 /* SipMacClient.mm in Sources */ = {isa = PBXBuildFile; fileRef = 2001 /* SipMacClient.mm */; };
+		1002 /* SipMacCall.mm in Sources */ = {isa = PBXBuildFile; fileRef = 2002 /* SipMacCall.mm */; };
+		1003 /* SipMacVideoView.mm in Sources */ = {isa = PBXBuildFile; fileRef = 2003 /* SipMacVideoView.mm */; };
+		1004 /* SipSdkMacApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2004 /* SipSdkMacApp.swift */; };
+		1005 /* SipAppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2005 /* SipAppModel.swift */; };
+		1006 /* SipAccountStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2006 /* SipAccountStore.swift */; };
+		1007 /* SipCallHistoryStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2007 /* SipCallHistoryStore.swift */; };
+		1008 /* SipVideoViewRepresentable.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2008 /* SipVideoViewRepresentable.swift */; };
+		1009 /* IncomingCallBanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2009 /* IncomingCallBanner.swift */; };
+		1010 /* DialerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2010 /* DialerView.swift */; };
+		1011 /* InCallView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2011 /* InCallView.swift */; };
+		1012 /* CallHistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2012 /* CallHistoryView.swift */; };
+		1013 /* AccountSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2013 /* AccountSettingsView.swift */; };
+		1014 /* MainSplitView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2014 /* MainSplitView.swift */; };
+		1015 /* call_session.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 2015 /* call_session.cpp */; };
+		1016 /* engine.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 2016 /* engine.cpp */; };
+		1017 /* media_driver.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 2017 /* media_driver.cpp */; };
+		1018 /* sip_abi.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 2018 /* sip_abi.cpp */; };
+		1020 /* AVFoundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 2020 /* AVFoundation.framework */; };
+		1021 /* VideoToolbox.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 2021 /* VideoToolbox.framework */; };
+		1022 /* CoreAudio.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 2022 /* CoreAudio.framework */; };
+		1023 /* AudioToolbox.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 2023 /* AudioToolbox.framework */; };
+		1024 /* CoreMedia.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 2024 /* CoreMedia.framework */; };
+		1025 /* CoreVideo.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 2025 /* CoreVideo.framework */; };
+		1026 /* SystemConfiguration.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 2026 /* SystemConfiguration.framework */; };
+		1027 /* CFNetwork.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 2027 /* CFNetwork.framework */; };
+		1028 /* QuartzCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 2028 /* QuartzCore.framework */; };
+		1029 /* libbaresip.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 2029 /* libbaresip.a */; };
+		1030 /* libre.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 2030 /* libre.a */; };
+		1031 /* AppIcon.icns in Resources */ = {isa = PBXBuildFile; fileRef = 2033 /* AppIcon.icns */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		0001 /* SipSdkMac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SipSdkMac.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		2001 /* SipMacClient.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = SipMacClient.mm; sourceTree = "<group>"; };
+		2002 /* SipMacCall.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = SipMacCall.mm; sourceTree = "<group>"; };
+		2003 /* SipMacVideoView.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = SipMacVideoView.mm; sourceTree = "<group>"; };
+		2004 /* SipSdkMacApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SipSdkMacApp.swift; sourceTree = "<group>"; };
+		2005 /* SipAppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SipAppModel.swift; sourceTree = "<group>"; };
+		2006 /* SipAccountStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SipAccountStore.swift; sourceTree = "<group>"; };
+		2007 /* SipCallHistoryStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SipCallHistoryStore.swift; sourceTree = "<group>"; };
+		2008 /* SipVideoViewRepresentable.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SipVideoViewRepresentable.swift; sourceTree = "<group>"; };
+		2009 /* IncomingCallBanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IncomingCallBanner.swift; sourceTree = "<group>"; };
+		2010 /* DialerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DialerView.swift; sourceTree = "<group>"; };
+		2011 /* InCallView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InCallView.swift; sourceTree = "<group>"; };
+		2012 /* CallHistoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallHistoryView.swift; sourceTree = "<group>"; };
+		2013 /* AccountSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountSettingsView.swift; sourceTree = "<group>"; };
+		2014 /* MainSplitView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainSplitView.swift; sourceTree = "<group>"; };
+		2015 /* call_session.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = call_session.cpp; path = ../../../core/src/call_session.cpp; sourceTree = "<group>"; };
+		2016 /* engine.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = engine.cpp; path = ../../../core/src/engine.cpp; sourceTree = "<group>"; };
+		2017 /* media_driver.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = media_driver.cpp; path = ../../../core/src/media_driver.cpp; sourceTree = "<group>"; };
+		2018 /* sip_abi.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = sip_abi.cpp; path = ../../../core/src/sip_abi.cpp; sourceTree = "<group>"; };
+		2020 /* AVFoundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AVFoundation.framework; path = System/Library/Frameworks/AVFoundation.framework; sourceTree = SDKROOT; };
+		2021 /* VideoToolbox.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = VideoToolbox.framework; path = System/Library/Frameworks/VideoToolbox.framework; sourceTree = SDKROOT; };
+		2022 /* CoreAudio.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreAudio.framework; path = System/Library/Frameworks/CoreAudio.framework; sourceTree = SDKROOT; };
+		2023 /* AudioToolbox.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AudioToolbox.framework; path = System/Library/Frameworks/AudioToolbox.framework; sourceTree = SDKROOT; };
+		2024 /* CoreMedia.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreMedia.framework; path = System/Library/Frameworks/CoreMedia.framework; sourceTree = SDKROOT; };
+		2025 /* CoreVideo.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreVideo.framework; path = System/Library/Frameworks/CoreVideo.framework; sourceTree = SDKROOT; };
+		2026 /* SystemConfiguration.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SystemConfiguration.framework; path = System/Library/Frameworks/SystemConfiguration.framework; sourceTree = SDKROOT; };
+		2027 /* CFNetwork.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CFNetwork.framework; path = System/Library/Frameworks/CFNetwork.framework; sourceTree = SDKROOT; };
+		2028 /* QuartzCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = QuartzCore.framework; path = System/Library/Frameworks/QuartzCore.framework; sourceTree = SDKROOT; };
+		2029 /* libbaresip.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; name = libbaresip.a; path = ../../desktop/prebuilt/darwin-arm64/lib/libbaresip.a; sourceTree = "<group>"; };
+		2030 /* libre.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; name = libre.a; path = ../../desktop/prebuilt/darwin-arm64/lib/libre.a; sourceTree = "<group>"; };
+		2031 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		2032 /* SipSdkMac.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = SipSdkMac.entitlements; sourceTree = "<group>"; };
+		2033 /* AppIcon.icns */ = {isa = PBXFileReference; lastKnownFileType = image.icns; path = AppIcon.icns; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		3001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				1020 /* AVFoundation.framework in Frameworks */,
+				1021 /* VideoToolbox.framework in Frameworks */,
+				1022 /* CoreAudio.framework in Frameworks */,
+				1023 /* AudioToolbox.framework in Frameworks */,
+				1024 /* CoreMedia.framework in Frameworks */,
+				1025 /* CoreVideo.framework in Frameworks */,
+				1026 /* SystemConfiguration.framework in Frameworks */,
+				1027 /* CFNetwork.framework in Frameworks */,
+				1028 /* QuartzCore.framework in Frameworks */,
+				1029 /* libbaresip.a in Frameworks */,
+				1030 /* libre.a in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		4001 /* Root */ = {
+			isa = PBXGroup;
+			children = (
+				4002 /* SipSdkMac */,
+				4003 /* Core */,
+				4004 /* Frameworks */,
+				4005 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		4002 /* SipSdkMac */ = {
+			isa = PBXGroup;
+			children = (
+				2004 /* SipSdkMacApp.swift */,
+				4006 /* Bridge */,
+				4007 /* Models */,
+				4008 /* Views */,
+				2031 /* Info.plist */,
+				2032 /* SipSdkMac.entitlements */,
+				2033 /* AppIcon.icns */,
+			);
+			path = SipSdkMac;
+			sourceTree = "<group>";
+		};
+		4003 /* Core */ = {
+			isa = PBXGroup;
+			children = (
+				2015 /* call_session.cpp */,
+				2016 /* engine.cpp */,
+				2017 /* media_driver.cpp */,
+				2018 /* sip_abi.cpp */,
+			);
+			name = Core;
+			sourceTree = "<group>";
+		};
+		4004 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				2020 /* AVFoundation.framework */,
+				2021 /* VideoToolbox.framework */,
+				2022 /* CoreAudio.framework */,
+				2023 /* AudioToolbox.framework */,
+				2024 /* CoreMedia.framework */,
+				2025 /* CoreVideo.framework */,
+				2026 /* SystemConfiguration.framework */,
+				2027 /* CFNetwork.framework */,
+				2028 /* QuartzCore.framework */,
+				2029 /* libbaresip.a */,
+				2030 /* libre.a */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+		4005 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				0001 /* SipSdkMac.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		4006 /* Bridge */ = {
+			isa = PBXGroup;
+			children = (
+				2001 /* SipMacClient.mm */,
+				2002 /* SipMacCall.mm */,
+				2003 /* SipMacVideoView.mm */,
+			);
+			path = Bridge;
+			sourceTree = "<group>";
+		};
+		4007 /* Models */ = {
+			isa = PBXGroup;
+			children = (
+				2005 /* SipAppModel.swift */,
+				2006 /* SipAccountStore.swift */,
+				2007 /* SipCallHistoryStore.swift */,
+			);
+			path = Models;
+			sourceTree = "<group>";
+		};
+		4008 /* Views */ = {
+			isa = PBXGroup;
+			children = (
+				2008 /* SipVideoViewRepresentable.swift */,
+				2009 /* IncomingCallBanner.swift */,
+				2010 /* DialerView.swift */,
+				2011 /* InCallView.swift */,
+				2012 /* CallHistoryView.swift */,
+				2013 /* AccountSettingsView.swift */,
+				2014 /* MainSplitView.swift */,
+			);
+			path = Views;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		5001 /* SipSdkMac */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 6001 /* Build configuration list for PBXNativeTarget 'SipSdkMac' */;
+			buildPhases = (
+				7001 /* Sources */,
+				3001 /* Frameworks */,
+				8001 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = SipSdkMac;
+			productName = SipSdkMac;
+			productReference = 0001 /* SipSdkMac.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		0000 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastUpgradeCheck = 1500;
+			};
+			buildConfigurationList = 6002 /* Build configuration list for PBXProject 'SipSdkMac' */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = 4001 /* Root */;
+			productRefGroup = 4005 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				5001 /* SipSdkMac */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		8001 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				1031 /* AppIcon.icns in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		7001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				1001 /* SipMacClient.mm in Sources */,
+				1002 /* SipMacCall.mm in Sources */,
+				1003 /* SipMacVideoView.mm in Sources */,
+				1004 /* SipSdkMacApp.swift in Sources */,
+				1005 /* SipAppModel.swift in Sources */,
+				1006 /* SipAccountStore.swift in Sources */,
+				1007 /* SipCallHistoryStore.swift in Sources */,
+				1008 /* SipVideoViewRepresentable.swift in Sources */,
+				1009 /* IncomingCallBanner.swift in Sources */,
+				1010 /* DialerView.swift in Sources */,
+				1011 /* InCallView.swift in Sources */,
+				1012 /* CallHistoryView.swift in Sources */,
+				1013 /* AccountSettingsView.swift in Sources */,
+				1014 /* MainSplitView.swift in Sources */,
+				1015 /* call_session.cpp in Sources */,
+				1016 /* engine.cpp in Sources */,
+				1017 /* media_driver.cpp in Sources */,
+				1018 /* sip_abi.cpp in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		6003 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_CXX_LANGUAGE_STANDARD = "c++17";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CODE_SIGN_STYLE = Manual;
+				CODE_SIGN_IDENTITY = "-";
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"USE_UNIXSOCK=1",
+					"SIP_CORE_BUILDING_LIB=1",
+					"$(inherited)",
+				);
+				HEADER_SEARCH_PATHS = (
+					"$(PROJECT_DIR)/../../../core/include",
+					"$(PROJECT_DIR)/../../../core/src",
+					"$(PROJECT_DIR)/../../desktop/prebuilt/include",
+					"$(PROJECT_DIR)/../../desktop/prebuilt/include/re",
+					"$(PROJECT_DIR)/../../desktop/prebuilt/include/baresip",
+					"$(PROJECT_DIR)/SipSdkMac/Bridge",
+					"$(inherited)",
+				);
+				INFOPLIST_FILE = SipSdkMac/Info.plist;
+				CODE_SIGN_ENTITLEMENTS = SipSdkMac/SipSdkMac.entitlements;
+				LIBRARY_SEARCH_PATHS = (
+					"$(PROJECT_DIR)/../../desktop/prebuilt/darwin-arm64/lib",
+					"$(inherited)",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				ONLY_ACTIVE_ARCH = YES;
+				OTHER_LDFLAGS = (
+					"-lbaresip",
+					"-lre",
+					"-lz",
+					"-lm",
+					"$(inherited)",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.sipsdk.mac;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OBJC_BRIDGING_HEADER = "$(PROJECT_DIR)/SipSdkMac/Bridge/SipSdkMac-Bridging-Header.h";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		6004 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_CXX_LANGUAGE_STANDARD = "c++17";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CODE_SIGN_STYLE = Manual;
+				CODE_SIGN_IDENTITY = "-";
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"USE_UNIXSOCK=1",
+					"SIP_CORE_BUILDING_LIB=1",
+					"$(inherited)",
+				);
+				HEADER_SEARCH_PATHS = (
+					"$(PROJECT_DIR)/../../../core/include",
+					"$(PROJECT_DIR)/../../../core/src",
+					"$(PROJECT_DIR)/../../desktop/prebuilt/include",
+					"$(PROJECT_DIR)/../../desktop/prebuilt/include/re",
+					"$(PROJECT_DIR)/../../desktop/prebuilt/include/baresip",
+					"$(PROJECT_DIR)/SipSdkMac/Bridge",
+					"$(inherited)",
+				);
+				INFOPLIST_FILE = SipSdkMac/Info.plist;
+				CODE_SIGN_ENTITLEMENTS = SipSdkMac/SipSdkMac.entitlements;
+				LIBRARY_SEARCH_PATHS = (
+					"$(PROJECT_DIR)/../../desktop/prebuilt/darwin-arm64/lib",
+					"$(inherited)",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				OTHER_LDFLAGS = (
+					"-lbaresip",
+					"-lre",
+					"-lz",
+					"-lm",
+					"$(inherited)",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.sipsdk.mac;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = "wholemodule";
+				SWIFT_OBJC_BRIDGING_HEADER = "$(PROJECT_DIR)/SipSdkMac/Bridge/SipSdkMac-Bridging-Header.h";
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		6005 /* Debug Project */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_TESTABILITY = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = macosx;
+			};
+			name = Debug;
+		};
+		6006 /* Release Project */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				SDKROOT = macosx;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		6001 /* Build configuration list for PBXNativeTarget 'SipSdkMac' */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				6003 /* Debug */,
+				6004 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		6002 /* Build configuration list for PBXProject 'SipSdkMac' */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				6005 /* Debug Project */,
+				6006 /* Release Project */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 0000 /* Project object */;
+}

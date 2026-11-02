@@ -351,7 +351,7 @@ class SipClient(
     private external fun nativeCallGetRemoteUri(callHandle: Long): String
     private external fun nativeCallGetPeerDisplayName(callHandle: Long): String?
     private external fun nativeCallIsOutgoing(callHandle: Long): Boolean
-    internal external fun nativeSetRemoteSurface(handle: Long, surface: Any?): Int
+    private external fun nativeSetRemoteSurface(handle: Long, surface: Any?): Int
 
     private external fun nativeSwitchCamera(handle: Long): Int
     private external fun nativeSetCamera(handle: Long, position: Int): Int

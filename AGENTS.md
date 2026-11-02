@@ -46,6 +46,8 @@ no SIP over TLS in `BaresipCore`.
   `bash scripts/build-baresip-windows.sh`
 - Build and verify Desktop Native Targets (macOS host & Linux Docker CI runner, CTest suite, and `sip_cli` against Asterisk PBX):
   `bash scripts/verify-desktop-sdk.sh`
+- Build and verify Native macOS GUI Sample (SwiftUI app `SipSdkMac.xcodeproj`, live launch & registration against Asterisk, window screenshot):
+  `bash scripts/verify-macos-gui.sh`
 - Compile Baresip v4.12.0 and libre v4.12.0 static prebuilts for desktop targets:
   `bash scripts/build-baresip-desktop.sh`
 - Build and verify Android Platform SDK (`sipsdk.aar`), multi-arch slices (`arm64-v8a`, `armeabi-v7a`, `x86_64`), symbol export audit, registration & audio calling test suites against Asterisk PBX:
