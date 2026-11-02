@@ -6,7 +6,7 @@
         xmlns:vm="clr-namespace:SipSdk.WpfSample.ViewModels"
         xmlns:controls="clr-namespace:SipSdk.WpfSample.Controls"
         mc:Ignorable="d"
-        Title="SipSdk - Windows Video Phone" Height="700" Width="1000"
+        Title="SipSdk - Windows Video Phone" Icon="app.ico" Height="700" Width="1000"
         Background="#0F172A" WindowStartupLocation="CenterScreen">
 
     <Window.DataContext>

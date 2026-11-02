@@ -8,10 +8,15 @@
     <LangVersion>latest</LangVersion>
     <AssemblyName>SipSdk.WpfSample</AssemblyName>
     <RootNamespace>SipSdk.WpfSample</RootNamespace>
+    <ApplicationIcon>app.ico</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\..\dotnet\src\SipSdk\SipSdk.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Resource Include="app.ico" />
   </ItemGroup>
 
 </Project>
