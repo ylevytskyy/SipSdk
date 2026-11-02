@@ -58,7 +58,7 @@ fi
 # Prepare temporary configuration directory
 CONFIG_DIR="$(mktemp -d "${TMPDIR:-/tmp}/sipcore-conf.XXXXXX")"
 trap 'rm -rf "$CONFIG_DIR"' EXIT
-cp "$ROOT_DIR/Sources/SipSdkResources/Resources/config.baresip-v4" "$CONFIG_DIR/config"
+cp "$ROOT_DIR/platforms/ios/Sources/SipSdk/Resources/config.baresip-v4" "$CONFIG_DIR/config"
 
 echo "==> Running lifecycle test runner on booted simulator ($SIM_UDID)"
 TEST_BUNDLE="$BUILD_DIR/sip_core_lifecycle_test.app"

@@ -18,26 +18,28 @@ Shared engineering core and task pipeline: `../../agents/CORE.md`, `../../agents
 is project facts only.
 
 ## Status
-Both the SwiftPM `SipSdk` package (`Package.swift`) and the iOS Video Phone application
-(`SipSdk.xcodeproj`) run on the modern Baresip v4.12.0 XCFramework (`BaresipCore.xcframework`)
-with native Apple `VideoToolbox` H.264 encoding/decoding (`vidcodec`), `AVCaptureSession` +
-Simulator synthetic test-pattern camera capture (`vidsrc` `"avcapture"`), `SipVideoView` UIKit
-rendering (`vidisp` `"iosview"`), full telephony controls, CallKit (`SipCallKitManager`),
-editable SIP account settings (`SipAccountStore`), and call history (`SipCallHistoryStore`).
+The native iOS implementation is consolidated under `platforms/ios/` with a modern Swift 5.9/6
+SDK (`platforms/ios/Sources/SipSdk`), comprehensive unit & PBX integration test suite
+(`platforms/ios/Tests/SipSdkTests`), and a modern SwiftUI sample application
+(`platforms/ios/sample/SipPhone.xcodeproj`). It runs on the Baresip v4.12.0 XCFramework
+(`BaresipCore.xcframework`) and the common portable C++ core (`core/` / `SipCore`) with
+native Apple `VideoToolbox` H.264 hardware encoding/decoding, `AVCaptureSession` +
+Simulator synthetic test-pattern camera capture, `SipVideoView` CALayer YUV420P rendering,
+full reactive telephony controls (`@Observable @MainActor SipClient` and `SipCall`),
+CallKit integration (`SipCallKitCoordinator`), VoIP PushKit (`SipPushRegistry`),
+zero-downtime network handover (`resetTransports`), and call history.
 The companion web test page (`web/index.html`) supports two-way WebRTC audio + H.264 video
 over `wss://sip.iptel.org:8081`. TLS on the native C stack remains disabled (`USE_OPENSSL=OFF`):
 no SIP over TLS in `BaresipCore`.
 
 ## Stack & tooling
-- SwiftPM package (`Package.swift`, tools 5.9): `SipSdk` ObjC++ adapter target
-  (`Sources/SipSdk/SipClientBaresipV4.mm`, public headers in `Sources/SipSdk/include/`),
-  `SipSdkResources` (copies `config.baresip-v4`), binary target `BaresipCore` fetched from
-  GitHub Release `baresip-core-v4.12.0` and pinned by SHA-256 checksum.
-- iOS deployment target: package 12.1; Xcode app (`SipSdk.xcodeproj`) 15.0, Swift 5.0,
-  builds for both `arm64` iOS Simulator and `arm64` iOS Device.
-- Never commit real SIP credentials; `SipSdk/SipCredentials.plist` is gitignored.
-  `SipAccountStore` loads user-edited settings from `UserDefaults` and falls back to
-  `SipCredentials.plist`.
+- SwiftPM package (`Package.swift`, tools 5.9): `SipSdk` modern Swift target
+  (`platforms/ios/Sources/SipSdk`), portable `SipCore` C++20 target (`core/`),
+  and binary target `BaresipCore` pinned by SHA-256 checksum.
+- iOS deployment target: iOS 17.0+; sample app (`platforms/ios/sample/SipPhone.xcodeproj`)
+  Swift 5.0+, builds for both `arm64` iOS Simulator and `arm64` generic iOS Device.
+- Never commit real SIP credentials. `AccountStore` defaults to local Docker Asterisk PBX
+  (`1001` / `test1001`) and persists user edits to `UserDefaults`.
 
 ## Commands
 - Build and verify Windows Platform SDK (.NET / C# Bindings, Media Foundation drivers, and WPF Sample):
@@ -54,13 +56,13 @@ no SIP over TLS in `BaresipCore`.
   `bash scripts/verify-android-sdk.sh`
 - Compile Baresip v4.12.0 and libre v4.12.0 static prebuilt libraries for Android ABIs (`arm64-v8a`, `armeabi-v7a`, `x86_64`):
   `bash scripts/build-baresip-android.sh`
-- Verify SwiftPM SDK & Baresip v4 adapter across all slices (`device-arm64`, `simulator-arm64`, `simulator-x86_64`):
+- Verify SwiftPM iOS SDK across slices (`arm64-simulator`, `x86_64-simulator`, `arm64-device`):
   `bash scripts/verify-spm-video-sdk.sh`
-- Run automated iOS Simulator test suite (Baresip v4 engine, VideoToolbox H.264 RTP round-trip, `SipVideoView`, `SipClient`/`SipCall` controls, `SipCallKitManager`, `SipAccountStore`, `SipCallHistoryStore`):
+- Run automated iOS Simulator test suite (engine lifecycle, VideoToolbox H.264 RTP round-trip, `SipVideoView`, `SipClient`/`SipCall` controls, `SipCallKitCoordinator`, `SipPushRegistry`, Asterisk PBX registration & video echo call):
   `bash scripts/verify-ios-video-tests.sh`
-- Build `SipSdk.xcodeproj` for both `arm64` iOS Simulator and `arm64` generic iOS device:
+- Build `SipPhone.xcodeproj` for both `arm64` iOS Simulator and `arm64` generic iOS device:
   `bash scripts/verify-xcode-app-build.sh`
-- Launch `SipSdk.app` on a booted iOS Simulator and verify Dialer, Account Settings modal, and In-Call Video Phone screens with screenshots:
+- Launch `SipPhone.app` on a booted iOS Simulator and verify Keypad / Home screen with screenshots:
   `bash scripts/verify-sim-app-launch.sh`
 - Manifest check: `swift package dump-package`, `swift package resolve`.
 - Regenerate `Package.swift` for a new release: `bash scripts/generate-spm-package.sh <version>`.
@@ -75,10 +77,10 @@ no SIP over TLS in `BaresipCore`.
   - Verify PBX health, UDP registration (1001), WebSocket registration (1002), and video echo call (9001): `bash scripts/verify-pbx.sh`
 
 ## Repo layout & gotchas
-- `Sources/SipSdk/SipClientBaresipV4.mm` — ObjC++ Baresip v4 adapter + `VideoToolbox` H.264 `vidcodec` + `avcapture` `vidsrc` + `iosview` `vidisp` + `SipVideoView`; `Sources/SipSdk/include/SipClient.h` (mirrored at `SipSdk/SipClient.h`) — public API.
-- `Sources/SipSdkResources/` — resource bundle + `Resources/config.baresip-v4`.
-- `SipSdk/` — iOS Video Phone UIKit app (`SipCallsViewController.swift`, `SipCallDetailsViewController.swift`, `SipAccountStore.swift`, `SipCallHistoryStore.swift`, `SipCallKitManager.swift`, `CallCell.swift`).
-- `Tests/SipSdkRunner/main.mm` — automated iOS Simulator test runner compiled and spawned by `scripts/verify-ios-video-tests.sh`.
+- `platforms/ios/Sources/SipSdk` — Modern Swift 5.9/6 iOS SDK (`SipClient.swift`, `SipCall.swift`, `SipVideoView.swift`, `SipCallKitCoordinator.swift`, `SipPushRegistry.swift`, `IosVideoCapture.swift`, `IosVideoRenderer.swift`, `IosAudioManager.swift`).
+- `platforms/ios/sample/SipPhone` — Modern SwiftUI sample application with `SipPhone.xcodeproj`.
+- `platforms/ios/Tests/SipSdkTests` — Automated iOS unit and Asterisk PBX video integration test suite.
+- `core/` — Portable C++20 core engine (`call_session.cpp`, `engine.cpp`, `media_driver.cpp`, `sip_abi.cpp`) with flat C ABI (`core/include/sip_abi.h`).
 - ABI trap: libre's public `struct sa` changes size with `HAVE_UNIXSOCK` (`re_sa.h` union member `sockaddr_un`). Build flags that flip it (`USE_UNIXSOCK=OFF`) change `struct sa`/`struct sip_msg` layout for every consumer that compiles the headers without the matching define — `msg->scode` then reads 0 and `BEVENT_REGISTER_OK`/`FAIL` never fire ("Register hangs"). Keep `-DUSE_UNIXSOCK=ON` in `scripts/build-baresip-xcframework.sh`.
 
 ## Device tiers

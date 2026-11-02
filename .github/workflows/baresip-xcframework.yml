@@ -8,12 +8,9 @@ on:
       - ".github/workflows/baresip-xcframework.yml"
       - ".github/workflows/publish-baresip-xcframework.yml"
       - "scripts/build-baresip-xcframework.sh"
-      - "scripts/check-baresip-adapter.sh"
       - "scripts/generate-spm-package.sh"
       - "Package.swift"
-      - "Sources/SipSdk/**"
-      - "Sources/SipSdkResources/**"
-      - "docs/SPM_MIGRATION.md"
+      - "platforms/ios/**"
       - "README.md"
   workflow_dispatch:
 

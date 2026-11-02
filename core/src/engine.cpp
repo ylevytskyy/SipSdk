@@ -302,28 +302,20 @@ void Engine::cleanup_on_loop_thread()
     m_started = false;
 }
 
-int Engine::register_account(const char *user, const char *domain, const char *pwd, const char *transport, int port)
+int Engine::register_account(const AccountConfig &config)
 {
-    if (!user || std::strlen(user) == 0 ||
-        !domain || std::strlen(domain) == 0 ||
-        port <= 0 || port > 65535) {
+    if (config.user.empty() || config.domain.empty() || config.port <= 0 || config.port > 65535) {
         return EINVAL;
     }
 
-    std::string user_str = user;
-    std::string domain_str = domain;
-    std::string pwd_str = pwd ? pwd : "";
-    std::string transport_str = transport ? transport : "udp";
-    int target_port = port;
-
-    bool posted = post_task([this, user_str, domain_str, pwd_str, transport_str, target_port]() {
+    bool posted = post_task([this, cfg = config]() {
         if (m_ua != nullptr) {
             ua_destroy(m_ua);
             m_ua = nullptr;
         }
 
         std::string transport_param = "";
-        std::string lower_transport = transport_str;
+        std::string lower_transport = cfg.transport;
         for (auto &c : lower_transport) {
             c = (char)::tolower(c);
         }
@@ -331,7 +323,7 @@ int Engine::register_account(const char *user, const char *domain, const char *p
             transport_param = ";transport=tcp";
         }
 
-        std::string aor = "sip:" + user_str + "@" + domain_str + ":" + std::to_string(target_port) + transport_param;
+        std::string aor = "sip:" + cfg.user + "@" + cfg.domain + ":" + std::to_string(cfg.port) + transport_param;
 
         int rc = ua_alloc(&m_ua, aor.c_str());
         if (rc != 0 || m_ua == nullptr) {
@@ -341,9 +333,30 @@ int Engine::register_account(const char *user, const char *domain, const char *p
 
         struct account *acc = ua_account(m_ua);
         if (acc != nullptr) {
-            (void)account_set_auth_user(acc, user_str.c_str());
-            if (!pwd_str.empty()) {
-                (void)account_set_auth_pass(acc, pwd_str.c_str());
+            if (!cfg.display_name.empty()) {
+                (void)account_set_display_name(acc, cfg.display_name.c_str());
+            }
+            (void)account_set_auth_user(acc, cfg.user.c_str());
+            if (!cfg.pwd.empty()) {
+                (void)account_set_auth_pass(acc, cfg.pwd.c_str());
+            }
+            if (!cfg.outbound_proxy.empty()) {
+                (void)account_set_outbound(acc, cfg.outbound_proxy.c_str(), 0);
+            }
+            if (!cfg.stun_server.empty()) {
+                (void)account_set_stun_uri(acc, cfg.stun_server.c_str());
+            }
+            if (!cfg.stun_user.empty()) {
+                (void)account_set_stun_user(acc, cfg.stun_user.c_str());
+            }
+            if (!cfg.stun_pass.empty()) {
+                (void)account_set_stun_pass(acc, cfg.stun_pass.c_str());
+            }
+            if (!cfg.media_nat.empty()) {
+                (void)account_set_medianat(acc, cfg.media_nat.c_str());
+            }
+            if (cfg.reg_interval > 0) {
+                (void)account_set_regint(acc, cfg.reg_interval);
             }
             (void)account_set_video_codecs(acc, "H264");
         }
@@ -354,6 +367,31 @@ int Engine::register_account(const char *user, const char *domain, const char *p
         }
     });
 
+    return posted ? 0 : EIO;
+}
+
+int Engine::register_account(const char *user, const char *domain, const char *pwd, const char *transport, int port)
+{
+    if (!user || std::strlen(user) == 0 ||
+        !domain || std::strlen(domain) == 0 ||
+        port <= 0 || port > 65535) {
+        return EINVAL;
+    }
+
+    AccountConfig cfg;
+    cfg.user = user;
+    cfg.domain = domain;
+    cfg.pwd = pwd ? pwd : "";
+    cfg.transport = transport ? transport : "udp";
+    cfg.port = port;
+    return register_account(cfg);
+}
+
+int Engine::reset_transports(bool re_register)
+{
+    bool posted = post_task([re_register]() {
+        (void)uag_reset_transp(re_register, true);
+    });
     return posted ? 0 : EIO;
 }
 

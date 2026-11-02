@@ -35,20 +35,20 @@ if [[ -z "$DEVICE_UDID" ]]; then
   exit 1
 fi
 
-echo "==> Building signed SipSdk.app for physical device $DEVICE_UDID"
+echo "==> Building signed SipPhone.app for physical device $DEVICE_UDID"
 xcodebuild \
-  -project SipSdk.xcodeproj \
-  -scheme SipSdk \
+  -project platforms/ios/sample/SipPhone.xcodeproj \
+  -scheme SipPhone \
   -configuration Debug \
   -destination "id=$DEVICE_UDID" \
   -derivedDataPath "$DERIVED_DEV" \
   -allowProvisioningUpdates \
   build >/dev/null
 
-DEV_APP="$DERIVED_DEV/Build/Products/Debug-iphoneos/SipSdk.app"
-test -f "$DEV_APP/SipSdk"
+DEV_APP="$DERIVED_DEV/Build/Products/Debug-iphoneos/SipPhone.app"
+test -f "$DEV_APP/SipPhone"
 
-echo "==> Installing SipSdk.app onto physical device $DEVICE_UDID"
+echo "==> Installing SipPhone.app onto physical device $DEVICE_UDID"
 xcrun devicectl device install app --device "$DEVICE_UDID" "$DEV_APP"
 
 TARGET_CALL_URI="${SIPSDK_DEVICE_CALL_URI:-9001}"
@@ -61,7 +61,7 @@ echo "==> Launching SipSdk.app on physical device $DEVICE_UDID and streaming con
     --terminate-existing \
     --console \
     --environment-variables "{\"SIPSDK_UITEST_MODE\":\"device_verify\",\"SIPSDK_DEVICE_CALL_URI\":\"$TARGET_CALL_URI\"}" \
-    com.wiseland.SipSdk >"$CONSOLE_LOG" 2>&1
+    com.sipsdk.sample.SipPhone >"$CONSOLE_LOG" 2>&1
 ) &
 LAUNCH_PID=$!
 

@@ -22,6 +22,21 @@ namespace sip_core {
 
 class MediaDriverManager;
 
+struct AccountConfig {
+    std::string user;
+    std::string domain;
+    std::string pwd;
+    std::string transport{"udp"};
+    int port{5060};
+    std::string display_name;
+    std::string outbound_proxy;
+    std::string stun_server;
+    std::string stun_user;
+    std::string stun_pass;
+    std::string media_nat;
+    uint32_t reg_interval{0};
+};
+
 class Engine {
 public:
     Engine(sip_client_t *owner, const sip_callbacks_t *callbacks, void *user_data);
@@ -33,9 +48,11 @@ public:
     int init(const char *config_path);
     void destroy();
 
+    int register_account(const AccountConfig &config);
     int register_account(const char *user, const char *domain, const char *pwd, const char *transport, int port);
     int unregister_account();
     bool is_registered() const;
+    int reset_transports(bool re_register);
 
     sip_call_t *make_call(const char *target_uri, bool with_video);
     int answer_call(sip_call_t *call, bool with_video);

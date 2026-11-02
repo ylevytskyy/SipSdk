@@ -1,0 +1,4 @@
+module SipCore {
+    header "sip_abi.h"
+    export *
+}

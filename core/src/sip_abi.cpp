@@ -31,6 +31,27 @@ SIP_ABI_EXPORT int sip_client_init(sip_client_t *client, const char *config_path
     return client->engine->init(config_path);
 }
 
+SIP_ABI_EXPORT int sip_client_register_account(sip_client_t *client, const sip_account_config_t *config)
+{
+    if (!client || !client->engine || !config) {
+        return EINVAL;
+    }
+    sip_core::AccountConfig cfg;
+    cfg.user = config->user ? config->user : "";
+    cfg.domain = config->domain ? config->domain : "";
+    cfg.pwd = config->pwd ? config->pwd : "";
+    cfg.transport = config->transport ? config->transport : "udp";
+    cfg.port = config->port > 0 ? config->port : 5060;
+    cfg.display_name = config->display_name ? config->display_name : "";
+    cfg.outbound_proxy = config->outbound_proxy ? config->outbound_proxy : "";
+    cfg.stun_server = config->stun_server ? config->stun_server : "";
+    cfg.stun_user = config->stun_user ? config->stun_user : "";
+    cfg.stun_pass = config->stun_pass ? config->stun_pass : "";
+    cfg.media_nat = config->media_nat ? config->media_nat : "";
+    cfg.reg_interval = config->reg_interval;
+    return client->engine->register_account(cfg);
+}
+
 SIP_ABI_EXPORT int sip_client_register(sip_client_t *client,
                                       const char *user,
                                       const char *domain,
@@ -42,6 +63,14 @@ SIP_ABI_EXPORT int sip_client_register(sip_client_t *client,
         return EINVAL;
     }
     return client->engine->register_account(user, domain, pwd, transport, port);
+}
+
+SIP_ABI_EXPORT int sip_client_reset_transports(sip_client_t *client, bool re_register)
+{
+    if (!client || !client->engine) {
+        return EINVAL;
+    }
+    return client->engine->reset_transports(re_register);
 }
 
 SIP_ABI_EXPORT int sip_client_unregister(sip_client_t *client)

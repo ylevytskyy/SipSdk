@@ -73,6 +73,30 @@ SIP_ABI_EXPORT sip_client_t *sip_client_create(const sip_callbacks_t *callbacks,
 SIP_ABI_EXPORT int sip_client_init(sip_client_t *client, const char *config_path);
 
 /**
+ * Extended account configuration parameters.
+ */
+typedef struct sip_account_config_t {
+    const char *user;
+    const char *domain;
+    const char *pwd;
+    const char *transport;       /* "udp" or "tcp", defaults to "udp" if null */
+    int port;                     /* e.g. 5060, defaults to 5060 if <= 0 */
+    const char *display_name;    /* optional display name, e.g. "Alice" */
+    const char *outbound_proxy;  /* optional outbound proxy URI, e.g. "sip:proxy.example.com:5060" */
+    const char *stun_server;     /* optional STUN/TURN host:port, e.g. "stun.l.google.com:19302" */
+    const char *stun_user;       /* optional STUN/TURN username */
+    const char *stun_pass;       /* optional STUN/TURN password */
+    const char *media_nat;       /* optional media NAT traversal mode: "ice", "stun", "turn", or nullptr */
+    uint32_t reg_interval;       /* registration expiration interval in seconds (0 for default) */
+} sip_account_config_t;
+
+/**
+ * Registers a SIP account with extended configuration (display name, outbound proxy, STUN/TURN/ICE, reg interval).
+ * Dispatches asynchronously onto the core worker event loop.
+ */
+SIP_ABI_EXPORT int sip_client_register_account(sip_client_t *client, const sip_account_config_t *config);
+
+/**
  * Registers a SIP account with the specified credentials and transport.
  * Dispatches asynchronously onto the core worker event loop.
  *
@@ -90,6 +114,12 @@ SIP_ABI_EXPORT int sip_client_register(sip_client_t *client,
                                       const char *pwd,
                                       const char *transport,
                                       int port);
+
+/**
+ * Resets network transports for network handover (e.g. Wi-Fi <-> Cellular).
+ * Closes stale transport sockets and initiates re-registration if re_register is true.
+ */
+SIP_ABI_EXPORT int sip_client_reset_transports(sip_client_t *client, bool re_register);
 
 /**
  * Unregisters the currently registered account (Expires: 0).

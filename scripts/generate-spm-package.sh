@@ -71,10 +71,10 @@ import PackageDescription
 let package = Package(
     name: "SipSdk",
     platforms: [
-        .iOS("12.1")
+        .iOS("17.0")
     ],
     products: [
-        .library(name: "SipSdk", targets: ["SipSdk", "SipSdkResources"])
+        .library(name: "SipSdk", targets: ["SipSdk"])
     ],
     targets: [
         .binaryTarget(
@@ -83,15 +83,26 @@ let package = Package(
             checksum: "$EXPECTED_CHECKSUM"
         ),
         .target(
-            name: "SipSdkResources",
-            path: "Sources/SipSdkResources",
-            resources: [.copy("Resources/config.baresip-v4")]
+            name: "SipCore",
+            dependencies: ["BaresipCore"],
+            path: "core",
+            exclude: ["tests", "CMakeLists.txt"],
+            sources: ["src"],
+            publicHeadersPath: "include",
+            cxxSettings: [
+                .headerSearchPath("src"),
+                .define("USE_UNIXSOCK", to: "1"),
+                .define("SIP_CORE_BUILDING_LIB", to: "1")
+            ]
         ),
         .target(
             name: "SipSdk",
-            dependencies: ["BaresipCore"],
-            path: "Sources/SipSdk",
-            publicHeadersPath: "include",
+            dependencies: ["BaresipCore", "SipCore"],
+            path: "platforms/ios/Sources/SipSdk",
+            resources: [
+                .copy("Resources/config.baresip-v4"),
+                .copy("Resources/PrivacyInfo.xcprivacy")
+            ],
             linkerSettings: [
                 .linkedFramework("Foundation"),
                 .linkedFramework("UIKit"),
@@ -107,9 +118,15 @@ let package = Package(
                 .linkedFramework("VideoToolbox"),
                 .linkedFramework("QuartzCore"),
                 .linkedFramework("CallKit"),
+                .linkedFramework("PushKit"),
                 .linkedLibrary("z"),
                 .linkedLibrary("m")
             ]
+        ),
+        .testTarget(
+            name: "SipSdkTests",
+            dependencies: ["SipSdk"],
+            path: "platforms/ios/Tests/SipSdkTests"
         )
     ],
     cxxLanguageStandard: .cxx17

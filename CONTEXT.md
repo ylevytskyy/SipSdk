@@ -1,6 +1,6 @@
 # CONTEXT.md — SipSdk Domain Glossary
 
-Canonical definitions for domain terms across the `sipsdk` repository (`Sources/SipSdk`, `SipSdk/`, and `web/`).
+Canonical definitions for domain terms across the `sipsdk` repository (`platforms/`, `core/`, and `web/`).
 
 - **AOR (Address of Record)**: The canonical SIP identity URI (`sip:username@domain:port`) registered by a `SipClient` user agent with a SIP registrar.
 - **Baresip Core (`BaresipCore.xcframework`)**: The pinned static C library bundle combining `libre` v4.12.0 and `libbaresip` v4.12.0 for iOS device (`arm64`) and Simulator (`arm64`, `x86_64`).
