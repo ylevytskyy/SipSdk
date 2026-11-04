@@ -135,4 +135,15 @@ static inline uint8_t clampByte(int v)
     }
 }
 
+- (NSView *)hitTest:(NSPoint)point
+{
+    // Pure video rendering surface; never intercept mouse clicks
+    return nil;
+}
+
+- (BOOL)acceptsFirstMouse:(NSEvent *)event
+{
+    return NO;
+}
+
 @end

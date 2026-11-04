@@ -99,6 +99,7 @@ public struct DialerView: View {
                     .frame(minWidth: 140, minHeight: 44)
                     .background(Color.green)
                     .cornerRadius(22)
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .disabled(targetUri.isEmpty)
@@ -115,6 +116,7 @@ public struct DialerView: View {
                     .frame(minWidth: 140, minHeight: 44)
                     .background(Color.blue)
                     .cornerRadius(22)
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .disabled(targetUri.isEmpty)

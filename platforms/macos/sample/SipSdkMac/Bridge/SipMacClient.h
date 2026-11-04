@@ -38,16 +38,48 @@ typedef NS_ENUM(NSInteger, SipMacRegistrationState) {
 - (void)stop;
 
 - (int)registerWithPassword:(NSString *)password port:(int)port transport:(NSString *)transport;
+- (int)registerWithUsername:(NSString *)user
+                     domain:(NSString *)domain
+                   password:(NSString *)password
+                  transport:(NSString *)transport
+                       port:(int)port
+                displayName:(nullable NSString *)displayName
+              outboundProxy:(nullable NSString *)outboundProxy
+                 stunServer:(nullable NSString *)stunServer
+                   mediaNat:(nullable NSString *)mediaNat
+                regInterval:(uint32_t)regInterval;
 - (int)unregisterAccount;
+- (int)resetTransports:(BOOL)reRegister;
 
 - (nullable SipMacCall *)makeCallToUri:(NSString *)uri withVideo:(BOOL)withVideo;
 
 - (void)setRemoteVideoView:(nullable SipMacVideoView *)videoView;
 - (void)setLocalPreviewView:(nullable SipMacVideoView *)previewView;
 
+// Local Video Preview
+- (int)startLocalPreview;
+- (int)stopLocalPreview;
+- (BOOL)isLocalPreviewActive;
+
+// Audio Devices
+- (NSArray<NSString *> *)availableAudioInputDevices;
+- (nullable NSString *)selectedAudioInputDevice;
+- (void)selectAudioInputDeviceByName:(NSString *)deviceName;
+
+- (NSArray<NSString *> *)availableAudioOutputDevices;
+- (nullable NSString *)selectedAudioOutputDevice;
+- (void)selectAudioOutputDeviceByName:(NSString *)deviceName;
+
+// Video Input (Camera)
 - (void)useSyntheticCamera:(BOOL)useSynthetic;
 - (NSArray<NSString *> *)availableCameras;
+- (nullable NSString *)selectedCamera;
 - (void)selectCameraByName:(NSString *)cameraName;
+
+// Video Output (Display)
+- (NSArray<NSString *> *)availableVideoOutputDevices;
+- (nullable NSString *)selectedVideoOutputDevice;
+- (void)selectVideoOutputDeviceByName:(NSString *)deviceName;
 
 @end
 

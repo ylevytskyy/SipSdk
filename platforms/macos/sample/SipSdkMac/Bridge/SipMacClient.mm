@@ -2,6 +2,8 @@
 #import <AVFoundation/AVFoundation.h>
 #import <CoreVideo/CoreVideo.h>
 #import <CoreMedia/CoreMedia.h>
+#import <CoreAudio/CoreAudio.h>
+#import <AppKit/AppKit.h>
 #include <sip_abi.h>
 
 #include <atomic>
@@ -33,6 +35,11 @@
 
     int _port;
     NSString *_transport;
+
+    NSString *_selectedAudioInputDevice;
+    NSString *_selectedAudioOutputDevice;
+    NSString *_selectedCameraName;
+    NSString *_selectedVideoOutputDevice;
 }
 - (SipMacCall *)getOrCreateCall:(sip_call_t *)handle;
 - (void)removeCall:(sip_call_t *)handle;
@@ -49,7 +56,7 @@
     std::atomic<bool> _running;
     std::atomic<bool> _enabled;
     std::atomic<bool> _syntheticMode;
-    std::mutex _driverMutex;
+    std::recursive_mutex _driverMutex;
     uint32_t _syntheticTick;
 
     AVCaptureSession *_session;
@@ -84,6 +91,7 @@
 
 - (void)setSyntheticMode:(BOOL)synthetic
 {
+    std::lock_guard<std::recursive_mutex> lock(_driverMutex);
     _syntheticMode = synthetic;
     if (_running.load()) {
         [self stop];
@@ -118,7 +126,7 @@
 
 - (void)setCameraDeviceId:(NSString *)deviceId
 {
-    std::lock_guard<std::mutex> lock(_driverMutex);
+    std::lock_guard<std::recursive_mutex> lock(_driverMutex);
     _selectedDeviceId = [deviceId copy];
     if (_running.load() && !_syntheticMode.load()) {
         if (_syntheticTimer) {
@@ -220,7 +228,7 @@
 
 - (int)startWithWidth:(int)width height:(int)height fps:(int)fps
 {
-    std::lock_guard<std::mutex> lock(_driverMutex);
+    std::lock_guard<std::recursive_mutex> lock(_driverMutex);
     if (_running.load()) return 0;
 
     _running = true;
@@ -286,7 +294,7 @@
 
 - (void)stop
 {
-    std::lock_guard<std::mutex> lock(_driverMutex);
+    std::lock_guard<std::recursive_mutex> lock(_driverMutex);
     if (!_running.exchange(false)) return;
 
     if (_syntheticTimer) {
@@ -601,6 +609,95 @@ struct ClientCallbacks {
     }
 };
 
+// MARK: - CoreAudio Device Helpers
+
+static NSArray<NSDictionary<NSString *, id> *> *get_coreaudio_devices(bool is_input)
+{
+    NSMutableArray *result = [NSMutableArray array];
+    AudioObjectPropertyAddress addr = {
+        kAudioHardwarePropertyDevices,
+        kAudioObjectPropertyScopeGlobal,
+        kAudioObjectPropertyElementMain
+    };
+    UInt32 size = 0;
+    OSStatus err = AudioObjectGetPropertyDataSize(kAudioObjectSystemObject, &addr, 0, NULL, &size);
+    if (err != noErr || size == 0) return result;
+
+    UInt32 count = size / sizeof(AudioDeviceID);
+    std::vector<AudioDeviceID> devs(count);
+    err = AudioObjectGetPropertyData(kAudioObjectSystemObject, &addr, 0, NULL, &size, devs.data());
+    if (err != noErr) return result;
+
+    for (UInt32 i = 0; i < count; i++) {
+        AudioDeviceID devId = devs[i];
+
+        AudioObjectPropertyAddress streamAddr = {
+            kAudioDevicePropertyStreams,
+            is_input ? kAudioObjectPropertyScopeInput : kAudioObjectPropertyScopeOutput,
+            kAudioObjectPropertyElementMain
+        };
+        UInt32 streamSize = 0;
+        AudioObjectGetPropertyDataSize(devId, &streamAddr, 0, NULL, &streamSize);
+        if (streamSize == 0) continue;
+
+        CFStringRef name = NULL;
+        UInt32 nameSz = sizeof(name);
+        AudioObjectPropertyAddress nameAddr = {
+            kAudioObjectPropertyName,
+            kAudioObjectPropertyScopeGlobal,
+            kAudioObjectPropertyElementMain
+        };
+        err = AudioObjectGetPropertyData(devId, &nameAddr, 0, NULL, &nameSz, &name);
+        if (err != noErr || !name) continue;
+
+        NSString *devName = (__bridge_transfer NSString *)name;
+        [result addObject:@{ @"id": @(devId), @"name": devName }];
+    }
+    return result;
+}
+
+static NSString *get_default_audio_device_name(bool is_input)
+{
+    AudioDeviceID devId = 0;
+    UInt32 sz = sizeof(AudioDeviceID);
+    AudioObjectPropertyAddress addr = {
+        is_input ? kAudioHardwarePropertyDefaultInputDevice : kAudioHardwarePropertyDefaultOutputDevice,
+        kAudioObjectPropertyScopeGlobal,
+        kAudioObjectPropertyElementMain
+    };
+    OSStatus err = AudioObjectGetPropertyData(kAudioObjectSystemObject, &addr, 0, NULL, &sz, &devId);
+    if (err != noErr || devId == 0) return nil;
+
+    CFStringRef name = NULL;
+    UInt32 nameSz = sizeof(name);
+    AudioObjectPropertyAddress nameAddr = {
+        kAudioObjectPropertyName,
+        kAudioObjectPropertyScopeGlobal,
+        kAudioObjectPropertyElementMain
+    };
+    err = AudioObjectGetPropertyData(devId, &nameAddr, 0, NULL, &nameSz, &name);
+    return (err == noErr && name) ? (__bridge_transfer NSString *)name : nil;
+}
+
+static bool set_default_audio_device_by_name(NSString *targetName, bool is_input)
+{
+    if (!targetName || targetName.length == 0) return false;
+    NSArray<NSDictionary<NSString *, id> *> *devs = get_coreaudio_devices(is_input);
+    for (NSDictionary *d in devs) {
+        if ([d[@"name"] isEqualToString:targetName]) {
+            AudioDeviceID devId = [d[@"id"] unsignedIntValue];
+            AudioObjectPropertyAddress addr = {
+                is_input ? kAudioHardwarePropertyDefaultInputDevice : kAudioHardwarePropertyDefaultOutputDevice,
+                kAudioObjectPropertyScopeGlobal,
+                kAudioObjectPropertyElementMain
+            };
+            OSStatus err = AudioObjectSetPropertyData(kAudioObjectSystemObject, &addr, 0, NULL, sizeof(devId), &devId);
+            return (err == noErr);
+        }
+    }
+    return false;
+}
+
 @implementation SipMacClient
 
 - (instancetype)initWithUsername:(NSString *)username domain:(NSString *)domain
@@ -615,6 +712,11 @@ struct ClientCallbacks {
         _transport = @"udp";
         _useSyntheticCamera = NO;
         _cameraDriver = [[SipMacCameraDriver alloc] init];
+
+        _selectedAudioInputDevice = get_default_audio_device_name(true);
+        _selectedAudioOutputDevice = get_default_audio_device_name(false);
+        _selectedCameraName = @"Synthetic (Test Pattern)";
+        _selectedVideoOutputDevice = [NSScreen mainScreen].localizedName ?: @"Main Window Display";
     }
     return self;
 }
@@ -756,11 +858,52 @@ struct ClientCallbacks {
                                port);
 }
 
+- (int)registerWithUsername:(NSString *)user
+                     domain:(NSString *)domain
+                   password:(NSString *)password
+                  transport:(NSString *)transport
+                       port:(int)port
+                displayName:(nullable NSString *)displayName
+              outboundProxy:(nullable NSString *)outboundProxy
+                 stunServer:(nullable NSString *)stunServer
+                   mediaNat:(nullable NSString *)mediaNat
+                regInterval:(uint32_t)regInterval
+{
+    std::lock_guard<std::mutex> lock(_mutex);
+    if (!_client) return -1;
+    _username = [user copy];
+    _domain = [domain copy];
+    _port = port;
+    _transport = [transport copy];
+
+    sip_account_config_t cfg;
+    std::memset(&cfg, 0, sizeof(cfg));
+    cfg.user = [user UTF8String];
+    cfg.domain = [domain UTF8String];
+    cfg.pwd = [password UTF8String];
+    cfg.transport = [transport UTF8String];
+    cfg.port = port;
+    cfg.display_name = displayName.length > 0 ? [displayName UTF8String] : nullptr;
+    cfg.outbound_proxy = outboundProxy.length > 0 ? [outboundProxy UTF8String] : nullptr;
+    cfg.stun_server = stunServer.length > 0 ? [stunServer UTF8String] : nullptr;
+    cfg.media_nat = mediaNat.length > 0 ? [mediaNat UTF8String] : nullptr;
+    cfg.reg_interval = regInterval;
+
+    return sip_client_register_account(_client, &cfg);
+}
+
 - (int)unregisterAccount
 {
     std::lock_guard<std::mutex> lock(_mutex);
     if (!_client) return -1;
     return sip_client_unregister(_client);
+}
+
+- (int)resetTransports:(BOOL)reRegister
+{
+    std::lock_guard<std::mutex> lock(_mutex);
+    if (!_client) return -1;
+    return sip_client_reset_transports(_client, reRegister);
 }
 
 - (nullable SipMacCall *)makeCallToUri:(NSString *)uri withVideo:(BOOL)withVideo
@@ -788,6 +931,95 @@ struct ClientCallbacks {
     _localPreviewView = previewView;
 }
 
+- (int)startLocalPreview
+{
+    std::lock_guard<std::mutex> lock(_mutex);
+    if (!_client) return -1;
+    return sip_client_start_local_preview(_client);
+}
+
+- (int)stopLocalPreview
+{
+    std::lock_guard<std::mutex> lock(_mutex);
+    if (!_client) return -1;
+    return sip_client_stop_local_preview(_client);
+}
+
+- (BOOL)isLocalPreviewActive
+{
+    std::lock_guard<std::mutex> lock(_mutex);
+    if (!_client) return NO;
+    return sip_client_is_local_preview_active(_client);
+}
+
+- (NSArray<NSString *> *)availableAudioInputDevices
+{
+    NSMutableArray<NSString *> *names = [NSMutableArray array];
+    NSArray<NSDictionary<NSString *, id> *> *devs = get_coreaudio_devices(true);
+    for (NSDictionary *d in devs) {
+        NSString *name = d[@"name"];
+        if (name && ![names containsObject:name]) {
+            [names addObject:name];
+        }
+    }
+    if (names.count == 0) {
+        [names addObject:@"Built-in Microphone"];
+    }
+    return names;
+}
+
+- (nullable NSString *)selectedAudioInputDevice
+{
+    if (_selectedAudioInputDevice.length > 0) {
+        return _selectedAudioInputDevice;
+    }
+    return get_default_audio_device_name(true) ?: @"Built-in Microphone";
+}
+
+- (void)selectAudioInputDeviceByName:(NSString *)deviceName
+{
+    _selectedAudioInputDevice = [deviceName copy];
+    set_default_audio_device_by_name(deviceName, true);
+    std::lock_guard<std::mutex> lock(_mutex);
+    if (_client) {
+        sip_client_set_audio_driver(_client, "audiounit", [deviceName UTF8String], "audiounit", nullptr);
+    }
+}
+
+- (NSArray<NSString *> *)availableAudioOutputDevices
+{
+    NSMutableArray<NSString *> *names = [NSMutableArray array];
+    NSArray<NSDictionary<NSString *, id> *> *devs = get_coreaudio_devices(false);
+    for (NSDictionary *d in devs) {
+        NSString *name = d[@"name"];
+        if (name && ![names containsObject:name]) {
+            [names addObject:name];
+        }
+    }
+    if (names.count == 0) {
+        [names addObject:@"Built-in Output"];
+    }
+    return names;
+}
+
+- (nullable NSString *)selectedAudioOutputDevice
+{
+    if (_selectedAudioOutputDevice.length > 0) {
+        return _selectedAudioOutputDevice;
+    }
+    return get_default_audio_device_name(false) ?: @"Built-in Output";
+}
+
+- (void)selectAudioOutputDeviceByName:(NSString *)deviceName
+{
+    _selectedAudioOutputDevice = [deviceName copy];
+    set_default_audio_device_by_name(deviceName, false);
+    std::lock_guard<std::mutex> lock(_mutex);
+    if (_client) {
+        sip_client_set_audio_driver(_client, "audiounit", nullptr, "audiounit", [deviceName UTF8String]);
+    }
+}
+
 - (void)useSyntheticCamera:(BOOL)useSynthetic
 {
     _useSyntheticCamera = useSynthetic;
@@ -804,19 +1036,50 @@ struct ClientCallbacks {
     return names;
 }
 
+- (nullable NSString *)selectedCamera
+{
+    return _selectedCameraName ?: @"Synthetic (Test Pattern)";
+}
+
 - (void)selectCameraByName:(NSString *)cameraName
 {
+    _selectedCameraName = [cameraName copy];
     if ([cameraName containsString:@"Synthetic"]) {
         [self useSyntheticCamera:YES];
         return;
     }
-    [self useSyntheticCamera:NO];
     for (AVCaptureDevice *dev in [_cameraDriver availableDevices]) {
         if ([dev.localizedName isEqualToString:cameraName]) {
             [_cameraDriver setCameraDeviceId:dev.uniqueID];
             break;
         }
     }
+    [self useSyntheticCamera:NO];
+}
+
+- (NSArray<NSString *> *)availableVideoOutputDevices
+{
+    NSMutableArray<NSString *> *names = [NSMutableArray array];
+    for (NSScreen *screen in [NSScreen screens]) {
+        [names addObject:screen.localizedName];
+    }
+    if (names.count == 0) {
+        [names addObject:@"Main Window Display"];
+    }
+    return names;
+}
+
+- (nullable NSString *)selectedVideoOutputDevice
+{
+    if (_selectedVideoOutputDevice.length > 0) {
+        return _selectedVideoOutputDevice;
+    }
+    return [NSScreen mainScreen].localizedName ?: @"Main Window Display";
+}
+
+- (void)selectVideoOutputDeviceByName:(NSString *)deviceName
+{
+    _selectedVideoOutputDevice = [deviceName copy];
 }
 
 - (SipMacCall *)getOrCreateCall:(sip_call_t *)handle

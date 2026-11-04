@@ -20,6 +20,7 @@
 		1011 /* InCallView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2011 /* InCallView.swift */; };
 		1012 /* CallHistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2012 /* CallHistoryView.swift */; };
 		1013 /* AccountSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2013 /* AccountSettingsView.swift */; };
+		1032 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2034 /* SettingsView.swift */; };
 		1014 /* MainSplitView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2014 /* MainSplitView.swift */; };
 		1015 /* call_session.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 2015 /* call_session.cpp */; };
 		1016 /* engine.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 2016 /* engine.cpp */; };
@@ -54,6 +55,7 @@
 		2011 /* InCallView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InCallView.swift; sourceTree = "<group>"; };
 		2012 /* CallHistoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallHistoryView.swift; sourceTree = "<group>"; };
 		2013 /* AccountSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountSettingsView.swift; sourceTree = "<group>"; };
+		2034 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		2014 /* MainSplitView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainSplitView.swift; sourceTree = "<group>"; };
 		2015 /* call_session.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = call_session.cpp; path = ../../../core/src/call_session.cpp; sourceTree = "<group>"; };
 		2016 /* engine.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = engine.cpp; path = ../../../core/src/engine.cpp; sourceTree = "<group>"; };
@@ -187,6 +189,7 @@
 				2011 /* InCallView.swift */,
 				2012 /* CallHistoryView.swift */,
 				2013 /* AccountSettingsView.swift */,
+				2034 /* SettingsView.swift */,
 				2014 /* MainSplitView.swift */,
 			);
 			path = Views;
@@ -268,6 +271,7 @@
 				1011 /* InCallView.swift in Sources */,
 				1012 /* CallHistoryView.swift in Sources */,
 				1013 /* AccountSettingsView.swift in Sources */,
+				1032 /* SettingsView.swift in Sources */,
 				1014 /* MainSplitView.swift in Sources */,
 				1015 /* call_session.cpp in Sources */,
 				1016 /* engine.cpp in Sources */,

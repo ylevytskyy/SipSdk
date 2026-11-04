@@ -21,15 +21,17 @@ public enum NavigationSection: String, CaseIterable, Identifiable {
 
 public struct MainSplitView: View {
     @ObservedObject var appModel: SipAppModel
-    @State private var selectedSection: NavigationSection? = .dialer
+    @State private var selectedSection: NavigationSection?
+    @State private var columnVisibility: NavigationSplitViewVisibility = .all
 
     public init(appModel: SipAppModel) {
         self.appModel = appModel
+        _selectedSection = State(initialValue: NavigationSection(rawValue: appModel.initialSectionName) ?? .dialer)
     }
 
     public var body: some View {
         ZStack(alignment: .top) {
-            NavigationSplitView {
+            NavigationSplitView(columnVisibility: $columnVisibility) {
                 List(NavigationSection.allCases, selection: $selectedSection) { section in
                     NavigationLink(value: section) {
                         Label(section.rawValue, systemImage: section.iconName)
@@ -47,7 +49,7 @@ public struct MainSplitView: View {
                     case .history:
                         CallHistoryView(appModel: appModel)
                     case .settings:
-                        AccountSettingsView(appModel: appModel)
+                        SettingsView(appModel: appModel)
                     }
                 }
             }

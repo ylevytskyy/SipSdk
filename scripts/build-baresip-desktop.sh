@@ -81,24 +81,146 @@ PATCH_APPLE_TLS
   echo "==> Patching Baresip audiounit module for macOS audio I/O..."
   python3 - "$SOURCE_DIR/baresip" <<'PATCH_BARESIP_AUDIOUNIT'
 from pathlib import Path
-import re
 import sys
 
 baresip_dir = Path(sys.argv[1])
 
-# 1. Patch recorder.c: enable native AUHAL hardware resampling and direct rendering callback
+# 1. Replace recorder.c with native CoreAudio AudioConverterRef resampling and device lookup
 rec_path = baresip_dir / "modules/audiounit/recorder.c"
 if rec_path.exists():
-    rec_src = rec_path.read_text()
-    # 1a. Set hw_srate = prm->srate
-    rec_src, count_rate = re.subn(
-        r"#if TARGET_OS_IPHONE\s+hw_srate = prm->srate;\s+\(void\)hw_size;\s+#else.*?#endif",
-        "\t/* Use native AUHAL / RemoteIO rate conversion across Apple platforms */\n\thw_srate = prm->srate;\n\t(void)hw_size;",
-        rec_src,
-        flags=re.DOTALL
-    )
-    # 1b. Direct AUHAL rendering into audio read handler (bypassing buggy au_conv / conv_buf layer)
-    direct_cb = r"""static OSStatus input_callback(void *inRefCon,
+    rec_code = r"""/**
+ * @file audiounit/recorder.c  AudioUnit input recorder
+ *
+ * Copyright (C) 2010 Alfred E. Heggestad
+ * Modified for native macOS rate conversion & multi-device routing
+ */
+#include <AudioUnit/AudioUnit.h>
+#include <AudioToolbox/AudioToolbox.h>
+#include <CoreAudio/CoreAudio.h>
+#include <TargetConditionals.h>
+#include <re.h>
+#include <rem.h>
+#include <baresip.h>
+#include "audiounit.h"
+
+#if ! TARGET_OS_IPHONE
+static AudioDeviceID find_device_by_name(const char *name, bool is_input)
+{
+	if (!str_isset(name))
+		return kAudioDeviceUnknown;
+
+	AudioObjectPropertyAddress addr = {
+		kAudioHardwarePropertyDevices,
+		kAudioObjectPropertyScopeGlobal,
+		kAudioObjectPropertyElementMain
+	};
+	UInt32 size = 0;
+	if (AudioObjectGetPropertyDataSize(kAudioObjectSystemObject, &addr, 0, NULL, &size) != noErr)
+		return kAudioDeviceUnknown;
+
+	UInt32 count = size / sizeof(AudioDeviceID);
+	AudioDeviceID devs[count];
+	if (AudioObjectGetPropertyData(kAudioObjectSystemObject, &addr, 0, NULL, &size, devs) != noErr)
+		return kAudioDeviceUnknown;
+
+	for (UInt32 i = 0; i < count; ++i) {
+		AudioObjectPropertyAddress streamsAddr = {
+			kAudioDevicePropertyStreams,
+			is_input ? kAudioObjectPropertyScopeInput : kAudioObjectPropertyScopeOutput,
+			kAudioObjectPropertyElementMain
+		};
+		UInt32 streamSize = 0;
+		if (AudioObjectGetPropertyDataSize(devs[i], &streamsAddr, 0, NULL, &streamSize) != noErr || streamSize == 0)
+			continue;
+
+		CFStringRef devName = NULL;
+		UInt32 nameSize = sizeof(devName);
+		AudioObjectPropertyAddress nameAddr = {
+			kAudioObjectPropertyName,
+			kAudioObjectPropertyScopeGlobal,
+			kAudioObjectPropertyElementMain
+		};
+		if (AudioObjectGetPropertyData(devs[i], &nameAddr, 0, NULL, &nameSize, &devName) == noErr && devName) {
+			char buf[256];
+			Boolean ok = CFStringGetCString(devName, buf, sizeof(buf), kCFStringEncodingUTF8);
+			CFRelease(devName);
+			if (ok && strcmp(buf, name) == 0) {
+				return devs[i];
+			}
+		}
+	}
+	return kAudioDeviceUnknown;
+}
+#endif
+
+struct ausrc_st {
+	struct audiosess_st *sess;
+	AudioUnit au_in;
+	AudioConverterRef converter;
+	mtx_t mutex;
+	struct ausrc_prm prm;
+	uint32_t sampsz;
+	Float64 hw_srate;
+	UInt32 hw_channels;
+	ausrc_read_h *rh;
+	void *arg;
+};
+
+static void ausrc_destructor(void *arg)
+{
+	struct ausrc_st *st = arg;
+
+	mtx_lock(&st->mutex);
+	st->rh = NULL;
+	mtx_unlock(&st->mutex);
+
+	AudioOutputUnitStop(st->au_in);
+	AudioUnitUninitialize(st->au_in);
+	AudioComponentInstanceDispose(st->au_in);
+
+	if (st->converter) {
+		AudioConverterDispose(st->converter);
+		st->converter = NULL;
+	}
+
+	mem_deref(st->sess);
+	mtx_destroy(&st->mutex);
+}
+
+struct conv_ctx {
+	const void *data;
+	UInt32 bytes_left;
+	UInt32 bytes_per_frame;
+};
+
+static OSStatus conv_input_proc(AudioConverterRef inAudioConverter,
+				UInt32 *ioNumberDataPackets,
+				AudioBufferList *ioData,
+				AudioStreamPacketDescription **outDataPacketDescription,
+				void *inUserData)
+{
+	(void)inAudioConverter;
+	(void)outDataPacketDescription;
+	struct conv_ctx *ctx = (struct conv_ctx *)inUserData;
+	if (ctx->bytes_left == 0) {
+		*ioNumberDataPackets = 0;
+		return noErr;
+	}
+	UInt32 avail = ctx->bytes_left / ctx->bytes_per_frame;
+	if (*ioNumberDataPackets > avail)
+		*ioNumberDataPackets = avail;
+
+	ioData->mNumberBuffers = 1;
+	ioData->mBuffers[0].mNumberChannels = 1;
+	ioData->mBuffers[0].mData = (void *)ctx->data;
+	ioData->mBuffers[0].mDataByteSize = *ioNumberDataPackets * ctx->bytes_per_frame;
+
+	ctx->data = (const uint8_t *)ctx->data + ioData->mBuffers[0].mDataByteSize;
+	ctx->bytes_left -= ioData->mBuffers[0].mDataByteSize;
+	return noErr;
+}
+
+static OSStatus input_callback(void *inRefCon,
 			       AudioUnitRenderActionFlags *ioActionFlags,
 			       const AudioTimeStamp *inTimeStamp,
 			       UInt32 inBusNumber,
@@ -106,7 +228,7 @@ if rec_path.exists():
 			       AudioBufferList *ioData)
 {
 	struct ausrc_st *st = inRefCon;
-	size_t framesz;
+	size_t hw_framesz;
 	OSStatus ret;
 	ausrc_read_h *rh;
 	void *arg;
@@ -121,14 +243,13 @@ if rec_path.exists():
 	if (!rh)
 		return 0;
 
-	framesz = st->sampsz * st->prm.ch;
-
-	uint8_t buf[inNumberFrames * framesz];
+	hw_framesz = sizeof(int16_t) * st->hw_channels;
+	int16_t in_buf[inNumberFrames * st->hw_channels];
 	AudioBufferList abl;
 	abl.mNumberBuffers = 1;
-	abl.mBuffers[0].mNumberChannels = st->prm.ch;
-	abl.mBuffers[0].mDataByteSize = inNumberFrames * (UInt32)framesz;
-	abl.mBuffers[0].mData = buf;
+	abl.mBuffers[0].mNumberChannels = st->hw_channels;
+	abl.mBuffers[0].mDataByteSize = inNumberFrames * (UInt32)hw_framesz;
+	abl.mBuffers[0].mData = in_buf;
 
 	ret = AudioUnitRender(st->au_in,
 			      ioActionFlags,
@@ -142,73 +263,572 @@ if rec_path.exists():
 		return ret;
 	}
 
-	struct auframe af;
-	uint64_t ts = AUDIO_TIMEBASE * inTimeStamp->mSampleTime / st->prm.srate;
-	auframe_init(&af, st->prm.fmt, buf,
-		     inNumberFrames * st->prm.ch,
-		     st->prm.srate, st->prm.ch);
-	af.timestamp = ts;
+	uint64_t ts = 0;
+	if (st->hw_srate > 0) {
+		ts = AUDIO_TIMEBASE * inTimeStamp->mSampleTime / st->hw_srate;
+	}
 
-	rh(&af, arg);
+	if (st->converter) {
+		UInt32 out_capacity = (UInt32)((inNumberFrames * (double)st->prm.srate / st->hw_srate) + 64);
+		int16_t out_buf[out_capacity * st->prm.ch];
+		AudioBufferList out_abl;
+		out_abl.mNumberBuffers = 1;
+		out_abl.mBuffers[0].mNumberChannels = st->prm.ch;
+		out_abl.mBuffers[0].mDataByteSize = out_capacity * st->sampsz * st->prm.ch;
+		out_abl.mBuffers[0].mData = out_buf;
+
+		UInt32 io_packets = out_capacity;
+		struct conv_ctx ctx = {
+			.data = in_buf,
+			.bytes_left = inNumberFrames * (UInt32)hw_framesz,
+			.bytes_per_frame = (UInt32)hw_framesz
+		};
+
+		ret = AudioConverterFillComplexBuffer(st->converter,
+						      conv_input_proc,
+						      &ctx,
+						      &io_packets,
+						      &out_abl,
+						      NULL);
+		if (ret && ret != 500) {
+			debug("audiounit: record: AudioConverter error (%d)\n", ret);
+			return ret;
+		}
+
+		if (io_packets > 0) {
+			struct auframe af;
+			auframe_init(&af, st->prm.fmt, out_buf,
+				     io_packets * st->prm.ch,
+				     st->prm.srate, st->prm.ch);
+			af.timestamp = ts;
+			rh(&af, arg);
+		}
+	} else {
+		struct auframe af;
+		auframe_init(&af, st->prm.fmt, in_buf,
+			     inNumberFrames * st->prm.ch,
+			     st->prm.srate, st->prm.ch);
+		af.timestamp = ts;
+		rh(&af, arg);
+	}
 
 	return noErr;
-}"""
-    rec_src, count_cb = re.subn(
-        r"static OSStatus input_callback\(.*?return noErr;\n\}",
-        lambda m: direct_cb,
-        rec_src,
-        count=1,
-        flags=re.DOTALL
-    )
-    if count_rate > 0 and count_cb > 0:
-        rec_path.write_text(rec_src)
-        print("    [PATCH] recorder.c updated to use native AUHAL rate conversion and direct callback")
-    else:
-        print(f"    [WARNING] recorder.c pattern matches: rate={count_rate}, cb={count_cb}")
+}
 
-# 2. Patch player.c: explicitly set default output device on AUHAL
-play_path = baresip_dir / "modules/audiounit/player.c"
-if play_path.exists():
-    play_src = play_path.read_text()
-    play_needle = """\tret = AudioComponentInstanceNew(audiounit_comp_io, &st->au);
-\tif (ret)
-\t\tgoto out;
+static void interrupt_handler(bool interrupted, void *arg)
+{
+	struct ausrc_st *st = arg;
 
-\tret = AudioUnitSetProperty(st->au, kAudioOutputUnitProperty_EnableIO,"""
-    play_replacement = """\tret = AudioComponentInstanceNew(audiounit_comp_io, &st->au);
-\tif (ret)
-\t\tgoto out;
+	if (interrupted)
+		AudioOutputUnitStop(st->au_in);
+	else
+		AudioOutputUnitStart(st->au_in);
+}
+
+int audiounit_recorder_alloc(struct ausrc_st **stp, const struct ausrc *as,
+			     struct ausrc_prm *prm, const char *device,
+			     ausrc_read_h *rh, ausrc_error_h *errh, void *arg)
+{
+	AudioStreamBasicDescription fmt;
+	const AudioUnitElement inputBus = 1;
+	AURenderCallbackStruct cb_in;
+	struct ausrc_st *st;
+	const UInt32 enable = 1;
+#if ! TARGET_OS_IPHONE
+	const AudioUnitElement outputBus = 0;
+	const UInt32 disable = 0;
+	UInt32 ausize = sizeof(AudioDeviceID);
+	AudioDeviceID inputDevice = kAudioDeviceUnknown;
+#endif
+	Float64 hw_srate = 0.0;
+	UInt32 hw_size = sizeof(hw_srate);
+	OSStatus ret = 0;
+	int err;
+
+	(void)errh;
+
+	if (!stp || !as || !prm)
+		return EINVAL;
+
+	st = mem_zalloc(sizeof(*st), ausrc_destructor);
+	if (!st)
+		return ENOMEM;
+
+	st->rh  = rh;
+	st->arg = arg;
+
+	st->sampsz = (uint32_t)aufmt_sample_size(prm->fmt);
+	if (!st->sampsz) {
+		err = ENOTSUP;
+		goto out;
+	}
+	st->prm = *prm;
+
+	err = mtx_init(&st->mutex, mtx_plain) != thrd_success;
+	if (err) {
+		err = ENOMEM;
+		goto out;
+	}
+
+	err = audiosess_alloc(&st->sess, interrupt_handler, st);
+	if (err)
+		goto out;
+
+	ret = AudioComponentInstanceNew(audiounit_comp_io, &st->au_in);
+	if (ret)
+		goto out;
+
+	ret = AudioUnitSetProperty(st->au_in,
+				   kAudioOutputUnitProperty_EnableIO,
+				   kAudioUnitScope_Input, inputBus,
+				   &enable, sizeof(enable));
+	if (ret)
+		goto out;
 
 #if ! TARGET_OS_IPHONE
-\tUInt32 ausize = sizeof(AudioDeviceID);
-\tAudioDeviceID outputDevice;
-\tAudioObjectPropertyAddress auAddress = {
-\t\tkAudioHardwarePropertyDefaultOutputDevice,
-\t\tkAudioObjectPropertyScopeGlobal,
-\t\tkAudioObjectPropertyElementMain };
+	ret = AudioUnitSetProperty(st->au_in,
+				   kAudioOutputUnitProperty_EnableIO,
+				   kAudioUnitScope_Output, outputBus,
+				   &disable, sizeof(disable));
+	if (ret)
+		goto out;
 
-\tret = AudioObjectGetPropertyData(kAudioObjectSystemObject,
-\t\t\t&auAddress,
-\t\t\t0,
-\t\t\tNULL,
-\t\t\t&ausize,
-\t\t\t&outputDevice);
-\tif (ret == noErr) {
-\t\tAudioUnitSetProperty(st->au,
-\t\t\t\tkAudioOutputUnitProperty_CurrentDevice,
-\t\t\t\tkAudioUnitScope_Global,
-\t\t\t\t0,
-\t\t\t\t&outputDevice,
-\t\t\t\tsizeof(outputDevice));
-\t}
+	if (str_isset(device)) {
+		inputDevice = find_device_by_name(device, true);
+	}
+	if (inputDevice == kAudioDeviceUnknown) {
+		AudioObjectPropertyAddress auAddress = {
+			kAudioHardwarePropertyDefaultInputDevice,
+			kAudioObjectPropertyScopeGlobal,
+			kAudioObjectPropertyElementMain };
+		ret = AudioObjectGetPropertyData(kAudioObjectSystemObject,
+				&auAddress,
+				0,
+				NULL,
+				&ausize,
+				&inputDevice);
+		if (ret)
+			goto out;
+	}
+
+	ret = AudioUnitSetProperty(st->au_in,
+			kAudioOutputUnitProperty_CurrentDevice,
+			kAudioUnitScope_Global,
+			0,
+			&inputDevice,
+			sizeof(inputDevice));
+	if (ret)
+		goto out;
 #endif
 
-\tret = AudioUnitSetProperty(st->au, kAudioOutputUnitProperty_EnableIO,"""
-    if play_needle in play_src:
-        play_path.write_text(play_src.replace(play_needle, play_replacement, 1))
-        print("    [PATCH] player.c updated with default output device routing")
-    else:
-        print("    [WARNING] player.c needle not found")
+#if TARGET_OS_IPHONE
+	hw_srate = prm->srate;
+	(void)hw_size;
+	st->hw_channels = prm->ch;
+#else
+	ret = AudioUnitGetProperty(st->au_in,
+				   kAudioUnitProperty_SampleRate,
+				   kAudioUnitScope_Input,
+				   inputBus,
+				   &hw_srate,
+				   &hw_size);
+	if (ret || hw_srate <= 0.0) {
+		hw_srate = prm->srate;
+	}
+
+	AudioStreamBasicDescription hw_desc = {0};
+	UInt32 hw_desc_sz = sizeof(hw_desc);
+	if (AudioUnitGetProperty(st->au_in,
+				 kAudioUnitProperty_StreamFormat,
+				 kAudioUnitScope_Input,
+				 inputBus,
+				 &hw_desc,
+				 &hw_desc_sz) == noErr && hw_desc.mChannelsPerFrame > 0) {
+		st->hw_channels = hw_desc.mChannelsPerFrame;
+	} else {
+		st->hw_channels = prm->ch;
+	}
+#endif
+	st->hw_srate = hw_srate;
+
+	fmt.mSampleRate       = hw_srate;
+	fmt.mFormatID         = kAudioFormatLinearPCM;
+#if TARGET_OS_IPHONE
+	fmt.mFormatFlags      = audiounit_aufmt_to_formatflags(prm->fmt)
+		| kAudioFormatFlagsNativeEndian
+		| kAudioFormatFlagIsPacked;
+#else
+	fmt.mFormatFlags      = kLinearPCMFormatFlagIsSignedInteger
+		| kLinearPCMFormatFlagIsPacked;
+#endif
+	fmt.mBitsPerChannel   = 16;
+	fmt.mChannelsPerFrame = st->hw_channels;
+	fmt.mBytesPerFrame    = sizeof(int16_t) * st->hw_channels;
+	fmt.mFramesPerPacket  = 1;
+	fmt.mBytesPerPacket   = fmt.mBytesPerFrame;
+	fmt.mReserved         = 0;
+
+	ret = AudioUnitSetProperty(st->au_in, kAudioUnitProperty_StreamFormat,
+				   kAudioUnitScope_Output, inputBus,
+				   &fmt, sizeof(fmt));
+	if (ret)
+		goto out;
+
+	if (hw_srate != prm->srate || st->hw_channels != prm->ch) {
+		AudioStreamBasicDescription out_desc = {0};
+		out_desc.mSampleRate       = prm->srate;
+		out_desc.mFormatID         = kAudioFormatLinearPCM;
+		out_desc.mFormatFlags      = kLinearPCMFormatFlagIsSignedInteger
+			| kLinearPCMFormatFlagIsPacked;
+		out_desc.mBitsPerChannel   = 8 * st->sampsz;
+		out_desc.mChannelsPerFrame = prm->ch;
+		out_desc.mBytesPerFrame    = st->sampsz * prm->ch;
+		out_desc.mFramesPerPacket  = 1;
+		out_desc.mBytesPerPacket   = out_desc.mBytesPerFrame;
+
+		ret = AudioConverterNew(&fmt, &out_desc, &st->converter);
+		if (ret) {
+			warning("audiounit: record: AudioConverterNew failed (%d)\n", ret);
+			goto out;
+		}
+		info("audiounit: record: resampler created %.1f Hz (%u ch) -> %u Hz (%u ch)\n",
+		     hw_srate, st->hw_channels, prm->srate, prm->ch);
+	}
+
+	ret = AudioUnitInitialize(st->au_in);
+	if (ret)
+		goto out;
+
+	cb_in.inputProc = input_callback;
+	cb_in.inputProcRefCon = st;
+	ret = AudioUnitSetProperty(st->au_in,
+				   kAudioOutputUnitProperty_SetInputCallback,
+				   kAudioUnitScope_Global, inputBus,
+				   &cb_in, sizeof(cb_in));
+	if (ret)
+		goto out;
+
+	ret = AudioOutputUnitStart(st->au_in);
+#if ! TARGET_OS_IPHONE
+	if (ret && inputDevice != kAudioDeviceUnknown) {
+		AudioObjectPropertyAddress auDefAddr = {
+			kAudioHardwarePropertyDefaultInputDevice,
+			kAudioObjectPropertyScopeGlobal,
+			kAudioObjectPropertyElementMain };
+		AudioDeviceID defInput = kAudioDeviceUnknown;
+		if (AudioObjectGetPropertyData(kAudioObjectSystemObject, &auDefAddr, 0, NULL, &ausize, &defInput) == noErr) {
+			AudioUnitUninitialize(st->au_in);
+			AudioUnitSetProperty(st->au_in, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0, &defInput, sizeof(defInput));
+			AudioUnitInitialize(st->au_in);
+			ret = AudioOutputUnitStart(st->au_in);
+		}
+	}
+#endif
+	if (ret)
+		goto out;
+
+ out:
+	if (ret) {
+		warning("audiounit: record failed: %d (%c%c%c%c)\n", ret,
+			ret>>24, ret>>16, ret>>8, ret);
+		err = ENODEV;
+	}
+
+	if (err)
+		mem_deref(st);
+	else
+		*stp = st;
+
+	return err;
+}
+"""
+    rec_path.write_text(rec_code)
+    print("    [PATCH] recorder.c updated with CoreAudio AudioConverterRef resampling and device lookup")
+
+# 2. Replace player.c with device lookup on AUHAL
+play_path = baresip_dir / "modules/audiounit/player.c"
+if play_path.exists():
+    play_code = r"""/**
+ * @file audiounit/player.c  AudioUnit output player
+ *
+ * Copyright (C) 2010 Alfred E. Heggestad
+ * Modified for multi-device routing on macOS
+ */
+#include <AudioUnit/AudioUnit.h>
+#include <AudioToolbox/AudioToolbox.h>
+#include <CoreAudio/CoreAudio.h>
+#include <TargetConditionals.h>
+#include <re.h>
+#include <rem.h>
+#include <baresip.h>
+#include "audiounit.h"
+
+#if ! TARGET_OS_IPHONE
+static AudioDeviceID find_output_device_by_name(const char *name)
+{
+	if (!str_isset(name))
+		return kAudioDeviceUnknown;
+
+	AudioObjectPropertyAddress addr = {
+		kAudioHardwarePropertyDevices,
+		kAudioObjectPropertyScopeGlobal,
+		kAudioObjectPropertyElementMain
+	};
+	UInt32 size = 0;
+	if (AudioObjectGetPropertyDataSize(kAudioObjectSystemObject, &addr, 0, NULL, &size) != noErr)
+		return kAudioDeviceUnknown;
+
+	UInt32 count = size / sizeof(AudioDeviceID);
+	AudioDeviceID devs[count];
+	if (AudioObjectGetPropertyData(kAudioObjectSystemObject, &addr, 0, NULL, &size, devs) != noErr)
+		return kAudioDeviceUnknown;
+
+	for (UInt32 i = 0; i < count; ++i) {
+		AudioObjectPropertyAddress streamsAddr = {
+			kAudioDevicePropertyStreams,
+			kAudioObjectPropertyScopeOutput,
+			kAudioObjectPropertyElementMain
+		};
+		UInt32 streamSize = 0;
+		if (AudioObjectGetPropertyDataSize(devs[i], &streamsAddr, 0, NULL, &streamSize) != noErr || streamSize == 0)
+			continue;
+
+		CFStringRef devName = NULL;
+		UInt32 nameSize = sizeof(devName);
+		AudioObjectPropertyAddress nameAddr = {
+			kAudioObjectPropertyName,
+			kAudioObjectPropertyScopeGlobal,
+			kAudioObjectPropertyElementMain
+		};
+		if (AudioObjectGetPropertyData(devs[i], &nameAddr, 0, NULL, &nameSize, &devName) == noErr && devName) {
+			char buf[256];
+			Boolean ok = CFStringGetCString(devName, buf, sizeof(buf), kCFStringEncodingUTF8);
+			CFRelease(devName);
+			if (ok && strcmp(buf, name) == 0) {
+				return devs[i];
+			}
+		}
+	}
+	return kAudioDeviceUnknown;
+}
+#endif
+
+struct auplay_st {
+	struct audiosess_st *sess;
+	struct auplay_prm prm;
+	AudioUnit au;
+	mtx_t mutex;
+	uint32_t sampsz;
+	auplay_write_h *wh;
+	void *arg;
+};
+
+static void auplay_destructor(void *arg)
+{
+	struct auplay_st *st = arg;
+
+	mtx_lock(&st->mutex);
+	st->wh = NULL;
+	mtx_unlock(&st->mutex);
+
+	AudioOutputUnitStop(st->au);
+	AudioUnitUninitialize(st->au);
+	AudioComponentInstanceDispose(st->au);
+
+	mem_deref(st->sess);
+	mtx_destroy(&st->mutex);
+}
+
+static OSStatus output_callback(void *inRefCon,
+				AudioUnitRenderActionFlags *ioActionFlags,
+				const AudioTimeStamp *inTimeStamp,
+				UInt32 inBusNumber,
+				UInt32 inNumberFrames,
+				AudioBufferList *ioData)
+{
+	struct auplay_st *st = inRefCon;
+	auplay_write_h *wh;
+	void *arg;
+	uint32_t i;
+
+	(void)ioActionFlags;
+	(void)inTimeStamp;
+	(void)inBusNumber;
+	(void)inNumberFrames;
+
+	mtx_lock(&st->mutex);
+	wh  = st->wh;
+	arg = st->arg;
+	mtx_unlock(&st->mutex);
+
+	if (!wh)
+		return 0;
+
+	for (i = 0; i < ioData->mNumberBuffers; ++i) {
+		AudioBuffer *ab = &ioData->mBuffers[i];
+		struct auframe af;
+		uint64_t ts;
+
+		auframe_init(&af, st->prm.fmt, ab->mData,
+			     ab->mDataByteSize / st->sampsz, st->prm.srate,
+			     st->prm.ch);
+
+		ts = AUDIO_TIMEBASE * inTimeStamp->mSampleTime / st->prm.srate;
+		af.timestamp = ts;
+
+		wh(&af, arg);
+	}
+
+	return 0;
+}
+
+static void interrupt_handler(bool interrupted, void *arg)
+{
+	struct auplay_st *st = arg;
+
+	if (interrupted)
+		AudioOutputUnitStop(st->au);
+	else
+		AudioOutputUnitStart(st->au);
+}
+
+int audiounit_player_alloc(struct auplay_st **stp, const struct auplay *ap,
+			   struct auplay_prm *prm, const char *device,
+			   auplay_write_h *wh, void *arg)
+{
+	AudioStreamBasicDescription fmt;
+	const AudioUnitElement outputBus = 0;
+	AURenderCallbackStruct cb;
+	struct auplay_st *st;
+	const UInt32 enable = 1;
+	OSStatus ret = 0;
+	int err;
+
+	if (!stp || !ap || !prm)
+		return EINVAL;
+
+	st = mem_zalloc(sizeof(*st), auplay_destructor);
+	if (!st)
+		return ENOMEM;
+
+	st->wh  = wh;
+	st->arg = arg;
+	st->prm = *prm;
+
+	st->sampsz = (uint32_t)aufmt_sample_size(prm->fmt);
+	if (!st->sampsz) {
+		err = ENOTSUP;
+		goto out;
+	}
+
+	err = mtx_init(&st->mutex, mtx_plain) != thrd_success;
+	if (err) {
+		err = ENOMEM;
+		goto out;
+	}
+
+	err = audiosess_alloc(&st->sess, interrupt_handler, st);
+	if (err)
+		goto out;
+
+	ret = AudioComponentInstanceNew(audiounit_comp_io, &st->au);
+	if (ret)
+		goto out;
+
+	ret = AudioUnitSetProperty(st->au, kAudioOutputUnitProperty_EnableIO,
+				   kAudioUnitScope_Output, outputBus,
+				   &enable, sizeof(enable));
+	if (ret) {
+		warning("audiounit: EnableIO failed (%d)\n", ret);
+		goto out;
+	}
+
+#if ! TARGET_OS_IPHONE
+	UInt32 ausize = sizeof(AudioDeviceID);
+	AudioDeviceID outputDevice = kAudioDeviceUnknown;
+	if (str_isset(device)) {
+		outputDevice = find_output_device_by_name(device);
+	}
+	if (outputDevice == kAudioDeviceUnknown) {
+		AudioObjectPropertyAddress auAddress = {
+			kAudioHardwarePropertyDefaultOutputDevice,
+			kAudioObjectPropertyScopeGlobal,
+			kAudioObjectPropertyElementMain };
+		ret = AudioObjectGetPropertyData(kAudioObjectSystemObject,
+				&auAddress,
+				0,
+				NULL,
+				&ausize,
+				&outputDevice);
+		if (ret)
+			goto out;
+	}
+	ret = AudioUnitSetProperty(st->au,
+			kAudioOutputUnitProperty_CurrentDevice,
+			kAudioUnitScope_Global,
+			0,
+			&outputDevice,
+			sizeof(outputDevice));
+	if (ret)
+		goto out;
+#endif
+
+	fmt.mSampleRate       = prm->srate;
+	fmt.mFormatID         = kAudioFormatLinearPCM;
+#if TARGET_OS_IPHONE
+	fmt.mFormatFlags      = audiounit_aufmt_to_formatflags(prm->fmt)
+		| kAudioFormatFlagsNativeEndian
+		| kAudioFormatFlagIsPacked;
+#else
+	fmt.mFormatFlags      = audiounit_aufmt_to_formatflags(prm->fmt)
+		| kAudioFormatFlagIsPacked;
+#endif
+	fmt.mBitsPerChannel   = 8 * st->sampsz;
+	fmt.mChannelsPerFrame = prm->ch;
+	fmt.mBytesPerFrame    = st->sampsz * prm->ch;
+	fmt.mFramesPerPacket  = 1;
+	fmt.mBytesPerPacket   = st->sampsz * prm->ch;
+
+	ret = AudioUnitInitialize(st->au);
+	if (ret)
+		goto out;
+
+	ret = AudioUnitSetProperty(st->au, kAudioUnitProperty_StreamFormat,
+				   kAudioUnitScope_Input, outputBus,
+				   &fmt, sizeof(fmt));
+	if (ret)
+		goto out;
+
+	cb.inputProc = output_callback;
+	cb.inputProcRefCon = st;
+	ret = AudioUnitSetProperty(st->au,
+				   kAudioUnitProperty_SetRenderCallback,
+				   kAudioUnitScope_Input, outputBus,
+				   &cb, sizeof(cb));
+	if (ret)
+		goto out;
+
+	ret = AudioOutputUnitStart(st->au);
+	if (ret)
+		goto out;
+
+ out:
+	if (ret) {
+		warning("audiounit: player failed: %d (%c%c%c%c)\n", ret,
+			ret>>24, ret>>16, ret>>8, ret);
+		err = ENODEV;
+	}
+
+	if (err)
+		mem_deref(st);
+	else
+		*stp = st;
+
+	return err;
+}
+"""
+    play_path.write_text(play_code)
+    print("    [PATCH] player.c updated with device routing on AUHAL")
 
 # 3. Patch audiounit.c: expand MAX_NB_FRAMES
 au_path = baresip_dir / "modules/audiounit/audiounit.c"

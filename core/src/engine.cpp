@@ -883,6 +883,31 @@ int Engine::set_audio_driver(const char *src_mod, const char *src_dev, const cha
     if (play_dev) {
         snprintf(cfg->audio.play_dev, sizeof(cfg->audio.play_dev), "%s", play_dev);
     }
+
+    std::string s_mod = src_mod ? src_mod : (cfg ? cfg->audio.src_mod : "");
+    std::string s_dev = src_dev ? src_dev : (cfg ? cfg->audio.src_dev : "");
+    std::string p_mod = play_mod ? play_mod : (cfg ? cfg->audio.play_mod : "");
+    std::string p_dev = play_dev ? play_dev : (cfg ? cfg->audio.play_dev : "");
+    bool has_src = (src_mod != nullptr || src_dev != nullptr);
+    bool has_play = (play_mod != nullptr || play_dev != nullptr);
+
+    post_task([this, s_mod, s_dev, p_mod, p_dev, has_src, has_play]() {
+        std::lock_guard<std::mutex> lock(m_calls_mutex);
+        for (auto *sess : m_all_calls) {
+            if (!sess || sess->raw_call() == nullptr || sess->is_closed()) continue;
+            struct audio *au = call_audio(sess->raw_call());
+            if (!au) continue;
+            if (has_src) {
+                audio_set_source(au, s_mod.empty() ? nullptr : s_mod.c_str(),
+                                 s_dev.c_str());
+            }
+            if (has_play) {
+                audio_set_player(au, p_mod.empty() ? nullptr : p_mod.c_str(),
+                                 p_dev.c_str());
+            }
+        }
+    });
+
     return 0;
 }
 
