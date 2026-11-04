@@ -55,6 +55,7 @@
     AVCaptureSession *_session;
     dispatch_queue_t _captureQueue;
     dispatch_source_t _syntheticTimer;
+    NSString *_selectedDeviceId;
 }
 - (instancetype)init;
 - (int)startWithWidth:(int)width height:(int)height fps:(int)fps;
@@ -117,8 +118,18 @@
 
 - (void)setCameraDeviceId:(NSString *)deviceId
 {
+    std::lock_guard<std::mutex> lock(_driverMutex);
+    _selectedDeviceId = [deviceId copy];
     if (_running.load() && !_syntheticMode.load()) {
-        [self stop];
+        if (_syntheticTimer) {
+            dispatch_source_cancel(_syntheticTimer);
+            _syntheticTimer = nil;
+        }
+        if (_session) {
+            [_session stopRunning];
+            _session = nil;
+        }
+        _running = false;
         [self startWithWidth:640 height:480 fps:30];
     }
 }
@@ -232,7 +243,18 @@
         _session.sessionPreset = AVCaptureSessionPreset640x480;
     }
 
-    AVCaptureDevice *device = devices.firstObject;
+    AVCaptureDevice *device = nil;
+    if (_selectedDeviceId && _selectedDeviceId.length > 0) {
+        for (AVCaptureDevice *dev in devices) {
+            if ([dev.uniqueID isEqualToString:_selectedDeviceId]) {
+                device = dev;
+                break;
+            }
+        }
+    }
+    if (!device) {
+        device = devices.firstObject;
+    }
     NSError *error = nil;
     AVCaptureDeviceInput *input = [AVCaptureDeviceInput deviceInputWithDevice:device error:&error];
     if (!input || error || ![_session canAddInput:input]) {
@@ -326,7 +348,14 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
         frame.y_stride = static_cast<int>(y_stride);
         frame.u_stride = static_cast<int>(width / 2);
         frame.v_stride = static_cast<int>(width / 2);
-        frame.timestamp_ns = static_cast<uint64_t>(CMSampleBufferGetPresentationTimeStamp(sampleBuffer).value);
+        CMTime pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer);
+        uint64_t ts_ns;
+        if (CMTIME_IS_VALID(pts) && pts.timescale > 0) {
+            ts_ns = static_cast<uint64_t>(std::max(0.0, (double)pts.value / (double)pts.timescale * 1000000000.0));
+        } else {
+            ts_ns = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+        }
+        frame.timestamp_ns = ts_ns;
 
         _frameHandler(&frame, _frameHandlerArg);
     }
@@ -458,7 +487,8 @@ static std::string ensure_default_config_dir()
             ofs << "rtp_tos 184\n";
             ofs << "rtcp_enable yes\n";
             ofs << "rtcp_mux no\n";
-            ofs << "jitter_buffer_delay 5-10\n\n";
+            ofs << "jitter_buffer_delay 5-10\n";
+            ofs << "audio_buffer 80-240\n\n";
             ofs << "audio_player audiounit,nil\n";
             ofs << "audio_source audiounit,nil\n";
             ofs << "module audiounit.so\n";
@@ -577,6 +607,8 @@ struct ClientCallbacks {
 {
     self = [super init];
     if (self) {
+        setlinebuf(stdout);
+        setlinebuf(stderr);
         _username = [username copy];
         _domain = [domain copy];
         _port = 5060;

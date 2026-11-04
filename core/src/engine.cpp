@@ -15,6 +15,7 @@
 #include <utility>
 
 #if defined(__APPLE__)
+#include <TargetConditionals.h>
 #include <dispatch/dispatch.h>
 #include <objc/message.h>
 #include <objc/runtime.h>
@@ -174,6 +175,15 @@ int Engine::init_on_loop_thread(const char *config_path)
         if (cfg->audio.play_mod[0] == '\0') {
             snprintf(cfg->audio.play_mod, sizeof(cfg->audio.play_mod), "%s", "audiounit");
         }
+#if TARGET_OS_OSX || (defined(TARGET_OS_MAC) && !TARGET_OS_IPHONE)
+        // Ensure audio buffer is at least 80ms min to prevent CoreAudio HAL (512 frames = 64ms at 8kHz) underrun chopping
+        if (cfg->audio.buffer.min < 80) {
+            cfg->audio.buffer.min = 80;
+        }
+        if (cfg->audio.buffer.max < 240) {
+            cfg->audio.buffer.max = 240;
+        }
+#endif
 #endif
         snprintf(cfg->video.src_mod, sizeof(cfg->video.src_mod), "%s", "avcapture");
         snprintf(cfg->video.src_dev, sizeof(cfg->video.src_dev), "%s", "front");

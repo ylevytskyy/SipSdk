@@ -107,14 +107,15 @@ static inline uint8_t clampByte(int v)
         return;
     }
 
-    self.videoSize = CGSizeMake(width, height);
-    self.renderedFrameCount += 1;
-
     if ([NSThread isMainThread]) {
+        self.videoSize = CGSizeMake(width, height);
+        self.renderedFrameCount += 1;
         self.layer.contents = (__bridge id)cgImage;
         CGImageRelease(cgImage);
     } else {
         dispatch_async(dispatch_get_main_queue(), ^{
+            self.videoSize = CGSizeMake(width, height);
+            self.renderedFrameCount += 1;
             self.layer.contents = (__bridge id)cgImage;
             CGImageRelease(cgImage);
         });
@@ -123,11 +124,12 @@ static inline uint8_t clampByte(int v)
 
 - (void)clear
 {
-    _videoSize = CGSizeZero;
     if ([NSThread isMainThread]) {
+        self.videoSize = CGSizeZero;
         self.layer.contents = nil;
     } else {
         dispatch_async(dispatch_get_main_queue(), ^{
+            self.videoSize = CGSizeZero;
             self.layer.contents = nil;
         });
     }

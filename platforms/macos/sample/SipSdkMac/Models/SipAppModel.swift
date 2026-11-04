@@ -1,6 +1,7 @@
 import Foundation
 import Combine
 import SwiftUI
+import Darwin
 
 public final class SipAppModel: NSObject, ObservableObject, SipMacClientDelegate {
     @Published public var registrationState: SipMacRegistrationState = .unregistered
@@ -25,6 +26,11 @@ public final class SipAppModel: NSObject, ObservableObject, SipMacClientDelegate
     @Published public var availableCameras: [String] = []
     @Published public var selectedCamera: String = "Synthetic (Test Pattern)"
 
+    public var autoCallTarget: String?
+    public var autoCallWithVideo: Bool = true
+    public var isAutomatedTest: Bool = false
+    public var autoExitOnTestComplete: Bool = false
+
     public let accountStore = SipAccountStore()
     public let historyStore = SipCallHistoryStore()
 
@@ -33,8 +39,21 @@ public final class SipAppModel: NSObject, ObservableObject, SipMacClientDelegate
     private var cancellables = Set<AnyCancellable>()
 
     public override init() {
+        setlinebuf(stdout)
+        setlinebuf(stderr)
         super.init()
+        parseArguments()
         initializeClient()
+    }
+
+    private func parseArguments() {
+        let args = CommandLine.arguments
+        if let idx = args.firstIndex(of: "--test-call"), idx + 1 < args.count {
+            self.autoCallTarget = args[idx + 1]
+            self.isAutomatedTest = true
+            self.autoExitOnTestComplete = true
+            self.autoCallWithVideo = !args.contains("--no-video")
+        }
     }
 
     public func initializeClient() {
@@ -143,16 +162,25 @@ public final class SipAppModel: NSObject, ObservableObject, SipMacClientDelegate
 
     // MARK: - SipMacClientDelegate
 
-    public func client(_ client: Any, didChangeRegistrationState state: SipMacRegistrationState, code: Int, reason: String) {
+    public func client(_ client: SipMacClient, didChange state: SipMacRegistrationState, code: Int, reason: String) {
         DispatchQueue.main.async {
             self.registrationState = state
             self.registrationCode = code
             self.registrationReason = reason
+            print("[SipAppModel] Registration state: \(state.rawValue) (\(code) \(reason))")
+            if state == .registered, let target = self.autoCallTarget {
+                self.autoCallTarget = nil
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                    print("[SipAppModel] Auto-initiating call to \(target) (video=\(self.autoCallWithVideo))")
+                    self.makeCall(targetUri: target, withVideo: self.autoCallWithVideo)
+                }
+            }
         }
     }
 
-    public func client(_ client: Any, didReceiveIncomingCall call: SipMacCall) {
+    public func client(_ client: SipMacClient, didReceiveIncomingCall call: SipMacCall) {
         DispatchQueue.main.async {
+            print("[SipAppModel] Incoming call from \(call.remoteUri)")
             if self.activeCall == nil {
                 self.incomingCall = call
             } else {
@@ -161,7 +189,7 @@ public final class SipAppModel: NSObject, ObservableObject, SipMacClientDelegate
         }
     }
 
-    public func client(_ client: Any, call: SipMacCall, didChangeState state: SipMacCallState, code: Int, reason: String) {
+    public func client(_ client: SipMacClient, call: SipMacCall, didChange state: SipMacCallState, code: Int, reason: String) {
         DispatchQueue.main.async {
             self.callState = state
             self.callStateCode = code
@@ -169,8 +197,18 @@ public final class SipAppModel: NSObject, ObservableObject, SipMacClientDelegate
 
             switch state {
             case .established:
-                self.startDurationTimer()
+                print("[SipAppModel] Call established with \(call.remoteUri)")
+                if self.durationTimer == nil {
+                    self.startDurationTimer()
+                    if self.isAutomatedTest {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
+                            print("[SipAppModel] Automated test finished streaming. Hanging up...")
+                            self.hangupActiveCall()
+                        }
+                    }
+                }
             case .closed:
+                print("[SipAppModel] Call closed (\(code) \(reason))")
                 self.stopDurationTimer()
                 let dur = self.callDurationSeconds
                 let dir = call.isOutgoing ? "outgoing" : "incoming"
@@ -182,9 +220,18 @@ public final class SipAppModel: NSObject, ObservableObject, SipMacClientDelegate
                                             status: status)
                 if self.activeCall === call {
                     self.activeCall = nil
+                    self.hasRemoteVideo = false
+                    self.isMuted = false
+                    self.isOnHold = false
                 }
                 if self.incomingCall === call {
                     self.incomingCall = nil
+                }
+                if self.isAutomatedTest && self.autoExitOnTestComplete {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                        print("[SipAppModel] Exiting automated test cleanly.")
+                        NSApplication.shared.terminate(nil)
+                    }
                 }
             default:
                 break
@@ -192,17 +239,18 @@ public final class SipAppModel: NSObject, ObservableObject, SipMacClientDelegate
         }
     }
 
-    public func client(_ client: Any, call: SipMacCall, didUpdateMediaWidth width: Int32, height: Int32) {
+    public func client(_ client: SipMacClient, call: SipMacCall, didUpdateMediaWidth width: Int32, height: Int32) {
         DispatchQueue.main.async {
             self.mediaWidth = Int(width)
             self.mediaHeight = Int(height)
+            print("[SipAppModel] Media dimensions updated: \(width)x\(height)")
             if width > 0 && height > 0 {
                 self.hasRemoteVideo = true
             }
         }
     }
 
-    public func client(_ client: Any, call: SipMacCall, didReceiveDtmf digit: String) {
+    public func client(_ client: SipMacClient, call: SipMacCall, didReceiveDtmf digit: String) {
         // Optional DTMF audio feedback can be added here
     }
 

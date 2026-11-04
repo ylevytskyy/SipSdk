@@ -78,6 +78,147 @@ if needle in source:
     path.write_text(source.replace(needle, replacement, 1))
 PATCH_APPLE_TLS
 
+  echo "==> Patching Baresip audiounit module for macOS audio I/O..."
+  python3 - "$SOURCE_DIR/baresip" <<'PATCH_BARESIP_AUDIOUNIT'
+from pathlib import Path
+import re
+import sys
+
+baresip_dir = Path(sys.argv[1])
+
+# 1. Patch recorder.c: enable native AUHAL hardware resampling and direct rendering callback
+rec_path = baresip_dir / "modules/audiounit/recorder.c"
+if rec_path.exists():
+    rec_src = rec_path.read_text()
+    # 1a. Set hw_srate = prm->srate
+    rec_src, count_rate = re.subn(
+        r"#if TARGET_OS_IPHONE\s+hw_srate = prm->srate;\s+\(void\)hw_size;\s+#else.*?#endif",
+        "\t/* Use native AUHAL / RemoteIO rate conversion across Apple platforms */\n\thw_srate = prm->srate;\n\t(void)hw_size;",
+        rec_src,
+        flags=re.DOTALL
+    )
+    # 1b. Direct AUHAL rendering into audio read handler (bypassing buggy au_conv / conv_buf layer)
+    direct_cb = r"""static OSStatus input_callback(void *inRefCon,
+			       AudioUnitRenderActionFlags *ioActionFlags,
+			       const AudioTimeStamp *inTimeStamp,
+			       UInt32 inBusNumber,
+			       UInt32 inNumberFrames,
+			       AudioBufferList *ioData)
+{
+	struct ausrc_st *st = inRefCon;
+	size_t framesz;
+	OSStatus ret;
+	ausrc_read_h *rh;
+	void *arg;
+
+	(void)ioData;
+
+	mtx_lock(&st->mutex);
+	rh  = st->rh;
+	arg = st->arg;
+	mtx_unlock(&st->mutex);
+
+	if (!rh)
+		return 0;
+
+	framesz = st->sampsz * st->prm.ch;
+
+	uint8_t buf[inNumberFrames * framesz];
+	AudioBufferList abl;
+	abl.mNumberBuffers = 1;
+	abl.mBuffers[0].mNumberChannels = st->prm.ch;
+	abl.mBuffers[0].mDataByteSize = inNumberFrames * (UInt32)framesz;
+	abl.mBuffers[0].mData = buf;
+
+	ret = AudioUnitRender(st->au_in,
+			      ioActionFlags,
+			      inTimeStamp,
+			      inBusNumber,
+			      inNumberFrames,
+			      &abl);
+	if (ret) {
+		debug("audiounit: record: AudioUnitRender input error (%d)\n",
+		      ret);
+		return ret;
+	}
+
+	struct auframe af;
+	uint64_t ts = AUDIO_TIMEBASE * inTimeStamp->mSampleTime / st->prm.srate;
+	auframe_init(&af, st->prm.fmt, buf,
+		     inNumberFrames * st->prm.ch,
+		     st->prm.srate, st->prm.ch);
+	af.timestamp = ts;
+
+	rh(&af, arg);
+
+	return noErr;
+}"""
+    rec_src, count_cb = re.subn(
+        r"static OSStatus input_callback\(.*?return noErr;\n\}",
+        lambda m: direct_cb,
+        rec_src,
+        count=1,
+        flags=re.DOTALL
+    )
+    if count_rate > 0 and count_cb > 0:
+        rec_path.write_text(rec_src)
+        print("    [PATCH] recorder.c updated to use native AUHAL rate conversion and direct callback")
+    else:
+        print(f"    [WARNING] recorder.c pattern matches: rate={count_rate}, cb={count_cb}")
+
+# 2. Patch player.c: explicitly set default output device on AUHAL
+play_path = baresip_dir / "modules/audiounit/player.c"
+if play_path.exists():
+    play_src = play_path.read_text()
+    play_needle = """\tret = AudioComponentInstanceNew(audiounit_comp_io, &st->au);
+\tif (ret)
+\t\tgoto out;
+
+\tret = AudioUnitSetProperty(st->au, kAudioOutputUnitProperty_EnableIO,"""
+    play_replacement = """\tret = AudioComponentInstanceNew(audiounit_comp_io, &st->au);
+\tif (ret)
+\t\tgoto out;
+
+#if ! TARGET_OS_IPHONE
+\tUInt32 ausize = sizeof(AudioDeviceID);
+\tAudioDeviceID outputDevice;
+\tAudioObjectPropertyAddress auAddress = {
+\t\tkAudioHardwarePropertyDefaultOutputDevice,
+\t\tkAudioObjectPropertyScopeGlobal,
+\t\tkAudioObjectPropertyElementMain };
+
+\tret = AudioObjectGetPropertyData(kAudioObjectSystemObject,
+\t\t\t&auAddress,
+\t\t\t0,
+\t\t\tNULL,
+\t\t\t&ausize,
+\t\t\t&outputDevice);
+\tif (ret == noErr) {
+\t\tAudioUnitSetProperty(st->au,
+\t\t\t\tkAudioOutputUnitProperty_CurrentDevice,
+\t\t\t\tkAudioUnitScope_Global,
+\t\t\t\t0,
+\t\t\t\t&outputDevice,
+\t\t\t\tsizeof(outputDevice));
+\t}
+#endif
+
+\tret = AudioUnitSetProperty(st->au, kAudioOutputUnitProperty_EnableIO,"""
+    if play_needle in play_src:
+        play_path.write_text(play_src.replace(play_needle, play_replacement, 1))
+        print("    [PATCH] player.c updated with default output device routing")
+    else:
+        print("    [WARNING] player.c needle not found")
+
+# 3. Patch audiounit.c: expand MAX_NB_FRAMES
+au_path = baresip_dir / "modules/audiounit/audiounit.c"
+if au_path.exists():
+    au_src = au_path.read_text()
+    if "#define MAX_NB_FRAMES 4096" in au_src:
+        au_path.write_text(au_src.replace("#define MAX_NB_FRAMES 4096", "#define MAX_NB_FRAMES 16384", 1))
+        print("    [PATCH] audiounit.c expanded MAX_NB_FRAMES to 16384")
+PATCH_BARESIP_AUDIOUNIT
+
 elif [[ "$OS_NAME" == "linux" ]]; then
   echo "==> Patching libre crypto fallback for Linux non-OpenSSL builds..."
   python3 - "$SOURCE_DIR/re" <<'PATCH_LINUX_CRYPTO'
