@@ -5,9 +5,11 @@ class SipCall internal constructor(
     val callId: String,
     val remoteUri: String,
     val peerDisplayName: String? = null,
-    val hasVideo: Boolean = false,
+    hasVideo: Boolean = false,
     val isOutgoing: Boolean = true
 ) {
+    val hasVideo: Boolean = hasVideo
+        get() = if (nativeHandle != 0L) nativeHasVideo(nativeHandle) else field
     val isOnHold: Boolean
         get() = if (nativeHandle != 0L) nativeIsOnHold(nativeHandle) else false
 
@@ -36,5 +38,6 @@ class SipCall internal constructor(
     private external fun nativeGetDuration(handle: Long): Long
     private external fun nativeIsClosed(handle: Long): Boolean
     private external fun nativeIsOnHold(handle: Long): Boolean
+    private external fun nativeHasVideo(handle: Long): Boolean
     private external fun nativeRequestKeyframe(handle: Long): Int
 }

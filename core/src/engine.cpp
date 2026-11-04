@@ -158,6 +158,23 @@ int Engine::init_on_loop_thread(const char *config_path)
 
     struct config *cfg = conf_config();
     if (cfg != nullptr) {
+#if defined(ANDROID) || defined(__ANDROID__)
+        if (cfg->audio.src_mod[0] == '\0' || strcmp(cfg->audio.src_mod, "aaudio") == 0) {
+            snprintf(cfg->audio.src_mod, sizeof(cfg->audio.src_mod), "%s", "opensles");
+            snprintf(cfg->audio.src_dev, sizeof(cfg->audio.src_dev), "%s", "nil");
+        }
+        if (cfg->audio.play_mod[0] == '\0' || strcmp(cfg->audio.play_mod, "aaudio") == 0) {
+            snprintf(cfg->audio.play_mod, sizeof(cfg->audio.play_mod), "%s", "opensles");
+            snprintf(cfg->audio.play_dev, sizeof(cfg->audio.play_dev), "%s", "nil");
+        }
+#elif defined(__APPLE__)
+        if (cfg->audio.src_mod[0] == '\0') {
+            snprintf(cfg->audio.src_mod, sizeof(cfg->audio.src_mod), "%s", "audiounit");
+        }
+        if (cfg->audio.play_mod[0] == '\0') {
+            snprintf(cfg->audio.play_mod, sizeof(cfg->audio.play_mod), "%s", "audiounit");
+        }
+#endif
         snprintf(cfg->video.src_mod, sizeof(cfg->video.src_mod), "%s", "avcapture");
         snprintf(cfg->video.src_dev, sizeof(cfg->video.src_dev), "%s", "front");
         snprintf(cfg->video.disp_mod, sizeof(cfg->video.disp_mod), "%s", "iosview");
@@ -209,6 +226,11 @@ int Engine::init_on_loop_thread(const char *config_path)
     if (rc == 0) {
         m_events_registered = true;
     }
+
+#if defined(ANDROID) || defined(__ANDROID__)
+    (void)module_preload("opensles");
+    (void)module_preload("g711");
+#endif
 
     rc = conf_modules();
     if (rc != 0) {
@@ -1316,17 +1338,6 @@ int Engine::switch_camera()
 {
     if (!m_media_manager) return EINVAL;
     m_media_manager->switch_camera();
-    post_task([this]() {
-        std::lock_guard<std::mutex> lock(m_calls_mutex);
-        for (auto *c : m_all_calls) {
-            if (c && c->raw_call()) {
-                struct video *vid = call_video(c->raw_call());
-                if (vid != nullptr) {
-                    video_vidsrc_set_device(vid, nullptr);
-                }
-            }
-        }
-    });
     return 0;
 }
 
@@ -1338,15 +1349,6 @@ int Engine::set_camera(int position)
     post_task([this, dev]() {
         if (conf_config() != nullptr) {
             snprintf(conf_config()->video.src_dev, sizeof(conf_config()->video.src_dev), "%s", dev);
-        }
-        std::lock_guard<std::mutex> lock(m_calls_mutex);
-        for (auto *c : m_all_calls) {
-            if (c && c->raw_call()) {
-                struct video *vid = call_video(c->raw_call());
-                if (vid != nullptr) {
-                    video_vidsrc_set_device(vid, dev);
-                }
-            }
         }
     });
     return 0;

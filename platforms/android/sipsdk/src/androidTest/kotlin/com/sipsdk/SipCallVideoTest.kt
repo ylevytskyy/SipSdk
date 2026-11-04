@@ -19,7 +19,7 @@ class SipCallVideoTest {
 
     @Test
     fun testTwoWayVideoCallWithAsteriskEchoAndSurfaceView() {
-        val client = SipClient("1001", "10.0.2.2", context).apply {
+        val client = SipClient("1001", TestConfig.host, context).apply {
             password = "test1001"
             port = 5060
             transport = "udp"
@@ -84,11 +84,11 @@ class SipCallVideoTest {
         assertTrue("Timeout waiting for registration", regLatch.await(10, TimeUnit.SECONDS))
 
         // Initiate video call to Asterisk video echo service extension 9001
-        val call = client.makeCall("sip:9001@10.0.2.2:5060", withVideo = true)
+        val call = client.makeCall("sip:9001@${TestConfig.host}:5060", withVideo = true)
         assertNotNull("Expected non-null SipCall instance", call)
         call!!
 
-        assertEquals("sip:9001@10.0.2.2:5060", call.remoteUri)
+        assertEquals("sip:9001@${TestConfig.host}:5060", call.remoteUri)
         assertTrue("Outgoing flag must be true", call.isOutgoing)
         assertTrue("hasVideo flag must be true", call.hasVideo)
         assertFalse("Call must not be closed yet", call.isClosed)

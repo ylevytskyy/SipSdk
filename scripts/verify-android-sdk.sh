@@ -46,17 +46,35 @@ ensure_pbx_running() {
 
 ensure_android_device_ready() {
   echo "==> Checking for connected Android device or emulator..."
-  local device
-  device="$(adb devices | grep -E '\b(device)\b' | head -n 1 | cut -f1 || true)"
-  if [[ -z "$device" ]]; then
-    echo "==> No running device found. Starting Android emulator (Android_16_36.1)..."
-    "$ANDROID_HOME/emulator/emulator" -avd Android_16_36.1 -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect >/dev/null 2>&1 &
-    echo "==> Waiting for emulator boot completion..."
-    adb wait-for-device shell 'while [[ "$(getprop sys.boot_completed)" != "1" ]]; do sleep 1; done'
-    echo "PASS: Android emulator booted and ready"
+  local emu
+  emu="$(adb devices | grep -E 'emulator-[0-9]+\s+device' | head -n 1 | awk '{print $1}' || true)"
+  if [[ -n "$emu" ]]; then
+    export ANDROID_SERIAL="$emu"
+    echo "PASS: Using running Android emulator: $ANDROID_SERIAL"
   else
-    echo "PASS: Using running Android device/emulator: $device"
+    local device
+    device="$(adb devices | grep -E '\b(device)\b' | head -n 1 | awk '{print $1}' || true)"
+    if [[ -z "$device" ]]; then
+      echo "==> No running device found. Starting Android emulator (Android_16_36.1)..."
+      "$ANDROID_HOME/emulator/emulator" -avd Android_16_36.1 -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect >/dev/null 2>&1 &
+      echo "==> Waiting for emulator boot completion..."
+      adb wait-for-device shell 'while [[ "$(getprop sys.boot_completed)" != "1" ]]; do sleep 1; done'
+      echo "PASS: Android emulator booted and ready"
+      export ANDROID_SERIAL="$(adb devices | grep -E 'emulator-[0-9]+\s+device' | head -n 1 | awk '{print $1}' || true)"
+    else
+      export ANDROID_SERIAL="$device"
+      echo "PASS: Using running Android device/emulator: $ANDROID_SERIAL"
+    fi
   fi
+
+  local host_ip
+  if [[ "$ANDROID_SERIAL" =~ emulator- ]]; then
+    host_ip="10.0.2.2"
+  else
+    host_ip="$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || echo "10.0.2.2")"
+  fi
+  export SIP_HOST="$host_ip"
+  echo "PASS: Target SIP PBX host configured as: $SIP_HOST"
 }
 
 # Step 1: Ensure Baresip prebuilts exist
@@ -123,7 +141,7 @@ if [[ "$TARGET_SLICE" == "all" || "$TARGET_SLICE" == "--slice" && "${2:-}" == "2
 
   cd "$ANDROID_DIR"
   ./gradlew :sipsdk:testReleaseUnitTest
-  ./gradlew :sipsdk:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.sipsdk.SipClientRegistrationTest
+  ./gradlew :sipsdk:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.sipsdk.SipClientRegistrationTest -Pandroid.testInstrumentationRunnerArguments.sip_host="$SIP_HOST"
   echo "==> [Slice 2] ALL CHECKS PASSED!"
 fi
 
@@ -134,7 +152,7 @@ if [[ "$TARGET_SLICE" == "all" || "$TARGET_SLICE" == "--slice" && "${2:-}" == "3
   ensure_android_device_ready
 
   cd "$ANDROID_DIR"
-  ./gradlew :sipsdk:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.sipsdk.SipCallAudioTest
+  ./gradlew :sipsdk:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.sipsdk.SipCallAudioTest -Pandroid.testInstrumentationRunnerArguments.sip_host="$SIP_HOST"
   ./gradlew :sample:assembleDebug
   echo "==> [Slice 3] ALL CHECKS PASSED!"
 fi
@@ -146,7 +164,7 @@ if [[ "$TARGET_SLICE" == "all" || "$TARGET_SLICE" == "--slice" && "${2:-}" == "4
   ensure_android_device_ready
 
   cd "$ANDROID_DIR"
-  ./gradlew :sipsdk:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.sipsdk.SipMediaCodecTest
+  ./gradlew :sipsdk:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.sipsdk.SipMediaCodecTest -Pandroid.testInstrumentationRunnerArguments.sip_host="$SIP_HOST"
   echo "==> [Slice 4] ALL CHECKS PASSED!"
 fi
 
@@ -156,7 +174,7 @@ if [[ "$TARGET_SLICE" == "all" || "$TARGET_SLICE" == "--slice" && "${2:-}" == "5
   ensure_android_device_ready
 
   cd "$ANDROID_DIR"
-  ./gradlew :sipsdk:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.sipsdk.SipCameraCaptureTest
+  ./gradlew :sipsdk:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.sipsdk.SipCameraCaptureTest -Pandroid.testInstrumentationRunnerArguments.sip_host="$SIP_HOST"
   echo "==> [Slice 5] ALL CHECKS PASSED!"
 fi
 
@@ -167,7 +185,7 @@ if [[ "$TARGET_SLICE" == "all" || "$TARGET_SLICE" == "--slice" && "${2:-}" == "6
   ensure_android_device_ready
 
   cd "$ANDROID_DIR"
-  ./gradlew :sipsdk:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.sipsdk.SipCallVideoTest
+  ./gradlew :sipsdk:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.sipsdk.SipCallVideoTest -Pandroid.testInstrumentationRunnerArguments.sip_host="$SIP_HOST"
   ./gradlew :sample:assembleDebug
   echo "==> [Slice 6] ALL CHECKS PASSED!"
 fi

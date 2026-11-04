@@ -321,6 +321,9 @@ Java_com_sipsdk_SipClient_nativeCreate(JNIEnv *env, jobject thiz) {
         capDriver.set_enabled = android_capture_set_enabled;
         capDriver.is_enabled = android_capture_is_enabled;
         sip_client_set_video_capture_driver(ctx->coreClient, &capDriver);
+
+        // OpenSL ES audio driver
+        sip_client_set_audio_driver(ctx->coreClient, "opensles", "", "opensles", "");
     }
     return reinterpret_cast<jlong>(ctx);
 }
@@ -375,6 +378,15 @@ Java_com_sipsdk_SipClient_nativeIsRegistered(JNIEnv *env, jobject thiz, jlong ha
     auto *ctx = reinterpret_cast<ClientJniContext *>(handle);
     if (!ctx || !ctx->coreClient) return JNI_FALSE;
     return sip_client_is_registered(ctx->coreClient) ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jint JNICALL
+Java_com_sipsdk_SipClient_nativeResetTransports(JNIEnv *env, jobject thiz, jlong handle, jboolean reRegister) {
+    (void)env;
+    (void)thiz;
+    auto *ctx = reinterpret_cast<ClientJniContext *>(handle);
+    if (!ctx || !ctx->coreClient) return -1;
+    return sip_client_reset_transports(ctx->coreClient, reRegister ? true : false);
 }
 
 JNIEXPORT void JNICALL
@@ -462,6 +474,22 @@ Java_com_sipsdk_SipClient_nativeCallIsOutgoing(JNIEnv *env, jobject thiz, jlong 
     return (call && sip_call_is_outgoing(call)) ? JNI_TRUE : JNI_FALSE;
 }
 
+JNIEXPORT jboolean JNICALL
+Java_com_sipsdk_SipClient_nativeCallHasVideo(JNIEnv *env, jobject thiz, jlong callHandle) {
+    (void)env;
+    (void)thiz;
+    auto *call = reinterpret_cast<sip_call_t *>(callHandle);
+    return (call && sip_call_has_video(call)) ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_sipsdk_SipCall_nativeHasVideo(JNIEnv *env, jobject thiz, jlong callHandle) {
+    (void)env;
+    (void)thiz;
+    auto *call = reinterpret_cast<sip_call_t *>(callHandle);
+    return (call && sip_call_has_video(call)) ? JNI_TRUE : JNI_FALSE;
+}
+
 JNIEXPORT jint JNICALL
 Java_com_sipsdk_SipCall_nativeAnswer(JNIEnv *env, jobject thiz, jlong callHandle, jboolean withVideo) {
     (void)env;
@@ -534,6 +562,9 @@ Java_com_sipsdk_SipClient_nativeSetRemoteSurface(JNIEnv *env, jobject thiz, jlon
 
     ANativeWindow *window = surface ? ANativeWindow_fromSurface(env, surface) : nullptr;
     sipsdk::AndroidMediaCodecDriver::set_remote_window(window);
+    if (window) {
+        ANativeWindow_release(window);
+    }
     return 0;
 }
 
@@ -607,6 +638,47 @@ Java_com_sipsdk_SipClient_nativeIsLocalPreviewActive(JNIEnv *env, jobject thiz, 
     auto *ctx = reinterpret_cast<ClientJniContext *>(handle);
     if (!ctx || !ctx->coreClient) return JNI_FALSE;
     return sip_client_is_local_preview_active(ctx->coreClient) ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jint JNICALL
+Java_com_sipsdk_SipClient_nativeSetAudioDriver(JNIEnv *env, jobject thiz, jlong handle,
+                                              jstring jSrcMod, jstring jSrcDev,
+                                              jstring jPlayMod, jstring jPlayDev) {
+    (void)thiz;
+    auto *ctx = reinterpret_cast<ClientJniContext *>(handle);
+    if (!ctx || !ctx->coreClient) return -1;
+
+    const char *srcMod = jSrcMod ? env->GetStringUTFChars(jSrcMod, nullptr) : nullptr;
+    const char *srcDev = jSrcDev ? env->GetStringUTFChars(jSrcDev, nullptr) : nullptr;
+    const char *playMod = jPlayMod ? env->GetStringUTFChars(jPlayMod, nullptr) : nullptr;
+    const char *playDev = jPlayDev ? env->GetStringUTFChars(jPlayDev, nullptr) : nullptr;
+
+    int res = sip_client_set_audio_driver(ctx->coreClient, srcMod, srcDev, playMod, playDev);
+
+    if (jSrcMod && srcMod) env->ReleaseStringUTFChars(jSrcMod, srcMod);
+    if (jSrcDev && srcDev) env->ReleaseStringUTFChars(jSrcDev, srcDev);
+    if (jPlayMod && playMod) env->ReleaseStringUTFChars(jPlayMod, playMod);
+    if (jPlayDev && playDev) env->ReleaseStringUTFChars(jPlayDev, playDev);
+    return res;
+}
+
+JNIEXPORT jobjectArray JNICALL
+Java_com_sipsdk_SipClient_nativeGetAudioDriver(JNIEnv *env, jobject thiz, jlong handle) {
+    (void)thiz;
+    auto *ctx = reinterpret_cast<ClientJniContext *>(handle);
+    if (!ctx || !ctx->coreClient) return nullptr;
+
+    char srcMod[64] = {0};
+    char playMod[64] = {0};
+    int res = sip_client_get_audio_driver(ctx->coreClient, srcMod, sizeof(srcMod), playMod, sizeof(playMod));
+    if (res != 0) return nullptr;
+
+    jclass stringClass = env->FindClass("java/lang/String");
+    jobjectArray arr = env->NewObjectArray(2, stringClass, nullptr);
+    env->SetObjectArrayElement(arr, 0, env->NewStringUTF(srcMod));
+    env->SetObjectArrayElement(arr, 1, env->NewStringUTF(playMod));
+    env->DeleteLocalRef(stringClass);
+    return arr;
 }
 
 JNIEXPORT void JNICALL

@@ -18,7 +18,7 @@ class SipMediaCodecTest {
 
     @Test
     fun testMediaCodecDriverRegistrationAndKeyframeRequest() {
-        val client = SipClient("1001", "10.0.2.2", context).apply {
+        val client = SipClient("1001", TestConfig.host, context).apply {
             password = "test1001"
             port = 5060
             transport = "udp"
@@ -49,7 +49,7 @@ class SipMediaCodecTest {
         assertTrue("Timeout waiting for SIP registration", regLatch.await(10, TimeUnit.SECONDS))
 
         // Initiate video call to Asterisk PBX video echo (extension 9001)
-        val call = client.makeCall("sip:9001@10.0.2.2:5060", withVideo = true)
+        val call = client.makeCall("sip:9001@${TestConfig.host}:5060", withVideo = true)
         assertNotNull("Expected non-null SipCall", call)
         call!!
         assertTrue("Expected hasVideo == true", call.hasVideo)

@@ -19,7 +19,7 @@ class SipCallAudioTest {
 
     @Test
     fun testAudioCallEchoSessionLifecycle() {
-        val client = SipClient("1001", "10.0.2.2", context).apply {
+        val client = SipClient("1001", TestConfig.host, context).apply {
             password = "test1001"
             port = 5060
             transport = "udp"
@@ -68,15 +68,21 @@ class SipCallAudioTest {
         }
 
         assertEquals(0, client.start())
+
+        // Verify audio driver is initialized to OpenSL ES
+        val audioDrivers = client.getAudioDriver()
+        assertEquals("opensles", audioDrivers.first)
+        assertEquals("opensles", audioDrivers.second)
+
         assertEquals(0, client.register())
         assertTrue("Timeout waiting for registration", regLatch.await(10, TimeUnit.SECONDS))
 
         // Initiate call to Asterisk audio echo service extension 9001
-        val call = client.makeCall("sip:9001@10.0.2.2:5060")
+        val call = client.makeCall("sip:9001@${TestConfig.host}:5060")
         assertNotNull("Expected non-null SipCall instance", call)
         call!!
 
-        assertEquals("sip:9001@10.0.2.2:5060", call.remoteUri)
+        assertEquals("sip:9001@${TestConfig.host}:5060", call.remoteUri)
         assertTrue("Outgoing flag must be true", call.isOutgoing)
         assertFalse("Call must not be closed yet", call.isClosed)
 
@@ -87,8 +93,12 @@ class SipCallAudioTest {
         assertTrue("Audio session must be active", client.audioManager?.isAudioSessionActive == true)
 
         // Allow audio to stream and duration counter to tick
-        Thread.sleep(1500)
-        val duration = call.durationSeconds
+        var duration = 0L
+        for (i in 0..40) {
+            Thread.sleep(100)
+            duration = call.durationSeconds
+            if (duration >= 1L) break
+        }
         assertTrue("Call duration must be >= 1 second, got $duration", duration >= 1L)
 
         // Telephony controls: microphone mute and speakerphone

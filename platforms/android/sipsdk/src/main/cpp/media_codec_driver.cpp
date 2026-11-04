@@ -68,6 +68,8 @@ struct viddec_state {
     bool need_idr{true};
     uint64_t last_picup_ms{0};
     bool initial_format_notified{false};
+    std::vector<uint8_t> sps;
+    std::vector<uint8_t> pps;
 };
 
 static void sendRfc6184Nal(struct videnc_state *ves,
@@ -156,8 +158,17 @@ static void parseAnnexBAndSend(struct videnc_state *ves, const uint8_t *data, si
         i = nextStart;
     }
 
+    int lastVclIndex = -1;
+    for (int k = (int)nals.size() - 1; k >= 0; --k) {
+        uint8_t type = nals[k].first[0] & 0x1F;
+        if (type >= 1 && type <= 5) {
+            lastVclIndex = k;
+            break;
+        }
+    }
+
     for (size_t k = 0; k < nals.size(); ++k) {
-        bool isLast = (k == nals.size() - 1);
+        bool isLast = (lastVclIndex >= 0 && (int)k == lastVclIndex);
         sendRfc6184Nal(ves, nals[k].first, nals[k].second, isLast);
     }
 }
@@ -226,6 +237,7 @@ static int ensureEncoderSession(struct videnc_state *ves, unsigned width, unsign
     int fps = ves->prm.fps > 0 ? (int32_t)ves->prm.fps : 30;
     AMediaFormat_setInt32(fmt, AMEDIAFORMAT_KEY_FRAME_RATE, fps);
     AMediaFormat_setInt32(fmt, AMEDIAFORMAT_KEY_I_FRAME_INTERVAL, 1);
+    AMediaFormat_setInt32(fmt, "prepend-sps-pps-to-idr-frames", 1);
     ves->color_format = 21; // COLOR_FormatYUV420SemiPlanar (NV12)
     AMediaFormat_setInt32(fmt, AMEDIAFORMAT_KEY_COLOR_FORMAT, ves->color_format);
 
@@ -266,9 +278,10 @@ static int android_h264_enc_encode(struct videnc_state *ves,
         return EIO;
     }
 
-    ves->current_rtp_ts = timestamp;
+    ves->current_rtp_ts = (timestamp * 90000ULL) / VIDEO_TIMEBASE;
 
-    if (update && ves->encoder) {
+    bool forceSync = (ves->frame_index == 0) || (ves->frame_index % 60 == 0) || update;
+    if (forceSync && ves->encoder) {
         typedef media_status_t (*PFN_AMediaCodec_setParameters)(AMediaCodec *, const AMediaFormat *);
         static auto pfn_setParams = reinterpret_cast<PFN_AMediaCodec_setParameters>(
             dlsym(RTLD_DEFAULT, "AMediaCodec_setParameters"));
@@ -303,7 +316,7 @@ static int android_h264_enc_encode(struct videnc_state *ves,
                     dstLine[x * 2 + 1] = vLine[x];
                 }
             }
-            uint64_t ptsUs = timestamp * 1000 / 90;
+            uint64_t ptsUs = timestamp;
             AMediaCodec_queueInputBuffer(ves->encoder, (size_t)inputIndex, 0, requiredSize, (int64_t)ptsUs, 0);
         } else {
             AMediaCodec_queueInputBuffer(ves->encoder, (size_t)inputIndex, 0, 0, 0, 0);
@@ -384,6 +397,7 @@ static int ensureDecoderSession(struct viddec_state *vds)
     }
 
     if (vds->decoder) {
+        LOGI("Recreating AMediaCodec decoder: old window=%p, new window=%p", vds->current_window, win);
         AMediaCodec_stop(vds->decoder);
         AMediaCodec_delete(vds->decoder);
         vds->decoder = nullptr;
@@ -399,6 +413,17 @@ static int ensureDecoderSession(struct viddec_state *vds)
     AMediaFormat_setString(fmt, AMEDIAFORMAT_KEY_MIME, "video/avc");
     AMediaFormat_setInt32(fmt, AMEDIAFORMAT_KEY_WIDTH, vds->width > 0 ? (int32_t)vds->width : 640);
     AMediaFormat_setInt32(fmt, AMEDIAFORMAT_KEY_HEIGHT, vds->height > 0 ? (int32_t)vds->height : 480);
+
+    if (!vds->sps.empty()) {
+        std::vector<uint8_t> csd0 = {0, 0, 0, 1};
+        csd0.insert(csd0.end(), vds->sps.begin(), vds->sps.end());
+        AMediaFormat_setBuffer(fmt, "csd-0", csd0.data(), csd0.size());
+    }
+    if (!vds->pps.empty()) {
+        std::vector<uint8_t> csd1 = {0, 0, 0, 1};
+        csd1.insert(csd1.end(), vds->pps.begin(), vds->pps.end());
+        AMediaFormat_setBuffer(fmt, "csd-1", csd1.data(), csd1.size());
+    }
 
     media_status_t status = AMediaCodec_configure(vds->decoder, fmt, win, nullptr, 0);
     AMediaFormat_delete(fmt);
@@ -426,14 +451,18 @@ static int ensureDecoderSession(struct viddec_state *vds)
 static void appendNalToAccessUnit(struct viddec_state *vds, const uint8_t *buf, size_t len)
 {
     if (!vds || !buf || len == 0) return;
+    uint8_t nalType = buf[0] & 0x1F;
+    if (nalType == H264_NALU_SPS) {
+        vds->sps.assign(buf, buf + len);
+    } else if (nalType == H264_NALU_PPS) {
+        vds->pps.assign(buf, buf + len);
+    } else if (nalType == H264_NALU_IDR_SLICE) {
+        vds->au_is_idr = true;
+    }
+
     const uint8_t startCode[4] = {0, 0, 0, 1};
     vds->au_buffer.insert(vds->au_buffer.end(), startCode, startCode + 4);
     vds->au_buffer.insert(vds->au_buffer.end(), buf, buf + len);
-
-    uint8_t nalType = buf[0] & 0x1F;
-    if (nalType == H264_NALU_IDR_SLICE || nalType == H264_NALU_SPS || nalType == H264_NALU_PPS) {
-        vds->au_is_idr = true;
-    }
 }
 
 static int android_h264_dec_decode(struct viddec_state *vds,
@@ -530,6 +559,29 @@ static int android_h264_dec_decode(struct viddec_state *vds,
         return 0;
     }
 
+    if (vds->au_is_idr && !vds->sps.empty() && !vds->pps.empty()) {
+        bool hasSps = false;
+        for (size_t k = 0; k + 4 < vds->au_buffer.size(); ++k) {
+            if (vds->au_buffer[k] == 0 && vds->au_buffer[k+1] == 0 &&
+                vds->au_buffer[k+2] == 0 && vds->au_buffer[k+3] == 1) {
+                if ((vds->au_buffer[k+4] & 0x1F) == H264_NALU_SPS) {
+                    hasSps = true;
+                    break;
+                }
+            }
+        }
+        if (!hasSps) {
+            std::vector<uint8_t> newBuf;
+            const uint8_t sc[4] = {0, 0, 0, 1};
+            newBuf.insert(newBuf.end(), sc, sc + 4);
+            newBuf.insert(newBuf.end(), vds->sps.begin(), vds->sps.end());
+            newBuf.insert(newBuf.end(), sc, sc + 4);
+            newBuf.insert(newBuf.end(), vds->pps.begin(), vds->pps.end());
+            newBuf.insert(newBuf.end(), vds->au_buffer.begin(), vds->au_buffer.end());
+            vds->au_buffer.swap(newBuf);
+        }
+    }
+
     if (ensureDecoderSession(vds) == 0 && vds->decoder) {
         ssize_t inIdx = AMediaCodec_dequeueInputBuffer(vds->decoder, 2000);
         if (inIdx >= 0) {
@@ -537,7 +589,7 @@ static int android_h264_dec_decode(struct viddec_state *vds,
             uint8_t *inBuf = AMediaCodec_getInputBuffer(vds->decoder, (size_t)inIdx, &inBufSize);
             if (inBuf && inBufSize >= vds->au_buffer.size()) {
                 memcpy(inBuf, vds->au_buffer.data(), vds->au_buffer.size());
-                int64_t ptsUs = pkt->hdr ? (int64_t)(pkt->hdr->ts * 1000 / 90) : 0;
+                int64_t ptsUs = pkt->hdr ? (int64_t)((uint64_t)pkt->hdr->ts * 1000000ULL / 90000ULL) : 0;
                 AMediaCodec_queueInputBuffer(vds->decoder, (size_t)inIdx, 0, vds->au_buffer.size(), ptsUs, 0);
             } else {
                 AMediaCodec_queueInputBuffer(vds->decoder, (size_t)inIdx, 0, 0, 0, 0);

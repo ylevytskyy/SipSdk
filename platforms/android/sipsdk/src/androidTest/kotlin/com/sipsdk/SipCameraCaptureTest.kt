@@ -16,7 +16,7 @@ class SipCameraCaptureTest {
 
     @Test
     fun testCameraCaptureAndControlsLifecycle() {
-        val client = SipClient("1001", "10.0.2.2", context).apply {
+        val client = SipClient("1001", TestConfig.host, context).apply {
             password = "test1001"
             port = 5060
             transport = "udp"

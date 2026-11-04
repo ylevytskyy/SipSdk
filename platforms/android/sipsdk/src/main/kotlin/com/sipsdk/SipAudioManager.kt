@@ -2,6 +2,7 @@ package com.sipsdk
 
 import android.content.Context
 import android.media.AudioAttributes
+import android.media.AudioDeviceInfo
 import android.media.AudioFocusRequest
 import android.media.AudioManager
 import android.os.Build
@@ -52,6 +53,9 @@ class SipAudioManager(private val context: Context?) {
     fun releaseAudioSession() {
         if (audioManager == null || !isSessionActive) return
 
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            audioManager.clearCommunicationDevice()
+        }
         @Suppress("DEPRECATION")
         audioManager.isSpeakerphoneOn = previousSpeakerState
         audioManager.mode = previousAudioMode
@@ -68,6 +72,18 @@ class SipAudioManager(private val context: Context?) {
     }
 
     fun setSpeakerphone(enabled: Boolean) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            if (enabled) {
+                val speakerDevice = audioManager?.availableCommunicationDevices?.firstOrNull {
+                    it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER
+                }
+                if (speakerDevice != null) {
+                    audioManager?.setCommunicationDevice(speakerDevice)
+                }
+            } else {
+                audioManager?.clearCommunicationDevice()
+            }
+        }
         @Suppress("DEPRECATION")
         audioManager?.isSpeakerphoneOn = enabled
     }
