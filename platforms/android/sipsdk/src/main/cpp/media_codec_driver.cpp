@@ -454,6 +454,21 @@ static void appendNalToAccessUnit(struct viddec_state *vds, const uint8_t *buf, 
     uint8_t nalType = buf[0] & 0x1F;
     if (nalType == H264_NALU_SPS) {
         vds->sps.assign(buf, buf + len);
+        struct h264_sps sps_obj;
+        if (h264_sps_decode(&sps_obj, buf, len) == 0) {
+            unsigned spsW = 0, spsH = 0;
+            h264_sps_resolution(&sps_obj, &spsW, &spsH);
+            if (spsW > 0 && spsH > 0 && (vds->width != spsW || vds->height != spsH)) {
+                vds->width = spsW;
+                vds->height = spsH;
+                vds->initial_format_notified = true;
+                LOGI("Decoded SPS resolution: %ux%u", spsW, spsH);
+                auto *mgr = sip_core::MediaDriverManager::active_manager();
+                if (mgr) {
+                    mgr->handle_stream_resized(static_cast<int>(spsW), static_cast<int>(spsH));
+                }
+            }
+        }
     } else if (nalType == H264_NALU_PPS) {
         vds->pps.assign(buf, buf + len);
     } else if (nalType == H264_NALU_IDR_SLICE) {
@@ -602,13 +617,11 @@ static int android_h264_dec_decode(struct viddec_state *vds,
             if (outIdx >= 0) {
                 bool doRender = (vds->current_window != nullptr);
                 AMediaCodec_releaseOutputBuffer(vds->decoder, (size_t)outIdx, doRender);
-                if (!vds->initial_format_notified) {
+                if (!vds->initial_format_notified && vds->width > 0 && vds->height > 0) {
                     vds->initial_format_notified = true;
-                    int notifyW = vds->width > 0 ? static_cast<int>(vds->width) : 640;
-                    int notifyH = vds->height > 0 ? static_cast<int>(vds->height) : 480;
                     auto *mgr = sip_core::MediaDriverManager::active_manager();
                     if (mgr) {
-                        mgr->handle_stream_resized(notifyW, notifyH);
+                        mgr->handle_stream_resized(static_cast<int>(vds->width), static_cast<int>(vds->height));
                     }
                 }
             } else if (outIdx == AMEDIACODEC_INFO_OUTPUT_FORMAT_CHANGED) {

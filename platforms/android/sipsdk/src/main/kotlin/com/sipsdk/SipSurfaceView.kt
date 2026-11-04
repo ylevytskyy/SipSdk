@@ -27,6 +27,9 @@ class SipSurfaceView @JvmOverloads constructor(
     var currentSurface: Surface? = null
         private set
 
+    var isMirrored: Boolean = false
+    var rotationDegrees: Int = 0
+
     interface SurfaceListener {
         fun onSurfaceAvailable(surface: Surface)
         fun onSurfaceDestroyed()

@@ -78,9 +78,40 @@ class SipCameraCaptureTest {
             yBuffer = yBuf,
             uBuffer = uBuf,
             vBuffer = vBuf,
-            yStride = width,
-            uStride = width / 2,
-            vStride = width / 2,
+            yRowStride = width,
+            uRowStride = width / 2,
+            vRowStride = width / 2,
+            yPixelStride = 1,
+            uPixelStride = 1,
+            vPixelStride = 1,
+            rotationDegrees = 0,
+            mirror = false,
+            timestampNs = System.nanoTime()
+        )
+
+        // Test with semi-planar NV12/NV21 pixel strides and 270 degree rotation
+        val uvInterleaved = ByteBuffer.allocateDirect((width / 2) * (height / 2) * 2)
+        for (i in 0 until (width / 2) * (height / 2)) {
+            uvInterleaved.put(100.toByte()) // U
+            uvInterleaved.put(200.toByte()) // V
+        }
+        uvInterleaved.flip()
+
+        SipCameraCapture.nativeDeliverFrame(
+            clientHandle = 0L,
+            width = width,
+            height = height,
+            yBuffer = yBuf,
+            uBuffer = uvInterleaved,
+            vBuffer = uvInterleaved,
+            yRowStride = width,
+            uRowStride = width,
+            vRowStride = width,
+            yPixelStride = 1,
+            uPixelStride = 2,
+            vPixelStride = 2,
+            rotationDegrees = 270,
+            mirror = true,
             timestampNs = System.nanoTime()
         )
 

@@ -46,6 +46,9 @@ struct AndroidCaptureState {
     std::atomic<bool> enabled{true};
     std::atomic<int> camera_position{0};
     std::mutex mutex;
+    std::vector<uint8_t> yPlane;
+    std::vector<uint8_t> uPlane;
+    std::vector<uint8_t> vPlane;
 };
 
 static int android_capture_start(void *user_data, int width, int height, int fps) {
@@ -681,12 +684,108 @@ Java_com_sipsdk_SipClient_nativeGetAudioDriver(JNIEnv *env, jobject thiz, jlong 
     return arr;
 }
 
+static void processAndRotateYuvFrame(
+    const uint8_t *srcY, const uint8_t *srcU, const uint8_t *srcV,
+    int inW, int inH,
+    int yRowStride, int uRowStride, int vRowStride,
+    int yPixelStride, int uPixelStride, int vPixelStride,
+    int rotationDegrees, bool mirror,
+    uint8_t *dstY, uint8_t *dstU, uint8_t *dstV,
+    int &outW, int &outH)
+{
+    int rot = (rotationDegrees % 360 + 360) % 360;
+    if (rot == 90 || rot == 270) {
+        outW = inH;
+        outH = inW;
+    } else {
+        outW = inW;
+        outH = inH;
+    }
+
+    int inChromaW = inW / 2;
+    int inChromaH = inH / 2;
+    int outChromaW = outW / 2;
+    int outChromaH = outH / 2;
+
+    // Fast path: upright, no mirroring, standard contiguous planar I420
+    if (rot == 0 && !mirror &&
+        yPixelStride == 1 && uPixelStride == 1 && vPixelStride == 1 &&
+        yRowStride == inW && uRowStride == inChromaW && vRowStride == inChromaW) {
+        memcpy(dstY, srcY, static_cast<size_t>(inW * inH));
+        memcpy(dstU, srcU, static_cast<size_t>(inChromaW * inChromaH));
+        memcpy(dstV, srcV, static_cast<size_t>(inChromaW * inChromaH));
+        return;
+    }
+
+    // Process Y Plane
+    for (int y = 0; y < outH; ++y) {
+        uint8_t *dstRow = dstY + y * outW;
+        for (int x = 0; x < outW; ++x) {
+            int mx = mirror ? (outW - 1 - x) : x;
+            int sx = 0, sy = 0;
+            switch (rot) {
+                case 90:
+                    sx = y;
+                    sy = (inH - 1) - mx;
+                    break;
+                case 180:
+                    sx = (inW - 1) - mx;
+                    sy = (inH - 1) - y;
+                    break;
+                case 270:
+                    sx = (inW - 1) - y;
+                    sy = mx;
+                    break;
+                case 0:
+                default:
+                    sx = mx;
+                    sy = y;
+                    break;
+            }
+            dstRow[x] = srcY[sy * yRowStride + sx * yPixelStride];
+        }
+    }
+
+    // Process U and V Planes with proper pixelStride de-interleaving
+    for (int cy = 0; cy < outChromaH; ++cy) {
+        uint8_t *dstURow = dstU + cy * outChromaW;
+        uint8_t *dstVRow = dstV + cy * outChromaW;
+        for (int cx = 0; cx < outChromaW; ++cx) {
+            int mcx = mirror ? (outChromaW - 1 - cx) : cx;
+            int scx = 0, scy = 0;
+            switch (rot) {
+                case 90:
+                    scx = cy;
+                    scy = (inChromaH - 1) - mcx;
+                    break;
+                case 180:
+                    scx = (inChromaW - 1) - mcx;
+                    scy = (inChromaH - 1) - cy;
+                    break;
+                case 270:
+                    scx = (inChromaW - 1) - cy;
+                    scy = mcx;
+                    break;
+                case 0:
+                default:
+                    scx = mcx;
+                    scy = cy;
+                    break;
+            }
+            dstURow[cx] = srcU[scy * uRowStride + scx * uPixelStride];
+            dstVRow[cx] = srcV[scy * vRowStride + scx * vPixelStride];
+        }
+    }
+}
+
 JNIEXPORT void JNICALL
 Java_com_sipsdk_SipCameraCapture_nativeDeliverFrame(
     JNIEnv *env, jclass clazz, jlong clientHandle,
     jint width, jint height,
     jobject yBuffer, jobject uBuffer, jobject vBuffer,
-    jint yStride, jint uStride, jint vStride,
+    jint yRowStride, jint uRowStride, jint vRowStride,
+    jint yPixelStride, jint uPixelStride, jint vPixelStride,
+    jint rotationDegrees, jboolean mirror,
     jlong timestampNs)
 {
     (void)clazz;
@@ -698,21 +797,49 @@ Java_com_sipsdk_SipCameraCapture_nativeDeliverFrame(
     const uint8_t *vPtr = static_cast<const uint8_t *>(env->GetDirectBufferAddress(vBuffer));
     if (!yPtr || !uPtr || !vPtr) return;
 
+    std::lock_guard<std::mutex> lock(ctx->captureState.mutex);
+    if (!ctx->captureState.frame_handler) return;
+
+    int outW = width;
+    int outH = height;
+    int rot = (rotationDegrees % 360 + 360) % 360;
+    if (rot == 90 || rot == 270) {
+        outW = height;
+        outH = width;
+    }
+
+    size_t ySize = static_cast<size_t>(outW * outH);
+    size_t uvSize = static_cast<size_t>((outW / 2) * (outH / 2));
+    if (ctx->captureState.yPlane.size() != ySize) {
+        ctx->captureState.yPlane.resize(ySize);
+        ctx->captureState.uPlane.resize(uvSize);
+        ctx->captureState.vPlane.resize(uvSize);
+    }
+
+    processAndRotateYuvFrame(
+        yPtr, uPtr, vPtr,
+        width, height,
+        yRowStride, uRowStride, vRowStride,
+        yPixelStride, uPixelStride, vPixelStride,
+        rotationDegrees, mirror,
+        ctx->captureState.yPlane.data(),
+        ctx->captureState.uPlane.data(),
+        ctx->captureState.vPlane.data(),
+        outW, outH
+    );
+
     sip_video_frame_t vf{};
-    vf.width = width;
-    vf.height = height;
-    vf.y = yPtr;
-    vf.u = uPtr;
-    vf.v = vPtr;
-    vf.y_stride = yStride;
-    vf.u_stride = uStride;
-    vf.v_stride = vStride;
+    vf.width = outW;
+    vf.height = outH;
+    vf.y = ctx->captureState.yPlane.data();
+    vf.u = ctx->captureState.uPlane.data();
+    vf.v = ctx->captureState.vPlane.data();
+    vf.y_stride = outW;
+    vf.u_stride = outW / 2;
+    vf.v_stride = outW / 2;
     vf.timestamp_ns = timestampNs > 0 ? static_cast<uint64_t>(timestampNs) : 0;
 
-    std::lock_guard<std::mutex> lock(ctx->captureState.mutex);
-    if (ctx->captureState.frame_handler) {
-        ctx->captureState.frame_handler(&vf, ctx->captureState.frame_arg);
-    }
+    ctx->captureState.frame_handler(&vf, ctx->captureState.frame_arg);
 }
 
 } // extern "C"

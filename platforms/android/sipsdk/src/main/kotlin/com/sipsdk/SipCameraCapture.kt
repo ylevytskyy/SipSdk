@@ -31,12 +31,20 @@ class SipCameraCapture(
             yBuffer: ByteBuffer,
             uBuffer: ByteBuffer,
             vBuffer: ByteBuffer,
-            yStride: Int,
-            uStride: Int,
-            vStride: Int,
+            yRowStride: Int,
+            uRowStride: Int,
+            vRowStride: Int,
+            yPixelStride: Int,
+            uPixelStride: Int,
+            vPixelStride: Int,
+            rotationDegrees: Int,
+            mirror: Boolean,
             timestampNs: Long
         )
     }
+
+    var previewRotationDegrees: Int = 0
+        private set
 
     private var backgroundThread: HandlerThread? = null
     private var backgroundHandler: Handler? = null
@@ -157,6 +165,29 @@ class SipCameraCapture(
             return
         }
 
+        val chars = cameraManager.getCameraCharacteristics(selectedCameraId)
+        val sensorOrientation = chars.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
+        val facing = chars.get(CameraCharacteristics.LENS_FACING)
+        val isFront = (facing == CameraCharacteristics.LENS_FACING_FRONT)
+
+        val displayManager = context?.getSystemService(Context.DISPLAY_SERVICE) as? android.hardware.display.DisplayManager
+        val defaultDisplay = displayManager?.getDisplay(android.view.Display.DEFAULT_DISPLAY)
+        val displayRotation = defaultDisplay?.rotation ?: android.view.Surface.ROTATION_0
+
+        val displayDegrees = when (displayRotation) {
+            android.view.Surface.ROTATION_0 -> 0
+            android.view.Surface.ROTATION_90 -> 90
+            android.view.Surface.ROTATION_180 -> 180
+            android.view.Surface.ROTATION_270 -> 270
+            else -> 0
+        }
+
+        var rotation = displayDegrees
+        if (!isFront) {
+            rotation = (360 - rotation) % 360
+        }
+        previewRotationDegrees = (sensorOrientation + rotation) % 360
+
         imageReader = ImageReader.newInstance(width, height, ImageFormat.YUV_420_888, 2).apply {
             setOnImageAvailableListener({ reader ->
                 val image = try {
@@ -168,6 +199,7 @@ class SipCameraCapture(
                 if (isEnabledFlag.get() && clientHandle != 0L) {
                     val planes = image.planes
                     if (planes.size >= 3) {
+                        val isFrontCam = (currentPositionVal == SipCameraPosition.FRONT)
                         nativeDeliverFrame(
                             clientHandle = clientHandle,
                             width = image.width,
@@ -175,9 +207,14 @@ class SipCameraCapture(
                             yBuffer = planes[0].buffer,
                             uBuffer = planes[1].buffer,
                             vBuffer = planes[2].buffer,
-                            yStride = planes[0].rowStride,
-                            uStride = planes[1].rowStride,
-                            vStride = planes[2].rowStride,
+                            yRowStride = planes[0].rowStride,
+                            uRowStride = planes[1].rowStride,
+                            vRowStride = planes[2].rowStride,
+                            yPixelStride = planes[0].pixelStride,
+                            uPixelStride = planes[1].pixelStride,
+                            vPixelStride = planes[2].pixelStride,
+                            rotationDegrees = previewRotationDegrees,
+                            mirror = isFrontCam,
                             timestampNs = image.timestamp
                         )
                     }
@@ -310,9 +347,14 @@ class SipCameraCapture(
                         yBuffer = yBuf,
                         uBuffer = uBuf,
                         vBuffer = vBuf,
-                        yStride = width,
-                        uStride = uvW,
-                        vStride = uvW,
+                        yRowStride = width,
+                        uRowStride = uvW,
+                        vRowStride = uvW,
+                        yPixelStride = 1,
+                        uPixelStride = 1,
+                        vPixelStride = 1,
+                        rotationDegrees = 0,
+                        mirror = false,
                         timestampNs = System.nanoTime()
                     )
                     tick++
