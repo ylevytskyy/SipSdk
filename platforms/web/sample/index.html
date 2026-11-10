@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SipSdk Web Sample</title>
+<link rel="icon" href="data:,">
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, system-ui, sans-serif; margin: 0; background: #f5f5f7; color: #1d1d1f; }
+  main { max-width: 760px; margin: 0 auto; padding: 24px 16px; }
+  h1 { font-size: 20px; margin: 0 0 16px; }
+  h1 small { font-weight: 400; color: #6e6e73; }
+  section { background: #fff; border: 1px solid #d2d2d7; border-radius: 12px; padding: 16px; margin-bottom: 16px; }
+  h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .04em; color: #6e6e73; margin: 0 0 12px; }
+  label { display: block; font-size: 12px; color: #6e6e73; margin: 8px 0 2px; }
+  label.inline { display: inline; margin: 0 0 0 8px; }
+  input[type=text], input[type=password] { width: 100%; padding: 8px 10px; border: 1px solid #d2d2d7; border-radius: 8px; font: inherit; font-size: 14px; }
+  button { font: inherit; font-size: 14px; padding: 8px 14px; border: 0; border-radius: 8px; background: #0071e3; color: #fff; cursor: pointer; margin: 4px 4px 4px 0; }
+  button.secondary { background: #e8e8ed; color: #1d1d1f; }
+  button.danger { background: #ff3b30; }
+  button:disabled { opacity: .4; cursor: default; }
+  .row { display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; }
+  .row > div { flex: 1; min-width: 160px; }
+  .status { font-weight: 600; }
+  .status.ok { color: #248a3d; }
+  .status.err { color: #ff3b30; }
+  .meta { color: #6e6e73; font-size: 13px; margin: 4px 0 8px; }
+  [hidden] { display: none !important; }
+  #incoming { border-color: #ff9f0a; }
+  .video-stage { position: relative; background: #0b0d14; border-radius: 10px; overflow: hidden; margin-top: 10px; min-height: 240px; }
+  #remoteVideo { width: 100%; max-height: 360px; display: block; background: #0b0d14; }
+  #localVideo { position: absolute; right: 12px; bottom: 12px; width: 150px; height: 112px; object-fit: cover; background: #1c1c1e; border: 2px solid rgba(255,255,255,.85); border-radius: 8px; }
+  .dtmf button { width: 44px; }
+  #log { background: #1d1d1f; color: #d2d2d7; border-radius: 8px; padding: 10px 12px; height: 200px; overflow-y: auto; font: 12px/1.5 ui-monospace, Menlo, monospace; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<main>
+  <h1>SipSdk Web Sample <small>— SipClient / SipCall over SIP WebSocket + WebRTC</small></h1>
+
+  <section>
+    <h2>Account</h2>
+    <div class="row">
+      <div><label for="username">Username</label><input id="username" type="text" value="1002" autocomplete="off"></div>
+      <div><label for="domain">Domain</label><input id="domain" type="text" autocomplete="off"></div>
+      <div><label for="password">Password</label><input id="password" type="password" value="test1002" autocomplete="off"></div>
+    </div>
+    <div class="row">
+      <div><label for="wsUri">WebSocket server</label><input id="wsUri" type="text" autocomplete="off"></div>
+      <div><label for="displayName">Display name</label><input id="displayName" type="text" value="Web Sample" autocomplete="off"></div>
+    </div>
+    <div style="margin-top:10px">
+      <button id="btnRegister">Register</button>
+      <button id="btnUnregister" class="secondary" disabled>Unregister</button>
+      <span class="status" id="regStatus" data-state="0">Unregistered</span>
+    </div>
+  </section>
+
+  <section>
+    <h2>Call</h2>
+    <div class="row">
+      <div><label for="target">Target</label><input id="target" type="text" value="9001" autocomplete="off"></div>
+      <div style="flex:0"><button id="btnCall" disabled>Call</button></div>
+    </div>
+    <label class="inline" style="margin:0"><input type="checkbox" id="withVideo" checked> Video (H.264)</label>
+  </section>
+
+  <section id="incoming" hidden>
+    <h2>Incoming call</h2>
+    <p class="meta" id="incomingFrom"></p>
+    <button id="btnAnswer">Answer</button>
+    <button id="btnAnswerAudio" class="secondary">Answer audio only</button>
+    <button id="btnDecline" class="danger">Decline</button>
+  </section>
+
+  <section id="incall" hidden>
+    <h2>In call</h2>
+    <p class="status" id="callState" data-state="">—</p>
+    <p class="meta"><span id="callPeer"></span> · <span id="callDuration">0:00</span> · last DTMF received: <span id="dtmfReceived">—</span></p>
+    <button id="btnHangup" class="danger">Hang up</button>
+    <button id="btnMute" class="secondary">Mute</button>
+    <button id="btnVideo" class="secondary">Video off</button>
+    <button id="btnHold" class="secondary">Hold</button>
+    <div class="video-stage">
+      <video id="remoteVideo" autoplay playsinline></video>
+      <video id="localVideo" autoplay muted playsinline></video>
+    </div>
+    <audio id="remoteAudio" autoplay></audio>
+    <div class="dtmf" style="margin-top:10px">
+      <label>DTMF</label>
+      <button class="secondary" data-dtmf="1">1</button><button class="secondary" data-dtmf="2">2</button><button class="secondary" data-dtmf="3">3</button>
+      <button class="secondary" data-dtmf="4">4</button><button class="secondary" data-dtmf="5">5</button><button class="secondary" data-dtmf="6">6</button>
+      <button class="secondary" data-dtmf="7">7</button><button class="secondary" data-dtmf="8">8</button><button class="secondary" data-dtmf="9">9</button>
+      <button class="secondary" data-dtmf="*">*</button><button class="secondary" data-dtmf="0">0</button><button class="secondary" data-dtmf="#">#</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>Log</h2>
+    <div id="log"></div>
+  </section>
+</main>
+
+<!-- Served from the repo root: python3 -m http.server 5102, then open /platforms/web/sample/ -->
+<script src="../../../web/jssip-3.13.9.min.js"></script>
+<script type="module" src="app.js"></script>
+</body>
+</html>

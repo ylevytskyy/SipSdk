@@ -1,0 +1,11 @@
+{
+  "name": "@sipsdk/web",
+  "version": "0.1.0",
+  "description": "SipSdk web platform: browser SIP audio + H.264 video over WebSocket and WebRTC, built on JsSIP",
+  "type": "module",
+  "main": "src/sipsdk.js",
+  "private": true,
+  "scripts": {
+    "test": "node --test test/sipsdk.test.mjs"
+  }
+}
