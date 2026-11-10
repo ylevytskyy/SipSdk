@@ -29,6 +29,7 @@ platforms/desktop/prebuilt/
 SipSdk/SipCredentials.plist
 .env
 specs/*/evidence/
+platforms/web/test/evidence/
 
 # .NET / C# build products
 **/bin/

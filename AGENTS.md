@@ -66,6 +66,8 @@ no SIP over TLS in `BaresipCore`.
   `bash scripts/verify-sim-app-launch.sh`
 - Manifest check: `swift package dump-package`, `swift package resolve`.
 - Regenerate `Package.swift` for a new release: `bash scripts/generate-spm-package.sh <version>`.
+- Build and verify Web Platform SDK (`platforms/web`, JsSIP + WebRTC: unit tests, headless Chrome sample check; `--pbx` adds a live Asterisk 1002 → 9001 call):
+  `bash scripts/verify-web-sdk.sh`
 - Web test page (`web/index.html` + vendored `web/jssip-3.13.9.min.js`):
   serve with `python3 -m http.server 5101 --directory web`, open `http://localhost:5101`.
   Automated Playwright checks (no real credentials required):
