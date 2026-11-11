@@ -11,6 +11,7 @@
 #include <cstring>
 #include <mutex>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #if defined(__APPLE__)
@@ -208,6 +209,8 @@ CApiVideoCaptureDriver::CApiVideoCaptureDriver(const sip_video_capture_driver_t 
 CApiVideoCaptureDriver::~CApiVideoCaptureDriver()
 {
     stop();
+    // The platform driver must not keep a callback that points at this adapter.
+    set_frame_handler(nullptr);
 }
 
 int CApiVideoCaptureDriver::start(int width, int height, int fps)
@@ -224,9 +227,18 @@ void CApiVideoCaptureDriver::stop()
 
 void CApiVideoCaptureDriver::set_frame_handler(FrameHandler handler)
 {
-    m_cpp_handler = std::move(handler);
+    const bool has_handler = static_cast<bool>(handler);
+    // The old handler is destroyed after the lock is released, at scope exit.
+    FrameHandler previous;
+    {
+        // Waits for an in-flight c_frame_callback to finish.
+        std::lock_guard<std::mutex> lock(m_handler_mutex);
+        previous = std::exchange(m_cpp_handler, std::move(handler));
+    }
+    // Call the platform driver without m_handler_mutex: its capture thread may
+    // hold its own lock while it calls c_frame_callback.
     if (m_driver.set_frame_handler) {
-        if (m_cpp_handler) {
+        if (has_handler) {
             m_driver.set_frame_handler(m_driver.user_data, c_frame_callback, this);
         } else {
             m_driver.set_frame_handler(m_driver.user_data, nullptr, nullptr);
@@ -263,7 +275,10 @@ bool CApiVideoCaptureDriver::is_enabled() const
 void CApiVideoCaptureDriver::c_frame_callback(const sip_video_frame_t *frame, void *arg)
 {
     auto *self = static_cast<CApiVideoCaptureDriver *>(arg);
-    if (self && self->m_cpp_handler && frame) {
+    if (!self || !frame) return;
+
+    std::lock_guard<std::mutex> lock(self->m_handler_mutex);
+    if (self->m_cpp_handler) {
         VideoFrame vf;
         vf.width = frame->width;
         vf.height = frame->height;

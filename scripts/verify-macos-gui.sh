@@ -16,6 +16,10 @@ if [[ "$ASTERISK_STATUS" != '"healthy"' ]]; then
   bash "$ROOT_DIR/scripts/run-pbx.sh"
 fi
 
+# 1b. Camera driver unit tests (no PBX or camera needed)
+echo "==> 1b. Running macOS camera driver unit tests..."
+bash "$ROOT_DIR/scripts/verify-macos-camera-driver.sh"
+
 # 2. Build SipSdkMac.xcodeproj
 echo "==> 2. Building SipSdkMac.xcodeproj..."
 BUILD_DIR="$ROOT_DIR/.build/macos_gui"

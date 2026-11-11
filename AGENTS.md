@@ -50,6 +50,8 @@ no SIP over TLS in `BaresipCore`.
   `bash scripts/verify-desktop-sdk.sh`
 - Build and verify Native macOS GUI Sample (SwiftUI app `SipSdkMac.xcodeproj`, live launch & registration against Asterisk, window screenshot):
   `bash scripts/verify-macos-gui.sh`
+- Run macOS sample camera driver unit tests only (synthetic camera, no PBX; also step 1b of `verify-macos-gui.sh`):
+  `bash scripts/verify-macos-camera-driver.sh`
 - Compile Baresip v4.12.0 and libre v4.12.0 static prebuilts for desktop targets:
   `bash scripts/build-baresip-desktop.sh`
 - Build and verify Android Platform SDK (`sipsdk.aar`), multi-arch slices (`arm64-v8a`, `armeabi-v7a`, `x86_64`), symbol export audit, registration & audio calling test suites against Asterisk PBX:

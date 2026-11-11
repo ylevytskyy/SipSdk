@@ -33,6 +33,12 @@ private:
     static void c_frame_callback(const sip_video_frame_t *frame, void *arg);
 
     sip_video_capture_driver_t m_driver{};
+
+    // Guards m_cpp_handler. c_frame_callback holds it while the handler runs,
+    // so set_frame_handler() waits for an in-flight frame before it returns.
+    // Not recursive: a frame handler must not call set_frame_handler() on the
+    // same adapter.
+    std::mutex m_handler_mutex;
     FrameHandler m_cpp_handler;
 };
 
