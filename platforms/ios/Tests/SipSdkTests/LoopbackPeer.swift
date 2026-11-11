@@ -91,6 +91,45 @@ final class LoopbackPeer: @unchecked Sendable {
         }
     }
 
+    /// Calls the client that registered last, over the same UDP flow, using its REGISTER Contact as request URI.
+    func sendInvite() {
+        lock.lock()
+        let register = lastRegisterRequest
+        let conn = connection
+        lock.unlock()
+
+        guard let conn = conn,
+              let contact = extractHeader(msg: register, name: "Contact"),
+              let start = contact.firstIndex(of: "<"),
+              let end = contact.firstIndex(of: ">") else { return }
+        let requestUri = String(contact[contact.index(after: start)..<end])
+
+        let sdp = "v=0\r\n" +
+            "o=- 654321 654321 IN IP4 127.0.0.1\r\n" +
+            "s=-\r\n" +
+            "c=IN IP4 127.0.0.1\r\n" +
+            "t=0 0\r\n" +
+            "m=audio 16010 RTP/AVP 0\r\n" +
+            "a=rtpmap:0 PCMU/8000\r\n" +
+            "a=sendrecv\r\n"
+
+        let invite = "INVITE \(requestUri) SIP/2.0\r\n" +
+            "Via: SIP/2.0/UDP 127.0.0.1:\(port);branch=z9hG4bK-incoming-\(port);rport\r\n" +
+            "Max-Forwards: 70\r\n" +
+            "From: <sip:peer@127.0.0.1:\(port)>;tag=peer-from-\(port)\r\n" +
+            "To: <\(requestUri)>\r\n" +
+            "Call-ID: incoming-\(port)@127.0.0.1\r\n" +
+            "CSeq: 1 INVITE\r\n" +
+            "Contact: <sip:peer@127.0.0.1:\(port)>\r\n" +
+            "Content-Type: application/sdp\r\n" +
+            "Content-Length: \(sdp.utf8.count)\r\n\r\n" +
+            sdp
+
+        if let data = invite.data(using: .utf8) {
+            conn.send(content: data, completion: .idempotent)
+        }
+    }
+
     private func sendInviteResponse(on conn: NWConnection, invite: String) {
         let callId = extractHeader(msg: invite, name: "Call-ID") ?? "unknown"
         let from = extractHeader(msg: invite, name: "From") ?? ""

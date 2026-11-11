@@ -174,12 +174,130 @@ final class SipSdkTests: XCTestCase {
 
         captureDriver.stop()
         XCTAssertFalse(captureDriver.isRunning)
+
+    }
+
+    // MARK: - Callback lifetimes (RES-4)
+
+    /// Blocks the main thread so events the core worker posts stay queued on the main queue.
+    private func blockMainQueue(seconds: TimeInterval) {
+        Thread.sleep(forTimeInterval: seconds)
     }
 
     @MainActor
-    func testAudioSessionManager() {
-        let audioMgr = IosAudioManager.shared
-        XCTAssertFalse(audioMgr.isSpeakerEnabled)
+    private func startRegisteredClient(peer: LoopbackPeer) async throws -> SipClient {
+        peer.start()
+        var boundWait = 0
+        while !peer.isBound && boundWait < 20 {
+            try await Task.sleep(nanoseconds: 50_000_000)
+            boundWait += 1
+        }
+        XCTAssertTrue(peer.isBound)
+
+        let client = SipClient()
+        try await client.start()
+        try await client.register(SipAccount(username: "bob", domain: "127.0.0.1", transport: .udp, port: Int(peer.port)))
+
+        var regWait = 0
+        while !client.registrationState.isRegistered && regWait < 50 {
+            try await Task.sleep(nanoseconds: 100_000_000)
+            regWait += 1
+        }
+        XCTAssertTrue(client.registrationState.isRegistered)
+        return client
+    }
+
+    @MainActor
+    func testIncomingCallIsTrackedWhileRunning() async throws {
+        let peer = LoopbackPeer(port: 15093)
+        defer { peer.stop() }
+        let client = try await startRegisteredClient(peer: peer)
+
+        peer.sendInvite()
+
+        var wait = 0
+        while client.calls.isEmpty && wait < 50 {
+            try await Task.sleep(nanoseconds: 100_000_000)
+            wait += 1
+        }
+        XCTAssertEqual(client.calls.count, 1)
+        XCTAssertEqual(client.calls.first?.state, .incoming)
+        XCTAssertEqual(client.calls.first?.isOutgoing, false)
+
+        await client.stop()
+    }
+
+    @MainActor
+    func testOutgoingCallStateUpdatesTheSameSipCall() async throws {
+        let peer = LoopbackPeer(port: 15094)
+        defer { peer.stop() }
+        let client = try await startRegisteredClient(peer: peer)
+
+        let call = try await client.makeCall(to: "sip:echo@127.0.0.1:15094", withVideo: true)
+
+        var wait = 0
+        while call.state != .established && !call.state.isClosed && wait < 50 {
+            try await Task.sleep(nanoseconds: 100_000_000)
+            wait += 1
+        }
+        XCTAssertEqual(call.state, .established)
+        XCTAssertEqual(client.calls.count, 1)
+        XCTAssertTrue(client.calls.first === call)
+
+        await call.hangup()
+        wait = 0
+        while !call.state.isClosed && wait < 50 {
+            try await Task.sleep(nanoseconds: 100_000_000)
+            wait += 1
+        }
+        XCTAssertTrue(call.state.isClosed)
+        XCTAssertTrue(client.calls.isEmpty)
+
+        await client.stop()
+    }
+
+    @MainActor
+    func testEventsQueuedBeforeStopAreDroppedAfterStop() async throws {
+        let peer = LoopbackPeer(port: 15092)
+        defer { peer.stop() }
+        let client = try await startRegisteredClient(peer: peer)
+
+        peer.sendInvite()
+        blockMainQueue(seconds: 1.0)
+        // The client answered the INVITE, so its incoming call event is queued.
+        XCTAssertTrue(peer.lastRequest.hasPrefix("SIP/2.0 1"), "INVITE not handled: \(peer.lastRequest.prefix(40))")
+
+        await client.stop()
+        try await Task.sleep(nanoseconds: 300_000_000)
+
+        XCTAssertTrue(client.calls.isEmpty)
+        XCTAssertEqual(client.registrationState, .unregistered)
+    }
+
+    @MainActor
+    func testEventsQueuedBeforeClientIsFreedAreDropped() async throws {
+        let peer = LoopbackPeer(port: 15095)
+        defer { peer.stop() }
+        var client: SipClient? = try await startRegisteredClient(peer: peer)
+        weak var weakClient = client
+        _ = weakClient
+
+        peer.sendInvite()
+        blockMainQueue(seconds: 1.0)
+        XCTAssertTrue(peer.lastRequest.hasPrefix("SIP/2.0 1"), "INVITE not handled: \(peer.lastRequest.prefix(40))")
+
+        // Free the client without stop(); deinit destroys the core client.
+        client = nil
+        XCTAssertNil(weakClient)
+
+        // Run the queued events. Under --asan a freed-client access fails here.
+        try await Task.sleep(nanoseconds: 300_000_000)
+    }
+
+    func testVideoCaptureDriverStopWaitsForInFlightFrame() {
+        let captureDriver = IosVideoCaptureDriver()
+
+        final class BlockingContext {
 
         audioMgr.setSpeakerphone(true)
         XCTAssertTrue(audioMgr.isSpeakerEnabled)

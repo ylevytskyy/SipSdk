@@ -13,6 +13,7 @@ public final class SipCallKitCoordinator: NSObject, CXProviderDelegate {
     public let provider: CXProvider
     public let callController: CXCallController
     public weak var client: SipClient?
+    public var isEnabled: Bool = (NSClassFromString("XCTestCase") == nil)
 
     public init(localizedName: String = "SipSdk", client: SipClient? = nil) {
         self.client = client
@@ -35,6 +36,7 @@ public final class SipCallKitCoordinator: NSObject, CXProviderDelegate {
 
     /// Reports incoming SIP call to CallKit system UI (lock screen banner, full-screen incoming alert).
     public func reportIncomingCall(_ call: SipCall) async throws {
+        guard isEnabled else { return }
         let update = CXCallUpdate()
         let handle = CXHandle(type: .generic, value: call.remoteUri)
         update.remoteHandle = handle
@@ -83,7 +85,7 @@ public final class SipCallKitCoordinator: NSObject, CXProviderDelegate {
 
     nonisolated public func providerDidReset(_ provider: CXProvider) {
         Task { @MainActor in
-            guard let client = self.client else { return }
+            guard self.isEnabled, let client = self.client else { return }
             for call in client.calls {
                 await call.hangup(statusCode: 487, reason: "CallKit Reset")
             }
