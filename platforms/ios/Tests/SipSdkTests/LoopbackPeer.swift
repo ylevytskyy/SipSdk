@@ -19,6 +19,7 @@ final class LoopbackPeer: @unchecked Sendable {
     var reinviteAnswered: Bool = false
     var acknowledged: Bool = false
     var lastRequest: String = ""
+    var lastRegisterRequest: String = ""
 
     init(port: UInt16) {
         self.port = port
@@ -70,7 +71,12 @@ final class LoopbackPeer: @unchecked Sendable {
             self.lastRequest = msg
             self.lock.unlock()
 
-            if msg.hasPrefix("INVITE") {
+            if msg.hasPrefix("REGISTER") {
+                self.lock.lock()
+                self.lastRegisterRequest = msg
+                self.lock.unlock()
+                self.sendOkResponse(on: conn, req: msg)
+            } else if msg.hasPrefix("INVITE") {
                 self.sendInviteResponse(on: conn, invite: msg)
             } else if msg.hasPrefix("ACK") {
                 self.lock.lock()

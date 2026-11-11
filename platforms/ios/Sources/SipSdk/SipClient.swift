@@ -230,37 +230,8 @@ public final class SipClient {
         self.registrationState = .registering
         eventContinuation.yield(.registrationChanged(.registering))
 
-        var cConfig = sip_account_config_t()
-        account.username.withCString { userPtr in
-            account.domain.withCString { domainPtr in
-                account.password.withCString { pwdPtr in
-                    account.transport.rawValue.withCString { tpPtr in
-                        cConfig.user = userPtr
-                        cConfig.domain = domainPtr
-                        cConfig.pwd = pwdPtr
-                        cConfig.transport = tpPtr
-                        cConfig.port = Int32(account.port)
-                        cConfig.reg_interval = account.regInterval
-
-                        // Optional strings
-                        let dname = account.displayName?.cString(using: .utf8)
-                        let ob = account.outboundProxy?.cString(using: .utf8)
-                        let stun = account.stunServer?.cString(using: .utf8)
-                        let stunUser = account.stunUser?.cString(using: .utf8)
-                        let stunPass = account.stunPassword?.cString(using: .utf8)
-                        let nat = account.mediaNat?.cString(using: .utf8)
-
-                        dname?.withUnsafeBufferPointer { cConfig.display_name = $0.baseAddress }
-                        ob?.withUnsafeBufferPointer { cConfig.outbound_proxy = $0.baseAddress }
-                        stun?.withUnsafeBufferPointer { cConfig.stun_server = $0.baseAddress }
-                        stunUser?.withUnsafeBufferPointer { cConfig.stun_user = $0.baseAddress }
-                        stunPass?.withUnsafeBufferPointer { cConfig.stun_pass = $0.baseAddress }
-                        nat?.withUnsafeBufferPointer { cConfig.media_nat = $0.baseAddress }
-
-                        _ = sip_client_register_account(client, &cConfig)
-                    }
-                }
-            }
+        account.withCAccountConfig { cConfig in
+            _ = sip_client_register_account(client, &cConfig)
         }
     }
 

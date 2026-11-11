@@ -50,6 +50,66 @@ final class SipSdkTests: XCTestCase {
         XCTAssertEqual(fullAccount.outboundProxy, "sip:proxy.provider.com:5060")
         XCTAssertEqual(fullAccount.mediaNat, "ice")
         XCTAssertEqual(fullAccount.regInterval, 1800)
+
+        fullAccount.withCAccountConfig { cConfig in
+            XCTAssertEqual(String(cString: cConfig.user), "alice")
+            XCTAssertEqual(String(cString: cConfig.domain), "sip.provider.com")
+            XCTAssertEqual(String(cString: cConfig.pwd), "secret")
+            XCTAssertEqual(String(cString: cConfig.transport), "udp")
+            XCTAssertEqual(cConfig.port, 5060)
+            XCTAssertEqual(String(cString: cConfig.display_name), "Alice")
+            XCTAssertEqual(String(cString: cConfig.outbound_proxy), "sip:proxy.provider.com:5060")
+            XCTAssertEqual(String(cString: cConfig.stun_server), "stun:stun.l.google.com:19302")
+            XCTAssertNil(cConfig.stun_user)
+            XCTAssertNil(cConfig.stun_pass)
+            XCTAssertEqual(String(cString: cConfig.media_nat), "ice")
+            XCTAssertEqual(cConfig.reg_interval, 1800)
+        }
+    }
+
+    @MainActor
+    func testRegisterWithOptionalAccountFieldsOverLoopback() async throws {
+        let peer = LoopbackPeer(port: 15091)
+        peer.start()
+        defer { peer.stop() }
+
+        var boundWait = 0
+        while !peer.isBound && boundWait < 20 {
+            try await Task.sleep(nanoseconds: 50_000_000)
+            boundWait += 1
+        }
+        XCTAssertTrue(peer.isBound)
+
+        let client = SipClient()
+        try await client.start()
+
+        let account = SipAccount(
+            username: "alice",
+            domain: "sip.example.invalid",
+            password: "secret",
+            transport: .udp,
+            port: 15091,
+            displayName: "Alice Wonderland",
+            outboundProxy: "sip:127.0.0.1:15091",
+            stunServer: "stun:127.0.0.1:3478",
+            stunUser: "stunuser",
+            stunPassword: "stunpass",
+            mediaNat: "stun",
+            regInterval: 600
+        )
+
+        try await client.register(account)
+
+        var waitReg = 0
+        while peer.lastRegisterRequest.isEmpty && waitReg < 30 {
+            try await Task.sleep(nanoseconds: 100_000_000)
+            waitReg += 1
+        }
+
+        XCTAssertTrue(peer.lastRegisterRequest.contains("REGISTER sip:sip.example.invalid:15091 SIP/2.0"))
+        XCTAssertTrue(peer.lastRegisterRequest.contains("\"Alice Wonderland\""))
+
+        await client.stop()
     }
 
     @MainActor
