@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.Handler
 import android.os.Looper
 import java.io.File
+import java.util.concurrent.ConcurrentHashMap
 
 class SipClient(
     val username: String,
@@ -72,6 +73,9 @@ class SipClient(
     val isLocalPreviewActive: Boolean
         get() = if (nativeHandle != 0L) nativeIsLocalPreviewActive(nativeHandle) else false
 
+    val isCameraCaptureRunning: Boolean
+        get() = cameraCapture?.isRunning == true
+
     var remoteVideoView: SipSurfaceView? = null
         set(value) {
             field?.setSurfaceListener(null)
@@ -115,6 +119,7 @@ class SipClient(
         }
 
     private var cameraCapture: SipCameraCapture? = null
+    private val activeCalls = ConcurrentHashMap<Long, SipCall>()
 
     private var nativeHandle: Long = 0L
     private val mainHandler: Handler? = try {
@@ -200,6 +205,13 @@ class SipClient(
     }
 
     fun stop() {
+        for ((handle, call) in activeCalls) {
+            call.invalidate()
+            if (nativeHandle != 0L && handle != 0L) {
+                nativeCallDestroy(handle)
+            }
+        }
+        activeCalls.clear()
         if (nativeHandle != 0L) {
             cameraCapture?.stop()
             cameraCapture = null
@@ -234,20 +246,16 @@ class SipClient(
             val rc = start()
             if (rc != 0) return rc
         }
-        if (cameraCapture == null) {
-            cameraCapture = SipCameraCapture(context, nativeHandle)
-            val cur = localVideoView?.currentSurface
-            if (cur != null && cur.isValid) {
-                cameraCapture?.setPreviewSurface(cur)
-            }
-        }
-        cameraCapture?.start()
+        onNativeCaptureStart(640, 480, 30)
         return nativeStartLocalPreview(nativeHandle)
     }
 
     fun stopLocalPreview(): Int {
-        cameraCapture?.stop()
-        return if (nativeHandle != 0L) nativeStopLocalPreview(nativeHandle) else 0
+        val rc = if (nativeHandle != 0L) nativeStopLocalPreview(nativeHandle) else 0
+        if (!isLocalPreviewActive) {
+            cameraCapture?.stop()
+        }
+        return rc
     }
 
     fun register(): Int {
@@ -279,25 +287,39 @@ class SipClient(
             val rc = start()
             if (rc != 0) return null
         }
-        if (withVideo && cameraCapture == null) {
-            cameraCapture = SipCameraCapture(context, nativeHandle)
-            val cur = localVideoView?.currentSurface
-            if (cur != null && cur.isValid) {
-                cameraCapture?.setPreviewSurface(cur)
-            }
-            cameraCapture?.start()
+        if (withVideo) {
+            onNativeCaptureStart(640, 480, 30)
         }
         val callHandle = nativeMakeCall(nativeHandle, uri, withVideo)
         if (callHandle == 0L) return null
         audioManager?.prepareAudioSession()
-        return SipCall(
-            nativeHandle = callHandle,
-            callId = nativeCallGetId(callHandle),
-            remoteUri = nativeCallGetRemoteUri(callHandle),
-            peerDisplayName = nativeCallGetPeerDisplayName(callHandle),
-            hasVideo = withVideo,
-            isOutgoing = true
+        return getOrCreateCall(
+            callHandle = callHandle,
+            defaultRemoteUri = uri,
+            defaultHasVideo = withVideo,
+            defaultIsOutgoing = true
         )
+    }
+
+    private fun getOrCreateCall(
+        callHandle: Long,
+        defaultRemoteUri: String = "",
+        defaultHasVideo: Boolean = false,
+        defaultIsOutgoing: Boolean = false
+    ): SipCall {
+        activeCalls[callHandle]?.let { return it }
+        val canQueryNative = nativeHandle != 0L && callHandle != 0L
+        val call = SipCall(
+            nativeHandle = callHandle,
+            callId = if (canQueryNative) nativeCallGetId(callHandle) else "",
+            remoteUri = if (canQueryNative) nativeCallGetRemoteUri(callHandle) else defaultRemoteUri,
+            peerDisplayName = if (canQueryNative) nativeCallGetPeerDisplayName(callHandle) else null,
+            hasVideo = if (canQueryNative) nativeCallHasVideo(callHandle) else defaultHasVideo,
+            isOutgoing = if (canQueryNative) nativeCallIsOutgoing(callHandle) else defaultIsOutgoing,
+            client = this
+        )
+        val existing = activeCalls.putIfAbsent(callHandle, call)
+        return existing ?: call
     }
 
     fun setMuted(muted: Boolean) {
@@ -337,31 +359,53 @@ class SipClient(
 
     @JvmSynthetic
     fun onNativeCallState(callHandle: Long, state: Int, code: Int, reason: String) {
-        val call = SipCall(
-            nativeHandle = callHandle,
-            callId = nativeCallGetId(callHandle),
-            remoteUri = nativeCallGetRemoteUri(callHandle),
-            peerDisplayName = nativeCallGetPeerDisplayName(callHandle),
-            hasVideo = nativeCallHasVideo(callHandle),
-            isOutgoing = nativeCallIsOutgoing(callHandle)
-        )
+        val call = getOrCreateCall(callHandle)
         val callState = SipCallState.fromInt(state)
         if (callState == SipCallState.CLOSED) {
             audioManager?.releaseAudioSession()
+            if (!isLocalPreviewActive) {
+                cameraCapture?.stop()
+            }
         }
         listener?.onCallStateChanged(call, callState, code, reason)
+        if (callState == SipCallState.CLOSED) {
+            activeCalls.remove(callHandle)
+            call.invalidate()
+            if (nativeHandle != 0L && callHandle != 0L) {
+                nativeCallDestroy(callHandle)
+            }
+        }
+    }
+
+    @JvmSynthetic
+    fun onNativeCaptureStart(width: Int, height: Int, fps: Int): Int {
+        if (cameraCapture == null) {
+            cameraCapture = SipCameraCapture(context, nativeHandle).apply {
+                setCamera(cameraPosition)
+                setEnabled(isLocalVideoEnabled)
+            }
+            val cur = localVideoView?.currentSurface
+            if (cur != null && cur.isValid) {
+                cameraCapture?.setPreviewSurface(cur)
+            }
+        }
+        return cameraCapture?.start(
+            if (width > 0) width else 640,
+            if (height > 0) height else 480,
+            if (fps > 0) fps else 30
+        ) ?: -1
+    }
+
+    @JvmSynthetic
+    fun onNativeCaptureStop() {
+        if (!isLocalPreviewActive) {
+            cameraCapture?.stop()
+        }
     }
 
     @JvmSynthetic
     fun onNativeIncomingCall(callHandle: Long) {
-        val call = SipCall(
-            nativeHandle = callHandle,
-            callId = nativeCallGetId(callHandle),
-            remoteUri = nativeCallGetRemoteUri(callHandle),
-            peerDisplayName = nativeCallGetPeerDisplayName(callHandle),
-            hasVideo = nativeCallHasVideo(callHandle),
-            isOutgoing = false
-        )
+        val call = getOrCreateCall(callHandle, defaultIsOutgoing = false)
         listener?.onIncomingCall(call)
     }
 
@@ -372,13 +416,9 @@ class SipClient(
                 remoteVideoView?.setVideoDimensions(width, height)
                 remoteVideoView?.incrementRenderedFrameCount()
             }
-            val call = SipCall(
-                nativeHandle = callHandle,
-                callId = nativeCallGetId(callHandle),
-                remoteUri = nativeCallGetRemoteUri(callHandle),
-                peerDisplayName = nativeCallGetPeerDisplayName(callHandle),
-                hasVideo = nativeCallHasVideo(callHandle) || (width > 0 && height > 0),
-                isOutgoing = nativeCallIsOutgoing(callHandle)
+            val call = getOrCreateCall(
+                callHandle = callHandle,
+                defaultHasVideo = width > 0 && height > 0
             )
             listener?.onCallMediaChanged(call, width, height, onHold, isMuted)
         }
@@ -393,14 +433,7 @@ class SipClient(
 
     @JvmSynthetic
     fun onNativeDtmfDigit(callHandle: Long, digit: String) {
-        val call = SipCall(
-            nativeHandle = callHandle,
-            callId = nativeCallGetId(callHandle),
-            remoteUri = nativeCallGetRemoteUri(callHandle),
-            peerDisplayName = nativeCallGetPeerDisplayName(callHandle),
-            hasVideo = nativeCallHasVideo(callHandle),
-            isOutgoing = nativeCallIsOutgoing(callHandle)
-        )
+        val call = getOrCreateCall(callHandle)
         listener?.onDtmfDigit(call, digit)
     }
 
@@ -430,6 +463,7 @@ class SipClient(
     private external fun nativeCallGetPeerDisplayName(callHandle: Long): String?
     private external fun nativeCallIsOutgoing(callHandle: Long): Boolean
     private external fun nativeCallHasVideo(callHandle: Long): Boolean
+    private external fun nativeCallDestroy(callHandle: Long)
     private external fun nativeSetRemoteSurface(handle: Long, surface: Any?): Int
 
     private external fun nativeSwitchCamera(handle: Long): Int

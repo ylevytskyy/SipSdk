@@ -709,7 +709,7 @@ sip_call_t *Engine::make_call(const char *target_uri, bool with_video)
     prepare_audio_session();
 
     call_session->retain();
-    post_task([this, call_session, uri_str, with_video]() {
+    bool posted = post_task([this, call_session, uri_str, with_video]() {
         if (!m_ua) {
             call_session->set_closed(0);
             dispatch_call_state(call_session, SIP_CALL_STATE_CLOSED, EINVAL, "No UA available");
@@ -733,6 +733,13 @@ sip_call_t *Engine::make_call(const char *target_uri, bool with_video)
         dispatch_call_state(call_session, SIP_CALL_STATE_CONNECTING, 100, "Connecting");
         call_session->release();
     });
+    if (!posted) {
+        call_session->set_closed(0);
+        release_audio_session_if_idle();
+        call_session->release();
+        destroy_call(call_session);
+        return nullptr;
+    }
 
     return call_session;
 }
@@ -744,7 +751,7 @@ int Engine::answer_call(sip_call_t *call, bool with_video)
     prepare_audio_session();
 
     call->retain();
-    post_task([this, call, with_video]() {
+    bool posted = post_task([this, call, with_video]() {
         struct call *c = call->raw_call();
         if (m_ua != nullptr && c != nullptr) {
             enum vidmode vmode = with_video ? VIDMODE_ON : VIDMODE_OFF;
@@ -754,6 +761,11 @@ int Engine::answer_call(sip_call_t *call, bool with_video)
         }
         call->release();
     });
+    if (!posted) {
+        release_audio_session_if_idle();
+        call->release();
+        return EIO;
+    }
 
     return 0;
 }
@@ -766,7 +778,7 @@ int Engine::hangup_call(sip_call_t *call, int code, const char *reason)
     uint16_t scode = code > 0 ? static_cast<uint16_t>(code) : 0;
 
     call->retain();
-    post_task([this, call, scode, reason_str]() {
+    bool posted = post_task([this, call, scode, reason_str]() {
         struct call *c = call->raw_call();
         if (m_ua != nullptr && c != nullptr) {
             ua_hangup(m_ua, c, scode, reason_str.empty() ? nullptr : reason_str.c_str());
@@ -777,6 +789,10 @@ int Engine::hangup_call(sip_call_t *call, int code, const char *reason)
         }
         call->release();
     });
+    if (!posted) {
+        call->release();
+        return EIO;
+    }
 
     return 0;
 }
@@ -786,7 +802,7 @@ int Engine::hold_call(sip_call_t *call, bool hold)
     if (!call) return EINVAL;
 
     call->retain();
-    post_task([this, call, hold]() {
+    bool posted = post_task([this, call, hold]() {
         struct call *c = call->raw_call();
         if (c != nullptr) {
             (void)call_hold(c, hold);
@@ -797,6 +813,10 @@ int Engine::hold_call(sip_call_t *call, bool hold)
         }
         call->release();
     });
+    if (!posted) {
+        call->release();
+        return EIO;
+    }
 
     return 0;
 }
@@ -806,7 +826,7 @@ int Engine::mute_call(sip_call_t *call, bool muted)
     if (!call) return EINVAL;
 
     call->retain();
-    post_task([this, call, muted]() {
+    bool posted = post_task([this, call, muted]() {
         struct call *c = call->raw_call();
         if (c != nullptr) {
             struct audio *au = call_audio(c);
@@ -818,6 +838,10 @@ int Engine::mute_call(sip_call_t *call, bool muted)
         }
         call->release();
     });
+    if (!posted) {
+        call->release();
+        return EIO;
+    }
 
     return 0;
 }
@@ -829,7 +853,7 @@ int Engine::send_dtmf(sip_call_t *call, const char *digits)
     std::string digits_str = digits;
 
     call->retain();
-    post_task([call, digits_str]() {
+    bool posted = post_task([call, digits_str]() {
         struct call *c = call->raw_call();
         if (c != nullptr) {
             for (char ch : digits_str) {
@@ -839,6 +863,10 @@ int Engine::send_dtmf(sip_call_t *call, const char *digits)
         }
         call->release();
     });
+    if (!posted) {
+        call->release();
+        return EIO;
+    }
 
     return 0;
 }
@@ -1249,64 +1277,32 @@ void Engine::dispatch_dtmf_digit(sip_call_t *call, const char *digit)
 
 int Engine::set_video_capture_driver(std::shared_ptr<IVideoCaptureDriver> driver)
 {
-    if (m_started.load()) {
-        post_task([this, driver]() {
-            if (m_media_manager) {
-                m_media_manager->set_capture_driver(driver);
-            }
-        });
-    } else {
-        if (m_media_manager) {
-            m_media_manager->set_capture_driver(driver);
-        }
+    if (m_media_manager) {
+        m_media_manager->set_capture_driver(driver);
     }
     return 0;
 }
 
 int Engine::set_remote_renderer(std::shared_ptr<IVideoRendererDriver> renderer)
 {
-    if (m_started.load()) {
-        post_task([this, renderer]() {
-            if (m_media_manager) {
-                m_media_manager->set_remote_renderer(renderer);
-            }
-        });
-    } else {
-        if (m_media_manager) {
-            m_media_manager->set_remote_renderer(renderer);
-        }
+    if (m_media_manager) {
+        m_media_manager->set_remote_renderer(renderer);
     }
     return 0;
 }
 
 int Engine::set_local_renderer(std::shared_ptr<IVideoRendererDriver> renderer)
 {
-    if (m_started.load()) {
-        post_task([this, renderer]() {
-            if (m_media_manager) {
-                m_media_manager->set_local_renderer(renderer);
-            }
-        });
-    } else {
-        if (m_media_manager) {
-            m_media_manager->set_local_renderer(renderer);
-        }
+    if (m_media_manager) {
+        m_media_manager->set_local_renderer(renderer);
     }
     return 0;
 }
 
 int Engine::set_video_codec_driver(std::shared_ptr<IVideoCodecDriver> driver)
 {
-    if (m_started.load()) {
-        post_task([this, driver]() {
-            if (m_media_manager) {
-                m_media_manager->set_codec_driver(driver);
-            }
-        });
-    } else {
-        if (m_media_manager) {
-            m_media_manager->set_codec_driver(driver);
-        }
+    if (m_media_manager) {
+        m_media_manager->set_codec_driver(driver);
     }
     return 0;
 }

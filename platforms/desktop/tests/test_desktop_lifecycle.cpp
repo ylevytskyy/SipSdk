@@ -147,10 +147,12 @@ int main(int argc, char **argv) {
         TEST_ASSERT(call->get_remote_uri() == echo_uri, "Call remote URI mismatch");
         TEST_ASSERT(!call->get_id().empty(), "Call ID must not be empty");
 
-        // Hangup the call
+        // Hangup the call and wait for CLOSED so Client::remove_call destroys and invalidates the handle
         call->hangup();
         std::this_thread::sleep_for(std::chrono::milliseconds(300));
-        std::printf("PASS: Outgoing call handle verified and hung up\n");
+        TEST_ASSERT(call->raw_handle() == nullptr, "Closed call raw_handle() must be invalidated after removal");
+        TEST_ASSERT(call->is_closed(), "Closed call is_closed() must return true");
+        std::printf("PASS: Outgoing call handle verified, hung up, and invalidated on CLOSED\n");
 
         // Test 7: Unregister and Teardown
         std::printf("--- Test 7: Unregister and Clean Stop ---\n");

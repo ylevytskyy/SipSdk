@@ -95,11 +95,52 @@ int main() {
 
     // Test 5: Client Video Driver Wiring
     std::printf("--- Test 5: Client Video Driver Integration ---\n");
+    class SpyCaptureDriver : public sip_core::IVideoCaptureDriver {
+    public:
+        sip_core::SyntheticVideoCaptureDriver inner;
+        std::atomic<int> start_count{0};
+        std::atomic<int> stop_count{0};
+        std::atomic<int> frame_count{0};
+
+        int start(int width, int height, int fps) override {
+            start_count++;
+            return inner.start(width, height, fps);
+        }
+        void stop() override {
+            stop_count++;
+            inner.stop();
+        }
+        void set_frame_handler(sip_core::FrameHandler handler) override {
+            inner.set_frame_handler([this, handler](const sip_core::VideoFrame &vf) {
+                frame_count++;
+                if (handler) handler(vf);
+            });
+        }
+        void switch_camera() override { inner.switch_camera(); }
+        void set_camera(int position) override { inner.set_camera(position); }
+        void set_enabled(bool enabled) override { inner.set_enabled(enabled); }
+        bool is_enabled() const override { return inner.is_enabled(); }
+    };
+
+    auto spy_driver = std::make_shared<SpyCaptureDriver>();
     auto client = std::make_shared<sip::Client>("1001", "127.0.0.1");
-    client->set_video_capture_driver(synthetic_driver);
-    client->use_synthetic_video_capture();
+    client->set_video_capture_driver(spy_driver);
     rc = client->start();
     TEST_ASSERT(rc == 0, "client->start() failed");
+
+    rc = client->start_local_preview();
+    TEST_ASSERT(rc == 0, "client->start_local_preview() failed");
+    TEST_ASSERT(client->is_local_preview_active(), "Local preview should be active");
+    TEST_ASSERT(spy_driver->start_count.load() == 1, "Custom capture driver start() was not invoked by sip_core");
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(120));
+    TEST_ASSERT(spy_driver->frame_count.load() >= 1, "Custom capture driver did not deliver frames to sip_core");
+
+    rc = client->stop_local_preview();
+    TEST_ASSERT(rc == 0, "client->stop_local_preview() failed");
+    TEST_ASSERT(!client->is_local_preview_active(), "Local preview should not be active after stop");
+    TEST_ASSERT(spy_driver->stop_count.load() == 1, "Custom capture driver stop() was not invoked by sip_core");
+
     client->stop();
     std::printf("PASS: Client video driver wiring verified\n");
 

@@ -32,6 +32,7 @@ class SipCameraCaptureTest {
         // Start local preview
         assertEquals(0, client.startLocalPreview())
         assertTrue("Local preview must be active", client.isLocalPreviewActive)
+        assertTrue("Camera capture must be running when C ABI start callback fires", client.isCameraCaptureRunning)
 
         // Switch camera
         assertEquals(0, client.switchCamera())
@@ -54,6 +55,7 @@ class SipCameraCaptureTest {
         // Stop local preview
         assertEquals(0, client.stopLocalPreview())
         assertFalse("Local preview must not be active", client.isLocalPreviewActive)
+        assertFalse("Camera capture must stop when C ABI stop callback fires", client.isCameraCaptureRunning)
 
         // Test direct frame delivery via nativeDeliverFrame
         val width = 320

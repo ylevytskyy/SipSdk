@@ -40,7 +40,10 @@ struct JniEnvGuard {
     }
 };
 
+struct ClientJniContext;
+
 struct AndroidCaptureState {
+    ClientJniContext *owner{nullptr};
     void (*frame_handler)(const sip_video_frame_t *frame, void *arg){nullptr};
     void *frame_arg{nullptr};
     std::atomic<bool> enabled{true};
@@ -50,15 +53,6 @@ struct AndroidCaptureState {
     std::vector<uint8_t> uPlane;
     std::vector<uint8_t> vPlane;
 };
-
-static int android_capture_start(void *user_data, int width, int height, int fps) {
-    (void)user_data; (void)width; (void)height; (void)fps;
-    return 0;
-}
-
-static void android_capture_stop(void *user_data) {
-    (void)user_data;
-}
 
 static void android_capture_set_frame_handler(void *user_data, void (*handler)(const sip_video_frame_t *, void *), void *arg) {
     auto *st = static_cast<AndroidCaptureState *>(user_data);
@@ -106,11 +100,47 @@ struct ClientJniContext {
     jmethodID onDtmfDigitMethodId = nullptr;
     jmethodID prepareAudioSessionMethodId = nullptr;
     jmethodID releaseAudioSessionMethodId = nullptr;
+    jmethodID onCaptureStartMethodId = nullptr;
+    jmethodID onCaptureStopMethodId = nullptr;
 
     sip_client_t *coreClient = nullptr;
     AndroidCaptureState captureState;
     std::mutex mutex;
 };
+
+static int android_capture_start(void *user_data, int width, int height, int fps) {
+    auto *st = static_cast<AndroidCaptureState *>(user_data);
+    if (!st || !st->owner || !st->owner->javaClientGlobalRef || !st->owner->onCaptureStartMethodId) {
+        return 0;
+    }
+    JniEnvGuard guard;
+    if (!guard.env) return 0;
+    jint rc = guard.env->CallIntMethod(
+        st->owner->javaClientGlobalRef,
+        st->owner->onCaptureStartMethodId,
+        static_cast<jint>(width),
+        static_cast<jint>(height),
+        static_cast<jint>(fps)
+    );
+    if (guard.env->ExceptionCheck()) {
+        guard.env->ExceptionClear();
+        return -1;
+    }
+    return static_cast<int>(rc);
+}
+
+static void android_capture_stop(void *user_data) {
+    auto *st = static_cast<AndroidCaptureState *>(user_data);
+    if (!st || !st->owner || !st->owner->javaClientGlobalRef || !st->owner->onCaptureStopMethodId) {
+        return;
+    }
+    JniEnvGuard guard;
+    if (!guard.env) return;
+    guard.env->CallVoidMethod(st->owner->javaClientGlobalRef, st->owner->onCaptureStopMethodId);
+    if (guard.env->ExceptionCheck()) {
+        guard.env->ExceptionClear();
+    }
+}
 
 static void jni_dispatch_to_main(void (*task)(void *arg), void *arg, void *user_data) {
     auto *ctx = static_cast<ClientJniContext *>(user_data);
@@ -276,6 +306,9 @@ Java_com_sipsdk_SipClient_nativeCreate(JNIEnv *env, jobject thiz) {
     ctx->onDtmfDigitMethodId = env->GetMethodID(clientClass, "onNativeDtmfDigit", "(JLjava/lang/String;)V");
     ctx->prepareAudioSessionMethodId = env->GetMethodID(clientClass, "onNativePrepareAudioSession", "()Z");
     ctx->releaseAudioSessionMethodId = env->GetMethodID(clientClass, "onNativeReleaseAudioSession", "()V");
+    ctx->onCaptureStartMethodId = env->GetMethodID(clientClass, "onNativeCaptureStart", "(III)I");
+    ctx->onCaptureStopMethodId = env->GetMethodID(clientClass, "onNativeCaptureStop", "()V");
+    ctx->captureState.owner = ctx;
 
     // Get mainHandler field from SipClient
     jfieldID handlerField = env->GetFieldID(clientClass, "mainHandler", "Landroid/os/Handler;");
@@ -555,6 +588,33 @@ Java_com_sipsdk_SipCall_nativeIsOnHold(JNIEnv *env, jobject thiz, jlong callHand
     (void)thiz;
     auto *call = reinterpret_cast<sip_call_t *>(callHandle);
     return (call && sip_call_is_on_hold(call)) ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jint JNICALL
+Java_com_sipsdk_SipCall_nativeSetMuted(JNIEnv *env, jobject thiz, jlong callHandle, jboolean muted) {
+    (void)env;
+    (void)thiz;
+    auto *call = reinterpret_cast<sip_call_t *>(callHandle);
+    if (!call) return -1;
+    return sip_call_set_muted(call, muted == JNI_TRUE);
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_sipsdk_SipCall_nativeIsMuted(JNIEnv *env, jobject thiz, jlong callHandle) {
+    (void)env;
+    (void)thiz;
+    auto *call = reinterpret_cast<sip_call_t *>(callHandle);
+    return (call && sip_call_is_muted(call)) ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT void JNICALL
+Java_com_sipsdk_SipClient_nativeCallDestroy(JNIEnv *env, jobject thiz, jlong callHandle) {
+    (void)env;
+    (void)thiz;
+    auto *call = reinterpret_cast<sip_call_t *>(callHandle);
+    if (call) {
+        sip_call_destroy(call);
+    }
 }
 
 JNIEXPORT jint JNICALL

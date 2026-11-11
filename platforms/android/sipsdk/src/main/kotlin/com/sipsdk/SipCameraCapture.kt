@@ -380,17 +380,25 @@ class SipCameraCapture(
     }
 
     private fun startBackgroundThread() {
-        backgroundThread = HandlerThread("SipCameraBackground").apply {
-            start()
-            backgroundHandler = Handler(looper)
+        try {
+            val thread = HandlerThread("SipCameraBackground")
+            thread.start()
+            val looper = thread.looper
+            if (looper != null) {
+                backgroundHandler = Handler(looper)
+            }
+            backgroundThread = thread
+        } catch (_: Throwable) {
+            backgroundThread = null
+            backgroundHandler = null
         }
     }
 
     private fun stopBackgroundThread() {
-        backgroundThread?.quitSafely()
         try {
+            backgroundThread?.quitSafely()
             backgroundThread?.join(500)
-        } catch (_: InterruptedException) {}
+        } catch (_: Throwable) {}
         backgroundThread = null
         backgroundHandler = null
     }

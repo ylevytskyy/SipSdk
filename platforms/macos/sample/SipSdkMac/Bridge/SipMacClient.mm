@@ -834,6 +834,9 @@ static bool set_default_audio_device_by_name(NSString *targetName, bool is_input
         if (pair.second) {
             [pair.second invalidate];
         }
+        if (pair.first) {
+            sip_call_destroy(pair.first);
+        }
     }
     if (c) {
         sip_client_destroy(c);
@@ -1097,8 +1100,20 @@ static bool set_default_audio_device_by_name(NSString *targetName, bool is_input
 
 - (void)removeCall:(sip_call_t *)handle
 {
-    std::lock_guard<std::mutex> lock(_mutex);
-    _activeCalls.erase(handle);
+    if (!handle) return;
+    SipMacCall *removed = nil;
+    {
+        std::lock_guard<std::mutex> lock(_mutex);
+        auto it = _activeCalls.find(handle);
+        if (it != _activeCalls.end()) {
+            removed = it->second;
+            _activeCalls.erase(it);
+        }
+    }
+    if (removed) {
+        [removed invalidate];
+    }
+    sip_call_destroy(handle);
 }
 
 @end

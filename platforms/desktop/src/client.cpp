@@ -57,6 +57,58 @@ static std::string ensure_default_config_dir()
     return base_dir;
 }
 
+static sip_video_capture_driver_t make_c_capture_driver(sip_core::IVideoCaptureDriver *driver)
+{
+    sip_video_capture_driver_t c_drv{};
+    c_drv.user_data = driver;
+    c_drv.start = [](void *ud, int w, int h, int fps) -> int {
+        auto *d = static_cast<sip_core::IVideoCaptureDriver *>(ud);
+        return d ? d->start(w, h, fps) : -1;
+    };
+    c_drv.stop = [](void *ud) {
+        auto *d = static_cast<sip_core::IVideoCaptureDriver *>(ud);
+        if (d) d->stop();
+    };
+    c_drv.set_frame_handler = [](void *ud, void (*handler)(const sip_video_frame_t *, void *), void *arg) {
+        auto *d = static_cast<sip_core::IVideoCaptureDriver *>(ud);
+        if (!d) return;
+        if (!handler) {
+            d->set_frame_handler(nullptr);
+            return;
+        }
+        d->set_frame_handler([handler, arg](const sip_core::VideoFrame &vf) {
+            sip_video_frame_t cf{};
+            cf.width = vf.width;
+            cf.height = vf.height;
+            cf.y = vf.y;
+            cf.u = vf.u;
+            cf.v = vf.v;
+            cf.y_stride = vf.y_stride;
+            cf.u_stride = vf.u_stride;
+            cf.v_stride = vf.v_stride;
+            cf.timestamp_ns = vf.timestamp_ns;
+            handler(&cf, arg);
+        });
+    };
+    c_drv.switch_camera = [](void *ud) {
+        auto *d = static_cast<sip_core::IVideoCaptureDriver *>(ud);
+        if (d) d->switch_camera();
+    };
+    c_drv.set_camera = [](void *ud, int pos) {
+        auto *d = static_cast<sip_core::IVideoCaptureDriver *>(ud);
+        if (d) d->set_camera(pos);
+    };
+    c_drv.set_enabled = [](void *ud, bool en) {
+        auto *d = static_cast<sip_core::IVideoCaptureDriver *>(ud);
+        if (d) d->set_enabled(en);
+    };
+    c_drv.is_enabled = [](void *ud) -> bool {
+        auto *d = static_cast<sip_core::IVideoCaptureDriver *>(ud);
+        return d ? d->is_enabled() : false;
+    };
+    return c_drv;
+}
+
 std::string Client::get_version()
 {
     return "1.0.0-desktop";
@@ -214,6 +266,11 @@ int Client::start(const std::string &config_path)
         return -1;
     }
 
+    if (m_capture_driver) {
+        sip_video_capture_driver_t c_drv = make_c_capture_driver(m_capture_driver.get());
+        sip_client_set_video_capture_driver(m_client, &c_drv);
+    }
+
     std::string resolved_path = config_path.empty() ? ensure_default_config_dir() : config_path;
     int rc = sip_client_init(m_client, resolved_path.c_str());
     if (rc != 0) {
@@ -245,6 +302,9 @@ void Client::stop()
     for (auto &pair : calls_to_invalidate) {
         if (pair.second) {
             pair.second->invalidate();
+        }
+        if (pair.first) {
+            sip_call_destroy(pair.first);
         }
     }
     if (c) {
@@ -349,11 +409,40 @@ void Client::set_video_capture_driver(std::shared_ptr<sip_core::IVideoCaptureDri
 {
     std::lock_guard<std::mutex> lock(m_mutex);
     m_capture_driver = std::move(driver);
+    if (m_client) {
+        if (m_capture_driver) {
+            sip_video_capture_driver_t c_drv = make_c_capture_driver(m_capture_driver.get());
+            sip_client_set_video_capture_driver(m_client, &c_drv);
+        } else {
+            sip_client_set_video_capture_driver(m_client, nullptr);
+        }
+    }
 }
 
 void Client::use_synthetic_video_capture()
 {
     set_video_capture_driver(std::make_shared<sip_core::SyntheticVideoCaptureDriver>());
+}
+
+int Client::start_local_preview()
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (!m_client) return -1;
+    return sip_client_start_local_preview(m_client);
+}
+
+int Client::stop_local_preview()
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (!m_client) return -1;
+    return sip_client_stop_local_preview(m_client);
+}
+
+bool Client::is_local_preview_active() const
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (!m_client) return false;
+    return sip_client_is_local_preview_active(m_client);
 }
 
 std::shared_ptr<Call> Client::get_or_create_call(sip_call_t *handle)
@@ -371,8 +460,20 @@ std::shared_ptr<Call> Client::get_or_create_call(sip_call_t *handle)
 
 void Client::remove_call(sip_call_t *handle)
 {
-    std::lock_guard<std::mutex> lock(m_mutex);
-    m_active_calls.erase(handle);
+    if (!handle) return;
+    std::shared_ptr<Call> removed;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        auto it = m_active_calls.find(handle);
+        if (it != m_active_calls.end()) {
+            removed = std::move(it->second);
+            m_active_calls.erase(it);
+        }
+    }
+    if (removed) {
+        removed->invalidate();
+    }
+    sip_call_destroy(handle);
 }
 
 } // namespace sip

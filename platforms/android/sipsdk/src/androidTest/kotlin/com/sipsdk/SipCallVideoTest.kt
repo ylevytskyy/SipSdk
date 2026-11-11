@@ -126,10 +126,14 @@ class SipCallVideoTest {
         assertEquals(0, client.setLocalVideoEnabled(true))
         assertTrue(client.isLocalVideoEnabled)
 
+        // Stop standalone local preview before hangup so call close must stop camera capture
+        assertEquals(0, client.stopLocalPreview())
+
         // Hangup cleanly
         assertEquals(0, call.hangup())
         assertTrue("Timeout waiting for call to close", closedLatch.await(5, TimeUnit.SECONDS))
         assertTrue("Call must be closed", callClosed)
+        assertFalse("Camera capture must stop after video call closes", client.isCameraCaptureRunning)
 
         client.stop()
     }
