@@ -130,8 +130,14 @@ public final class SipCallKitCoordinator: NSObject, CXProviderDelegate {
 
     /// Tells CallKit that a SIP call closed, so the system call UI does not stay up.
     func reportCallClosed(_ call: SipCall, code: Int) {
+        reportCallEnded(call, reason: Self.endedReason(forCloseCode: code))
+    }
+
+    /// Tells CallKit that a call it knows about ended. Calls CallKit never saw,
+    /// or already ended itself, are skipped.
+    func reportCallEnded(_ call: SipCall, reason: CXCallEndedReason) {
         guard callKitCallIDs.remove(call.id) != nil else { return }
-        system.reportCall(with: call.id, endedAt: Date(), reason: Self.endedReason(forCloseCode: code))
+        system.reportCall(with: call.id, endedAt: Date(), reason: reason)
     }
 
     /// Maps the code a call closed with to a CallKit end reason. The core passes

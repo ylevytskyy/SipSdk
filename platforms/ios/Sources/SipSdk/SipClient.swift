@@ -207,9 +207,11 @@ public final class SipClient {
     public func stop() async {
         guard isStarted else { return }
 
-        // Hangup any calls
+        // Hang up any calls. Their close events are dropped once the engine
+        // stops, so tell CallKit here that they ended.
         for call in calls {
             await call.hangup()
+            callKit.reportCallEnded(call, reason: .failed)
         }
         calls.removeAll()
 

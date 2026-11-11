@@ -414,6 +414,28 @@ final class SipSdkTests: XCTestCase {
         await client.stop()
     }
 
+    // Given an incoming call that was reported to CallKit,
+    // when the app stops the client during the call,
+    // then CallKit is told once that the call ended, with reason failed.
+    @MainActor
+    func testCallKitIsToldWhenClientStopsDuringCall() async throws {
+        let peer = LoopbackPeer(port: 15102)
+        defer { peer.stop() }
+        let (client, callKit) = try await startClientWithFakeCallKit(peer: peer)
+
+        peer.sendInvite()
+        try await waitUntil { !callKit.reportedIncoming.isEmpty }
+        guard let call = client.calls.first else {
+            XCTFail("the incoming call never arrived")
+            await client.stop()
+            return
+        }
+
+        await client.stop()
+
+        XCTAssertEqual(callKit.endedCalls, [.init(uuid: call.id, reason: .failed)])
+    }
+
     /// A coordinator whose CallKit calls go to a fake, with no SIP engine behind it.
     @MainActor
     private func makeCoordinatorWithFakeCallKit() -> (SipCallKitCoordinator, FakeCallKitSystem) {
