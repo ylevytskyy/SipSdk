@@ -60,6 +60,9 @@ add_library(sip_core_dll SHARED
     ${CORE_DIR}/src/engine.cpp
     ${CORE_DIR}/src/media_driver.cpp
     ${CORE_DIR}/src/sip_abi.cpp
+    src/media/mf_capture.cpp
+    src/media/mf_codec.cpp
+    src/media/mf_renderer.cpp
 )
 
 set_target_properties(sip_core_dll PROPERTIES

@@ -3,20 +3,38 @@
 #include <cassert>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <thread>
 #include <vector>
 
-static int g_captured_frames = 0;
-static int g_last_width = 0;
-static int g_last_height = 0;
+#undef assert
+#define assert(cond) \
+    do { \
+        if (!(cond)) { \
+            std::fprintf(stderr, "FAIL: %s (%s:%d)\n", #cond, __FILE__, __LINE__); \
+            std::exit(1); \
+        } \
+    } while (0)
+
+static std::atomic<int> g_captured_frames{0};
+static std::atomic<int> g_last_width{0};
+static std::atomic<int> g_last_height{0};
+static std::atomic<bool> g_in_callback{false};
+static std::atomic<int> g_callback_DelayMs{0};
 
 static void on_test_frame_captured(const sip_video_frame_t *frame, void *arg)
 {
     (void)arg;
     if (frame) {
-        g_captured_frames++;
-        g_last_width = frame->width;
-        g_last_height = frame->height;
+        g_in_callback.store(true);
+        int delay = g_callback_DelayMs.load();
+        if (delay > 0) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(delay));
+        }
+        g_captured_frames.fetch_add(1);
+        g_last_width.store(frame->width);
+        g_last_height.store(frame->height);
+        g_in_callback.store(false);
     }
 }
 
@@ -39,14 +57,26 @@ int main()
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
 
-        assert(g_captured_frames > 0);
-        assert(g_last_width == 320);
-        assert(g_last_height == 240);
+        assert(g_captured_frames.load() > 0);
+        assert(g_last_width.load() == 320);
+        assert(g_last_height.load() == 240);
         printf("PASS: Capture driver generated %d frames (width=%d, height=%d, synthetic=%s)\n",
-               g_captured_frames, g_last_width, g_last_height,
+               g_captured_frames.load(), g_last_width.load(), g_last_height.load(),
                capture_driver.is_using_synthetic() ? "true" : "false");
 
+        // Verify stop() joins worker thread and waits for any in-flight callback before returning
+        g_callback_DelayMs.store(30);
+        for (int i = 0; i < 50 && !g_in_callback.load(); ++i) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+        assert(g_in_callback.load());
+
         capture_driver.stop();
+        assert(!g_in_callback.load());
+        int count_at_stop = g_captured_frames.load();
+        std::this_thread::sleep_for(std::chrono::milliseconds(40));
+        assert(g_captured_frames.load() == count_at_stop);
+        g_callback_DelayMs.store(0);
     }
 
     // 2. Test Video Codec Driver (H.264 MFT)
