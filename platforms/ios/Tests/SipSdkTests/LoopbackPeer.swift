@@ -20,6 +20,7 @@ final class LoopbackPeer: @unchecked Sendable {
     var acknowledged: Bool = false
     var lastRequest: String = ""
     var lastRegisterRequest: String = ""
+    private var incomingInviteUri: String?
 
     init(port: UInt16) {
         self.port = port
@@ -103,6 +104,9 @@ final class LoopbackPeer: @unchecked Sendable {
               let start = contact.firstIndex(of: "<"),
               let end = contact.firstIndex(of: ">") else { return }
         let requestUri = String(contact[contact.index(after: start)..<end])
+        lock.lock()
+        incomingInviteUri = requestUri
+        lock.unlock()
 
         let sdp = "v=0\r\n" +
             "o=- 654321 654321 IN IP4 127.0.0.1\r\n" +
@@ -126,6 +130,30 @@ final class LoopbackPeer: @unchecked Sendable {
             sdp
 
         if let data = invite.data(using: .utf8) {
+            conn.send(content: data, completion: .idempotent)
+        }
+    }
+
+    /// Cancels the INVITE from `sendInvite()`, like a caller who hangs up before the answer.
+    func sendCancel() {
+        lock.lock()
+        let requestUri = incomingInviteUri
+        let conn = connection
+        lock.unlock()
+
+        guard let conn = conn, let requestUri = requestUri else { return }
+
+        // CANCEL repeats the INVITE's Request-URI, Via branch, From, To, Call-ID and CSeq number (RFC 3261 §9.1).
+        let cancel = "CANCEL \(requestUri) SIP/2.0\r\n" +
+            "Via: SIP/2.0/UDP 127.0.0.1:\(port);branch=z9hG4bK-incoming-\(port);rport\r\n" +
+            "Max-Forwards: 70\r\n" +
+            "From: <sip:peer@127.0.0.1:\(port)>;tag=peer-from-\(port)\r\n" +
+            "To: <\(requestUri)>\r\n" +
+            "Call-ID: incoming-\(port)@127.0.0.1\r\n" +
+            "CSeq: 1 CANCEL\r\n" +
+            "Content-Length: 0\r\n\r\n"
+
+        if let data = cancel.data(using: .utf8) {
             conn.send(content: data, completion: .idempotent)
         }
     }

@@ -297,6 +297,228 @@ final class SipSdkTests: XCTestCase {
         await client.stop()
     }
 
+    // MARK: - CallKit end reports (RES-9)
+
+    /// Starts a registered client whose CallKit calls go to a fake instead of the system.
+    @MainActor
+    private func startClientWithFakeCallKit(peer: LoopbackPeer) async throws -> (SipClient, FakeCallKitSystem) {
+        let client = try await startRegisteredClient(peer: peer)
+        let callKit = FakeCallKitSystem()
+        client.callKit.system = callKit
+        client.callKit.isEnabled = true
+        return (client, callKit)
+    }
+
+    /// Polls on the main actor until `condition` holds or about five seconds pass.
+    @MainActor
+    private func waitUntil(_ condition: () -> Bool) async throws {
+        var wait = 0
+        while !condition() && wait < 50 {
+            try await Task.sleep(nanoseconds: 100_000_000)
+            wait += 1
+        }
+    }
+
+    // Given an incoming call that was reported to CallKit,
+    // when the caller cancels it before the answer,
+    // then CallKit is told once that the call ended.
+    @MainActor
+    func testCallKitIsToldWhenCallerCancelsIncomingCall() async throws {
+        let peer = LoopbackPeer(port: 15097)
+        defer { peer.stop() }
+        let (client, callKit) = try await startClientWithFakeCallKit(peer: peer)
+
+        peer.sendInvite()
+        try await waitUntil { !callKit.reportedIncoming.isEmpty }
+        guard let call = client.calls.first else {
+            XCTFail("the incoming call never arrived")
+            await client.stop()
+            return
+        }
+        XCTAssertEqual(callKit.reportedIncoming, [call.id])
+
+        peer.sendCancel()
+        try await waitUntil { call.state.isClosed }
+        XCTAssertTrue(call.state.isClosed)
+        XCTAssertEqual(callKit.endedCalls, [.init(uuid: call.id, reason: .remoteEnded)])
+
+        await client.stop()
+    }
+
+    // Given an outgoing call placed with `makeCall`, which CallKit never saw,
+    // when the call ends,
+    // then CallKit is not told about it.
+    @MainActor
+    func testCallKitIsNotToldAboutCallItNeverSaw() async throws {
+        let peer = LoopbackPeer(port: 15098)
+        defer { peer.stop() }
+        let (client, callKit) = try await startClientWithFakeCallKit(peer: peer)
+
+        // The loopback peer always answers with audio and video, so offer both.
+        let call = try await client.makeCall(to: "sip:echo@127.0.0.1:15098", withVideo: true)
+        try await waitUntil { call.state == .established || call.state.isClosed }
+        XCTAssertEqual(call.state, .established)
+
+        await call.hangup()
+        try await waitUntil { call.state.isClosed }
+        XCTAssertTrue(call.state.isClosed)
+        XCTAssertEqual(callKit.endedCalls, [])
+
+        await client.stop()
+    }
+
+    // Given an incoming call that was reported to CallKit,
+    // when the user ends it from the CallKit UI,
+    // then CallKit is not told a second time that the call ended.
+    @MainActor
+    func testCallKitIsNotToldAgainWhenItEndedTheCall() async throws {
+        let peer = LoopbackPeer(port: 15099)
+        defer { peer.stop() }
+        let (client, callKit) = try await startClientWithFakeCallKit(peer: peer)
+
+        peer.sendInvite()
+        try await waitUntil { !callKit.reportedIncoming.isEmpty }
+        guard let call = client.calls.first else {
+            XCTFail("the incoming call never arrived")
+            await client.stop()
+            return
+        }
+
+        client.callKit.provider(client.callKit.provider, perform: CXEndCallAction(call: call.id))
+        try await waitUntil { call.state.isClosed }
+        XCTAssertTrue(call.state.isClosed)
+        XCTAssertEqual(callKit.endedCalls, [])
+
+        await client.stop()
+    }
+
+    // Given an outgoing call started through CallKit,
+    // when the app hangs it up directly instead of through CallKit,
+    // then CallKit is told that the call ended.
+    @MainActor
+    func testCallKitIsToldWhenAppHangsUpCallStartedThroughCallKit() async throws {
+        let peer = LoopbackPeer(port: 15100)
+        defer { peer.stop() }
+        let (client, callKit) = try await startClientWithFakeCallKit(peer: peer)
+
+        // The loopback peer always answers with audio and video, so offer both.
+        let call = try await client.callKit.startCall(to: "sip:echo@127.0.0.1:15100", withVideo: true)
+        try await waitUntil { call.state == .established || call.state.isClosed }
+        XCTAssertEqual(call.state, .established)
+
+        await call.hangup()
+        try await waitUntil { call.state.isClosed }
+        XCTAssertTrue(call.state.isClosed)
+        XCTAssertEqual(callKit.endedCalls.map(\.uuid), [call.id])
+
+        await client.stop()
+    }
+
+    /// A coordinator whose CallKit calls go to a fake, with no SIP engine behind it.
+    @MainActor
+    private func makeCoordinatorWithFakeCallKit() -> (SipCallKitCoordinator, FakeCallKitSystem) {
+        let coordinator = SipCallKitCoordinator(localizedName: "TestCoordinator")
+        let callKit = FakeCallKitSystem()
+        coordinator.system = callKit
+        coordinator.isEnabled = true
+        return (coordinator, callKit)
+    }
+
+    @MainActor
+    private func makeIncomingCall(state: SipCallState = .incoming) -> SipCall {
+        SipCall(coreCall: nil, remoteUri: "sip:peer@127.0.0.1", isOutgoing: false, initialState: state)
+    }
+
+    // Given a call that CallKit knows about,
+    // when the call closes with a SIP or local error code,
+    // then CallKit gets the end reason for that code.
+    @MainActor
+    func testCallKitEndReasonFollowsCloseCode() async throws {
+        let (coordinator, callKit) = makeCoordinatorWithFakeCallKit()
+        let expected: [(code: Int, reason: CXCallEndedReason)] = [
+            (0, .remoteEnded),            // BYE or CANCEL: the core passes no status code
+            (200, .remoteEnded),
+            (486, .remoteEnded),          // Busy Here
+            (487, .remoteEnded),          // Request Terminated
+            (600, .remoteEnded),          // Busy Everywhere
+            (603, .remoteEnded),          // Decline
+            (408, .unanswered),           // Request Timeout
+            (480, .unanswered),           // Temporarily Unavailable
+            (404, .failed),               // Not Found
+            (503, .failed),               // Service Unavailable
+            (Int(EIO), .failed),          // local error from the core, not a SIP code
+        ]
+
+        for (code, reason) in expected {
+            let call = makeIncomingCall()
+            try await coordinator.reportIncomingCall(call)
+            coordinator.reportCallClosed(call, code: code)
+            XCTAssertEqual(callKit.endedCalls.last, .init(uuid: call.id, reason: reason), "close code \(code)")
+        }
+    }
+
+    // Given an incoming call that closed before its CallKit report ran,
+    // when the report runs,
+    // then CallKit is not shown the call, so no ringing UI is left behind.
+    @MainActor
+    func testClosedCallIsNotReportedToCallKitAsIncoming() async throws {
+        let (coordinator, callKit) = makeCoordinatorWithFakeCallKit()
+        let call = makeIncomingCall(state: .closed(code: 0, reason: "Connection reset by peer"))
+
+        try await coordinator.reportIncomingCall(call)
+
+        XCTAssertEqual(callKit.reportedIncoming, [])
+    }
+
+    // Given an incoming call whose CallKit report has not finished yet,
+    // when the call closes,
+    // then CallKit is still told that the call ended.
+    @MainActor
+    func testCallKitIsToldWhenCallClosesDuringIncomingReport() async throws {
+        let (coordinator, callKit) = makeCoordinatorWithFakeCallKit()
+        callKit.holdsCalls = true
+        let call = makeIncomingCall()
+
+        let report = Task { try await coordinator.reportIncomingCall(call) }
+        try await waitUntil { !callKit.reportedIncoming.isEmpty }
+        coordinator.reportCallClosed(call, code: 0)
+        callKit.finishHeldCalls()
+        try await report.value
+
+        XCTAssertEqual(callKit.endedCalls.map(\.uuid), [call.id])
+    }
+
+    // Given an outgoing call whose CallKit start request has not finished yet,
+    // when the app hangs the call up,
+    // then CallKit is still told that the call ended.
+    @MainActor
+    func testCallKitIsToldWhenCallClosesDuringStartRequest() async throws {
+        let peer = LoopbackPeer(port: 15101)
+        defer { peer.stop() }
+        let (client, callKit) = try await startClientWithFakeCallKit(peer: peer)
+        callKit.holdsCalls = true
+
+        // The loopback peer always answers with audio and video, so offer both.
+        let start = Task { try await client.callKit.startCall(to: "sip:echo@127.0.0.1:15101", withVideo: true) }
+        try await waitUntil { !callKit.requestedActions.isEmpty }
+        guard let call = client.calls.first else {
+            XCTFail("the outgoing call was never created")
+            callKit.finishHeldCalls()
+            await client.stop()
+            return
+        }
+
+        await call.hangup()
+        try await waitUntil { call.state.isClosed }
+        callKit.finishHeldCalls()
+        _ = try await start.value
+
+        XCTAssertTrue(call.state.isClosed)
+        XCTAssertEqual(callKit.endedCalls.map(\.uuid), [call.id])
+
+        await client.stop()
+    }
+
     @MainActor
     func testEventsQueuedBeforeStopAreDroppedAfterStop() async throws {
         let peer = LoopbackPeer(port: 15092)

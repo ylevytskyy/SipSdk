@@ -409,6 +409,7 @@ public final class SipClient {
             calls.removeAll(where: { $0.id == sipCall.id })
             sip_call_destroy(callHandle)
             sipCall.coreCall = nil
+            callKit.reportCallClosed(sipCall, code: code)
             IosAudioManager.shared.releaseCallAudioSessionIfIdle()
         }
     }
