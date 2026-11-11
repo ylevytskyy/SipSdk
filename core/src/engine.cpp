@@ -199,6 +199,10 @@ int Engine::init_on_loop_thread(const char *config_path)
             cfg->video.bitrate = 512000;
         }
         cfg->video.enc_fmt = VID_FMT_YUV420P;
+
+        std::lock_guard<std::mutex> audio_driver_lock(m_audio_driver_mutex);
+        m_audio_src_mod = cfg->audio.src_mod;
+        m_audio_play_mod = cfg->audio.play_mod;
     }
 
     rc = baresip_init(conf_config());
@@ -442,8 +446,9 @@ int Engine::unregister_account()
 
 bool Engine::is_registered() const
 {
-    std::lock_guard<std::mutex> lock(m_mutex);
-    return m_is_registered.load() && m_ua != nullptr && ua_isregistered(m_ua);
+    // Only the SIP thread may touch m_ua: it destroys and replaces the UA on
+    // re-register. The registration events keep this flag in step with it.
+    return m_is_registered.load();
 }
 
 struct sdp_media_internal {
@@ -895,31 +900,73 @@ bool Engine::is_client_mic_muted() const
     return m_mic_muted.load();
 }
 
+namespace {
+
+/// One set_audio_driver request. A null argument keeps the current value; an
+/// empty module name keeps the configured module.
+struct AudioDriverChange {
+    bool has_src_mod{false};
+    bool has_src_dev{false};
+    bool has_play_mod{false};
+    bool has_play_dev{false};
+    std::string src_mod;
+    std::string src_dev;
+    std::string play_mod;
+    std::string play_dev;
+};
+
+void write_audio_config(struct config *cfg, const AudioDriverChange &change)
+{
+    if (change.has_src_mod && !change.src_mod.empty()) {
+        snprintf(cfg->audio.src_mod, sizeof(cfg->audio.src_mod), "%s", change.src_mod.c_str());
+    }
+    if (change.has_src_dev) {
+        snprintf(cfg->audio.src_dev, sizeof(cfg->audio.src_dev), "%s", change.src_dev.c_str());
+    }
+    if (change.has_play_mod && !change.play_mod.empty()) {
+        snprintf(cfg->audio.play_mod, sizeof(cfg->audio.play_mod), "%s", change.play_mod.c_str());
+    }
+    if (change.has_play_dev) {
+        snprintf(cfg->audio.play_dev, sizeof(cfg->audio.play_dev), "%s", change.play_dev.c_str());
+    }
+}
+
+} // namespace
+
 int Engine::set_audio_driver(const char *src_mod, const char *src_dev, const char *play_mod, const char *play_dev)
 {
-    struct config *cfg = conf_config();
-    if (!cfg) return -1;
-    if (src_mod && std::strlen(src_mod) > 0) {
-        snprintf(cfg->audio.src_mod, sizeof(cfg->audio.src_mod), "%s", src_mod);
-    }
-    if (src_dev) {
-        snprintf(cfg->audio.src_dev, sizeof(cfg->audio.src_dev), "%s", src_dev);
-    }
-    if (play_mod && std::strlen(play_mod) > 0) {
-        snprintf(cfg->audio.play_mod, sizeof(cfg->audio.play_mod), "%s", play_mod);
-    }
-    if (play_dev) {
-        snprintf(cfg->audio.play_dev, sizeof(cfg->audio.play_dev), "%s", play_dev);
+    if (!conf_config()) return -1;
+
+    AudioDriverChange change;
+    change.has_src_mod = src_mod != nullptr;
+    change.has_src_dev = src_dev != nullptr;
+    change.has_play_mod = play_mod != nullptr;
+    change.has_play_dev = play_dev != nullptr;
+    change.src_mod = src_mod ? src_mod : "";
+    change.src_dev = src_dev ? src_dev : "";
+    change.play_mod = play_mod ? play_mod : "";
+    change.play_dev = play_dev ? play_dev : "";
+
+    {
+        std::lock_guard<std::mutex> lock(m_audio_driver_mutex);
+        if (!change.src_mod.empty()) m_audio_src_mod = change.src_mod;
+        if (!change.play_mod.empty()) m_audio_play_mod = change.play_mod;
     }
 
-    std::string s_mod = src_mod ? src_mod : (cfg ? cfg->audio.src_mod : "");
-    std::string s_dev = src_dev ? src_dev : (cfg ? cfg->audio.src_dev : "");
-    std::string p_mod = play_mod ? play_mod : (cfg ? cfg->audio.play_mod : "");
-    std::string p_dev = play_dev ? play_dev : (cfg ? cfg->audio.play_dev : "");
-    bool has_src = (src_mod != nullptr || src_dev != nullptr);
-    bool has_play = (play_mod != nullptr || play_dev != nullptr);
+    // Baresip reads its config on the SIP thread without a lock, so only that
+    // thread may change it while the engine runs.
+    bool posted = post_task([this, change]() {
+        struct config *cfg = conf_config();
+        if (!cfg) return;
+        write_audio_config(cfg, change);
 
-    post_task([this, s_mod, s_dev, p_mod, p_dev, has_src, has_play]() {
+        std::string s_mod = change.has_src_mod ? change.src_mod : cfg->audio.src_mod;
+        std::string s_dev = change.has_src_dev ? change.src_dev : cfg->audio.src_dev;
+        std::string p_mod = change.has_play_mod ? change.play_mod : cfg->audio.play_mod;
+        std::string p_dev = change.has_play_dev ? change.play_dev : cfg->audio.play_dev;
+        bool has_src = change.has_src_mod || change.has_src_dev;
+        bool has_play = change.has_play_mod || change.has_play_dev;
+
         std::lock_guard<std::mutex> lock(m_calls_mutex);
         for (auto *sess : m_all_calls) {
             if (!sess || sess->raw_call() == nullptr || sess->is_closed()) continue;
@@ -936,18 +983,24 @@ int Engine::set_audio_driver(const char *src_mod, const char *src_dev, const cha
         }
     });
 
+    // Not running yet: no SIP thread reads the config, so write it here. A call
+    // made while the engine starts or stops is not supported.
+    if (!posted && !m_stopping.load()) {
+        write_audio_config(conf_config(), change);
+    }
+
     return 0;
 }
 
 int Engine::get_audio_driver(char *src_mod, size_t src_mod_sz, char *play_mod, size_t play_mod_sz) const
 {
-    struct config *cfg = conf_config();
-    if (!cfg) return -1;
+    if (!conf_config()) return -1;
+    std::lock_guard<std::mutex> lock(m_audio_driver_mutex);
     if (src_mod && src_mod_sz > 0) {
-        snprintf(src_mod, src_mod_sz, "%s", cfg->audio.src_mod);
+        snprintf(src_mod, src_mod_sz, "%s", m_audio_src_mod.c_str());
     }
     if (play_mod && play_mod_sz > 0) {
-        snprintf(play_mod, play_mod_sz, "%s", cfg->audio.play_mod);
+        snprintf(play_mod, play_mod_sz, "%s", m_audio_play_mod.c_str());
     }
     return 0;
 }

@@ -132,6 +132,13 @@ private:
     std::mutex m_audio_session_mutex;
     std::atomic<bool> m_is_registered{false};
 
+    // Audio driver names that get_audio_driver reports: the ones configured at
+    // start, then the last ones set. Baresip's config is only changed on the
+    // SIP thread, so get_audio_driver reads these instead.
+    mutable std::mutex m_audio_driver_mutex;
+    std::string m_audio_src_mod;
+    std::string m_audio_play_mod;
+
     struct mqueue *m_mq{nullptr};
     struct ua *m_ua{nullptr};
     bool m_events_registered{false};

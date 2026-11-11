@@ -209,9 +209,26 @@ if(BARESIP_LIBRARY)
             ${BARESIP_LIBRARY}
     )
 
+    add_executable(sip_core_engine_threading_test
+        tests/test_engine_threading.cpp
+    )
+
+    target_include_directories(sip_core_engine_threading_test
+        PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/include
+            ${BARESIP_INCLUDE_DIR}
+    )
+
+    target_link_libraries(sip_core_engine_threading_test
+        PRIVATE
+            sip_core
+            ${BARESIP_LIBRARY}
+    )
+
     enable_testing()
     add_test(NAME core_capture_driver_adapter COMMAND sip_core_capture_driver_test)
     add_test(NAME core_call_session COMMAND sip_core_call_session_test)
+    add_test(NAME core_engine_threading COMMAND sip_core_engine_threading_test)
 
     if(APPLE)
         target_link_libraries(sip_core_lifecycle_test
@@ -231,6 +248,22 @@ if(BARESIP_LIBRARY)
         )
 
         target_link_libraries(sip_core_registration_test
+            PRIVATE
+                "-framework Foundation"
+                "-framework CoreFoundation"
+                "-framework SystemConfiguration"
+                "-framework CoreAudio"
+                "-framework AudioToolbox"
+                "-framework AVFoundation"
+                "-framework CFNetwork"
+                "-framework CoreMedia"
+                "-framework CoreVideo"
+                "-framework VideoToolbox"
+                z
+                m
+        )
+
+        target_link_libraries(sip_core_engine_threading_test
             PRIVATE
                 "-framework Foundation"
                 "-framework CoreFoundation"
@@ -326,5 +359,6 @@ if(BARESIP_LIBRARY)
         target_link_libraries(sip_core_video_streaming_test PRIVATE ${CORE_TEST_LINUX_LIBS})
         target_link_libraries(sip_core_capture_driver_test PRIVATE ${CORE_TEST_LINUX_LIBS})
         target_link_libraries(sip_core_call_session_test PRIVATE ${CORE_TEST_LINUX_LIBS})
+        target_link_libraries(sip_core_engine_threading_test PRIVATE ${CORE_TEST_LINUX_LIBS})
     endif()
 endif()

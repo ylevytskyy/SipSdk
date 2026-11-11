@@ -136,6 +136,7 @@ SIP_ABI_EXPORT int sip_client_unregister(sip_client_t *client);
 
 /**
  * Checks whether the client currently has a registered SIP user agent.
+ * Safe to call from any thread: it reads the state from the last registration event.
  */
 SIP_ABI_EXPORT bool sip_client_is_registered(const sip_client_t *client);
 
@@ -314,11 +315,15 @@ typedef struct sip_video_codec_driver_t {
 
 /**
  * Configures the active audio driver and devices (e.g. "pulse", "alsa", "audiounit").
+ * A null argument keeps the current value; an empty module name keeps the current module.
+ * While the client runs, the change is applied on the SIP thread, after work already queued there.
+ * Do not call it while sip_client_init or sip_client_destroy runs on another thread.
  */
 SIP_ABI_EXPORT int sip_client_set_audio_driver(sip_client_t *client, const char *src_mod, const char *src_dev, const char *play_mod, const char *play_dev);
 
 /**
- * Retrieves the currently active audio driver names.
+ * Retrieves the audio driver names: the ones configured at init, or the last ones set
+ * with sip_client_set_audio_driver, even if the SIP thread has not applied them yet.
  */
 SIP_ABI_EXPORT int sip_client_get_audio_driver(const sip_client_t *client, char *src_mod, size_t src_mod_sz, char *play_mod, size_t play_mod_sz);
 
