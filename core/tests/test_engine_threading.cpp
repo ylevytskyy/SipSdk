@@ -374,6 +374,35 @@ static void test_set_audio_driver_before_start_writes_config()
     std::printf("PASS\n");
 }
 
+// Given a client that has just started, with no driver set by the app,
+// when the app reads the audio driver,
+// then it reads the drivers baresip was configured with at start.
+static void test_get_audio_driver_returns_configured_drivers_after_start()
+{
+    std::printf("--- Test 6: get_audio_driver returns the configured drivers after start ---\n");
+    FakeRegistrar registrar;
+    CHECK(registrar.start(), "fake registrar did not start");
+    sip_client_t *client = start_client();
+    hold_sip_thread(client, registrar);
+
+    // The SIP thread is held, so reading its config here does not race.
+    std::string configured_src = conf_config()->audio.src_mod;
+    std::string configured_play = conf_config()->audio.play_mod;
+#if defined(__APPLE__)
+    // Engine start fills in audiounit when the config names no module.
+    CHECK(!configured_src.empty() && !configured_play.empty(), "no audio driver configured at start");
+#endif
+    char src[64] = {};
+    char play[64] = {};
+    CHECK(sip_client_get_audio_driver(client, src, sizeof(src), play, sizeof(play)) == 0, "get_audio_driver failed");
+    CHECK(configured_src == src, "get_audio_driver did not return the configured source");
+    CHECK(configured_play == play, "get_audio_driver did not return the configured player");
+
+    release_sip_thread();
+    sip_client_destroy(client);
+    std::printf("PASS\n");
+}
+
 /// With no arguments, runs every test; otherwise only the test numbers given.
 static bool should_run(int argc, char *argv[], int number)
 {
@@ -396,6 +425,7 @@ int main(int argc, char *argv[])
     if (should_run(argc, argv, 3)) test_set_audio_driver_changes_config_on_sip_thread();
     if (should_run(argc, argv, 4)) test_get_audio_driver_returns_driver_just_set();
     if (should_run(argc, argv, 5)) test_set_audio_driver_before_start_writes_config();
+    if (should_run(argc, argv, 6)) test_get_audio_driver_returns_configured_drivers_after_start();
 
     std::printf("ALL ENGINE THREADING TESTS PASSED\n");
     return 0;
