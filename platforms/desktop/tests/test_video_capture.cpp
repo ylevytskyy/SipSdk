@@ -144,6 +144,49 @@ int main() {
     client->stop();
     std::printf("PASS: Client video driver wiring verified\n");
 
+    // Test 6: Given a started client that is the only owner of capture driver A,
+    // when the app replaces A with driver B,
+    // then the engine does not call A after the client has released it.
+    std::printf("--- Test 6: Replacing the Client Capture Driver ---\n");
+    class ReleaseTrackingDriver : public sip_core::IVideoCaptureDriver {
+    public:
+        std::atomic<bool> released{false};
+        std::atomic<int> calls_after_release{0};
+
+        void note_call() {
+            if (released.load()) calls_after_release++;
+        }
+        int start(int, int, int) override { note_call(); return 0; }
+        void stop() override { note_call(); }
+        void set_frame_handler(sip_core::FrameHandler) override { note_call(); }
+        void switch_camera() override { note_call(); }
+        void set_camera(int) override { note_call(); }
+        void set_enabled(bool) override { note_call(); }
+        bool is_enabled() const override { return true; }
+    };
+
+    // The deleter only marks driver A as released and keeps its memory, so a
+    // late call is counted instead of touching freed memory.
+    auto *driver_a = new ReleaseTrackingDriver();
+    {
+        auto replace_client = std::make_shared<sip::Client>("1001", "127.0.0.1");
+        rc = replace_client->start();
+        TEST_ASSERT(rc == 0, "replace_client->start() failed");
+
+        replace_client->set_video_capture_driver(std::shared_ptr<sip_core::IVideoCaptureDriver>(
+            driver_a, [](sip_core::IVideoCaptureDriver *d) {
+                static_cast<ReleaseTrackingDriver *>(d)->released.store(true);
+            }));
+        replace_client->set_video_capture_driver(std::make_shared<sip_core::SyntheticVideoCaptureDriver>());
+
+        TEST_ASSERT(driver_a->released.load(), "Client should release the replaced capture driver");
+        TEST_ASSERT(driver_a->calls_after_release.load() == 0,
+                    "Engine called the replaced capture driver after the client released it");
+        replace_client->stop();
+    }
+    delete driver_a;
+    std::printf("PASS: Replaced capture driver is not called after release\n");
+
     std::printf("=================================================================\n");
     std::printf("ALL VIDEO CAPTURE DRIVER TESTS PASSED\n");
     std::printf("=================================================================\n");

@@ -9,6 +9,7 @@
 #include <sstream>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <utility>
 
 namespace sip {
 
@@ -407,8 +408,12 @@ std::vector<AudioBackend> Client::get_available_audio_backends() const
 
 void Client::set_video_capture_driver(std::shared_ptr<sip_core::IVideoCaptureDriver> driver)
 {
+    // Keep the old driver alive until the engine has dropped its adapter,
+    // which still calls the old driver while it is destroyed. Declared before
+    // the lock so the old driver is destroyed after m_mutex is released.
+    std::shared_ptr<sip_core::IVideoCaptureDriver> previous;
     std::lock_guard<std::mutex> lock(m_mutex);
-    m_capture_driver = std::move(driver);
+    previous = std::exchange(m_capture_driver, std::move(driver));
     if (m_client) {
         if (m_capture_driver) {
             sip_video_capture_driver_t c_drv = make_c_capture_driver(m_capture_driver.get());
