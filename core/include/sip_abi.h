@@ -52,10 +52,17 @@ typedef struct sip_callbacks_t {
     void (*on_call_media)(sip_call_t *call, int width, int height, bool on_hold, bool is_muted, void *user_data);
     void (*on_dtmf_digit)(sip_call_t *call, const char *digit, void *user_data);
 
-    /** Optional hook to prepare audio hardware session (e.g. AVAudioSession / AudioManager). */
+    /**
+     * Optional hook to prepare audio hardware session (e.g. AVAudioSession / AudioManager).
+     * Called once when the first call needs audio, not once per call; matched by one
+     * release_audio_session. Runs under an engine lock: must not call back into the SDK.
+     */
     bool (*prepare_audio_session)(sip_client_t *client, void *user_data);
 
-    /** Optional hook to release audio hardware session when all calls finish. */
+    /**
+     * Optional hook to release audio hardware session when all calls finish.
+     * Runs under an engine lock: must not call back into the SDK.
+     */
     void (*release_audio_session)(sip_client_t *client, void *user_data);
 } sip_callbacks_t;
 

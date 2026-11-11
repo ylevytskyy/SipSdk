@@ -127,6 +127,9 @@ private:
     std::atomic<bool> m_stopping{false};
     std::atomic<bool> m_mic_muted{false};
     std::atomic<bool> m_audio_session_active{false};
+    // Serializes prepare/release of the platform audio session, so the platform
+    // gets one prepare per active period, matched by one release.
+    std::mutex m_audio_session_mutex;
     std::atomic<bool> m_is_registered{false};
 
     struct mqueue *m_mq{nullptr};

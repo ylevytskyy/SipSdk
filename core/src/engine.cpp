@@ -969,6 +969,12 @@ void Engine::destroy_call(sip_call_t *call)
 
 bool Engine::prepare_audio_session()
 {
+    std::lock_guard<std::mutex> audio_lock(m_audio_session_mutex);
+    if (m_audio_session_active.load()) {
+        // Already prepared for the current calls; release_audio_session_if_idle()
+        // releases it once when the last call ends.
+        return true;
+    }
     if (m_callbacks.prepare_audio_session) {
         bool ok = m_callbacks.prepare_audio_session(m_owner, m_user_data);
         if (ok) {
@@ -1005,6 +1011,9 @@ bool Engine::prepare_audio_session()
 
 void Engine::release_audio_session_if_idle()
 {
+    // Checked under the audio lock, so a call that starts meanwhile either is
+    // seen here or prepares the session again after this release.
+    std::lock_guard<std::mutex> audio_lock(m_audio_session_mutex);
     {
         std::lock_guard<std::mutex> lock(m_calls_mutex);
         for (auto *c : m_all_calls) {

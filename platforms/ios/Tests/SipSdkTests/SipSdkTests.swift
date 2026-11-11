@@ -260,6 +260,43 @@ final class SipSdkTests: XCTestCase {
         await client.stop()
     }
 
+    // Given two overlapping outgoing calls,
+    // when both calls end,
+    // then the shared audio manager holds no more active calls than before the calls.
+    @MainActor
+    func testAudioSessionIsReleasedAfterOverlappingCallsEnd() async throws {
+        let peer = LoopbackPeer(port: 15096)
+        defer { peer.stop() }
+        let client = try await startRegisteredClient(peer: peer)
+        let audio = IosAudioManager.shared
+        let countBefore = audio.activeCallCount
+
+        // The loopback peer always answers with audio and video, so offer both.
+        let first = try await client.makeCall(to: "sip:echo@127.0.0.1:15096", withVideo: true)
+        let second = try await client.makeCall(to: "sip:echo2@127.0.0.1:15096", withVideo: true)
+
+        var wait = 0
+        while (first.state != .established || second.state != .established) && wait < 50 {
+            try await Task.sleep(nanoseconds: 100_000_000)
+            wait += 1
+        }
+        XCTAssertEqual(first.state, .established)
+        XCTAssertEqual(second.state, .established)
+
+        await first.hangup()
+        await second.hangup()
+        wait = 0
+        while (!first.state.isClosed || !second.state.isClosed || audio.activeCallCount != countBefore) && wait < 50 {
+            try await Task.sleep(nanoseconds: 100_000_000)
+            wait += 1
+        }
+        XCTAssertTrue(first.state.isClosed)
+        XCTAssertTrue(second.state.isClosed)
+        XCTAssertEqual(audio.activeCallCount, countBefore, "audio session still counts a call after both calls ended")
+
+        await client.stop()
+    }
+
     @MainActor
     func testEventsQueuedBeforeStopAreDroppedAfterStop() async throws {
         let peer = LoopbackPeer(port: 15092)
