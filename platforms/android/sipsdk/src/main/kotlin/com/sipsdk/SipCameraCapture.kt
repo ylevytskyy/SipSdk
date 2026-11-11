@@ -8,6 +8,8 @@ import android.os.Handler
 import android.os.HandlerThread
 import android.util.Log
 import java.nio.ByteBuffer
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
 class SipCameraCapture(
@@ -16,6 +18,7 @@ class SipCameraCapture(
 ) {
     companion object {
         private const val TAG = "SipCameraCapture"
+        private const val CLOSE_WAIT_MS = 2000L
 
         init {
             try {
@@ -64,6 +67,13 @@ class SipCameraCapture(
     private var width: Int = 640
     private var height: Int = 480
     private var fps: Int = 30
+
+    /**
+     * Test hook. When set, each camera image is handed to it on the camera
+     * thread instead of being delivered to native code.
+     */
+    @Volatile
+    internal var imageDeliveryOverride: ((android.media.Image) -> Unit)? = null
 
     fun start(width: Int = 640, height: Int = 480, fps: Int = 30): Int {
         if (isRunningFlag.get()) return 0
@@ -196,7 +206,11 @@ class SipCameraCapture(
                     null
                 } ?: return@setOnImageAvailableListener
 
-                if (isEnabledFlag.get() && clientHandle != 0L) {
+                // After stop(), drop images that were queued before the close ran.
+                val deliveryOverride = imageDeliveryOverride
+                if (isRunningFlag.get() && deliveryOverride != null) {
+                    deliveryOverride(image)
+                } else if (isRunningFlag.get() && isEnabledFlag.get() && clientHandle != 0L) {
                     val planes = image.planes
                     if (planes.size >= 3) {
                         val isFrontCam = (currentPositionVal == SipCameraPosition.FRONT)
@@ -278,18 +292,52 @@ class SipCameraCapture(
     }
 
     private fun closeCamera() {
-        try {
-            captureSession?.close()
-        } catch (_: Exception) {}
+        val session = captureSession
+        val device = cameraDevice
+        val reader = imageReader
         captureSession = null
-
-        try {
-            cameraDevice?.close()
-        } catch (_: Exception) {}
         cameraDevice = null
-
-        imageReader?.close()
         imageReader = null
+
+        // Close on the camera thread: onImageAvailable runs there, so the
+        // reader cannot be closed while an image from it is being delivered.
+        runOnCameraThreadAndWait {
+            try {
+                session?.close()
+            } catch (_: Exception) {}
+            try {
+                device?.close()
+            } catch (_: Exception) {}
+            reader?.close()
+        }
+    }
+
+    /**
+     * Runs [block] on the camera thread and waits up to [CLOSE_WAIT_MS] for it.
+     * If the wait times out, [block] still runs later on the camera thread.
+     * Runs inline when called on the camera thread or when there is none.
+     */
+    private fun runOnCameraThreadAndWait(block: () -> Unit) {
+        val handler = backgroundHandler
+        if (handler == null || handler.looper.thread === Thread.currentThread()) {
+            block()
+            return
+        }
+        val done = CountDownLatch(1)
+        val posted = handler.post {
+            try {
+                block()
+            } finally {
+                done.countDown()
+            }
+        }
+        if (!posted) {
+            block()
+            return
+        }
+        if (!awaitUninterruptibly(done, CLOSE_WAIT_MS)) {
+            Log.w(TAG, "Camera resources will close on the camera thread when the current frame finishes")
+        }
     }
 
     // Synthetic frame generator fallback
@@ -379,6 +427,47 @@ class SipCameraCapture(
         syntheticThread = null
     }
 
+    /**
+     * Waits like [CountDownLatch.await], but an interrupt does not end the wait
+     * early; the thread's interrupt flag is restored before returning.
+     */
+    private fun awaitUninterruptibly(latch: CountDownLatch, timeoutMs: Long): Boolean {
+        val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMs)
+        var interrupted = false
+        try {
+            while (true) {
+                val remaining = deadline - System.nanoTime()
+                if (remaining <= 0) return latch.count == 0L
+                try {
+                    return latch.await(remaining, TimeUnit.NANOSECONDS)
+                } catch (_: InterruptedException) {
+                    interrupted = true
+                }
+            }
+        } finally {
+            if (interrupted) Thread.currentThread().interrupt()
+        }
+    }
+
+    /** Like [Thread.join] with a timeout, but an interrupt does not end the wait early. */
+    private fun joinUninterruptibly(thread: Thread, timeoutMs: Long) {
+        val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMs)
+        var interrupted = false
+        try {
+            while (thread.isAlive) {
+                val remainingMs = TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime())
+                if (remainingMs <= 0) return
+                try {
+                    thread.join(remainingMs)
+                } catch (_: InterruptedException) {
+                    interrupted = true
+                }
+            }
+        } finally {
+            if (interrupted) Thread.currentThread().interrupt()
+        }
+    }
+
     private fun startBackgroundThread() {
         try {
             val thread = HandlerThread("SipCameraBackground")
@@ -396,8 +485,10 @@ class SipCameraCapture(
 
     private fun stopBackgroundThread() {
         try {
-            backgroundThread?.quitSafely()
-            backgroundThread?.join(500)
+            backgroundThread?.let { thread ->
+                thread.quitSafely()
+                joinUninterruptibly(thread, 500)
+            }
         } catch (_: Throwable) {}
         backgroundThread = null
         backgroundHandler = null

@@ -8,11 +8,119 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.nio.ByteBuffer
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 
 @RunWith(AndroidJUnit4::class)
 class SipCameraCaptureTest {
 
     private val context get() = InstrumentationRegistry.getInstrumentation().targetContext
+
+    // Given a camera image that is still being delivered on the camera thread,
+    // when the capture is stopped,
+    // then the image stays valid until its delivery has finished.
+    @Test
+    fun stopKeepsTheImageBeingDeliveredValidUntilDeliveryFinishes() {
+        val capture = SipCameraCapture(context, 0L)
+        val deliveryStarted = CountDownLatch(1)
+        val firstImage = AtomicBoolean(true)
+        val imageValidAtEnd = AtomicReference<Boolean?>(null)
+
+        capture.imageDeliveryOverride = { image ->
+            if (firstImage.getAndSet(false)) {
+                deliveryStarted.countDown()
+                Thread.sleep(300)
+                val stillValid = try {
+                    image.planes
+                    true
+                } catch (_: IllegalStateException) {
+                    false
+                }
+                imageValidAtEnd.set(stillValid)
+            }
+        }
+
+        assertEquals(0, capture.start(640, 480, 30))
+        assertTrue("Camera must deliver a frame", deliveryStarted.await(10, TimeUnit.SECONDS))
+
+        capture.stop()
+
+        assertEquals(
+            "stop() closed the camera image while it was still being delivered",
+            true,
+            imageValidAtEnd.get()
+        )
+    }
+
+    // Given a camera image that is still being delivered while more images arrive,
+    // when the capture is stopped,
+    // then no further image is delivered after stop() was called.
+    @Test
+    fun stopDeliversNoFurtherImagesOnceCalled() {
+        val capture = SipCameraCapture(context, 0L)
+        val deliveryStarted = CountDownLatch(1)
+        val firstImage = AtomicBoolean(true)
+        val stopCalled = AtomicBoolean(false)
+        val deliveriesAfterStop = java.util.concurrent.atomic.AtomicInteger(0)
+
+        capture.imageDeliveryOverride = { _ ->
+            if (stopCalled.get()) deliveriesAfterStop.incrementAndGet()
+            if (firstImage.getAndSet(false)) {
+                deliveryStarted.countDown()
+                // Long enough for the camera to queue more images meanwhile.
+                Thread.sleep(500)
+            }
+        }
+
+        assertEquals(0, capture.start(640, 480, 30))
+        assertTrue("Camera must deliver a frame", deliveryStarted.await(10, TimeUnit.SECONDS))
+        // Let the camera queue the next image behind the delivery in progress.
+        Thread.sleep(200)
+
+        stopCalled.set(true)
+        capture.stop()
+
+        assertEquals("Images were delivered after stop() was called", 0, deliveriesAfterStop.get())
+    }
+
+    // Given a camera image that is still being delivered,
+    // when stop() is called on a thread that has been interrupted,
+    // then stop() still waits for the delivery, does not throw, and the thread stays interrupted.
+    @Test
+    fun stopOnAnInterruptedThreadFinishesAndKeepsTheInterrupt() {
+        val capture = SipCameraCapture(context, 0L)
+        val deliveryStarted = CountDownLatch(1)
+        val deliveryFinished = AtomicBoolean(false)
+        val firstImage = AtomicBoolean(true)
+
+        capture.imageDeliveryOverride = { _ ->
+            if (firstImage.getAndSet(false)) {
+                deliveryStarted.countDown()
+                Thread.sleep(300)
+                deliveryFinished.set(true)
+            }
+        }
+
+        assertEquals(0, capture.start(640, 480, 30))
+        assertTrue("Camera must deliver a frame", deliveryStarted.await(10, TimeUnit.SECONDS))
+
+        var thrown: Throwable? = null
+        Thread.currentThread().interrupt()
+        try {
+            capture.stop()
+        } catch (t: Throwable) {
+            thrown = t
+        }
+        val finishedWhenStopReturned = deliveryFinished.get()
+        // Read and clear the flag before asserting, so later tests start clean.
+        val stillInterrupted = Thread.interrupted()
+
+        assertEquals("stop() must not throw on an interrupted thread", null, thrown)
+        assertTrue("stop() must keep the thread's interrupt flag", stillInterrupted)
+        assertTrue("stop() returned before the image in delivery was finished", finishedWhenStopReturned)
+    }
 
     @Test
     fun testCameraCaptureAndControlsLifecycle() {
