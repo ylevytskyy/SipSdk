@@ -175,6 +175,10 @@ final class SipSdkTests: XCTestCase {
         captureDriver.stop()
         XCTAssertFalse(captureDriver.isRunning)
 
+        // stop() waits for the in-flight frame, so no frame arrives after it returns.
+        let countAtStop = ctx.deliveredCount
+        Thread.sleep(forTimeInterval: 0.2)
+        XCTAssertEqual(ctx.deliveredCount, countAtStop)
     }
 
     // MARK: - Callback lifetimes (RES-4)
@@ -298,6 +302,85 @@ final class SipSdkTests: XCTestCase {
         let captureDriver = IosVideoCaptureDriver()
 
         final class BlockingContext {
+            let entered = DispatchSemaphore(value: 0)
+            let release = DispatchSemaphore(value: 0)
+            let countLock = NSLock()
+            var calls = 0
+        }
+        let ctx = BlockingContext()
+
+        captureDriver.setFrameHandler({ _, arg in
+            guard let arg = arg else { return }
+            let ctx = Unmanaged<BlockingContext>.fromOpaque(arg).takeUnretainedValue()
+            ctx.countLock.lock()
+            ctx.calls += 1
+            let isFirst = ctx.calls == 1
+            ctx.countLock.unlock()
+            if isFirst {
+                ctx.entered.signal()
+                ctx.release.wait()
+            }
+        }, arg: Unmanaged.passUnretained(ctx).toOpaque())
+
+        XCTAssertEqual(captureDriver.start(width: 64, height: 48, fps: 30), 0)
+        XCTAssertEqual(ctx.entered.wait(timeout: .now() + 2), .success)
+
+        let stopped = DispatchSemaphore(value: 0)
+        DispatchQueue.global().async {
+            captureDriver.stop()
+            stopped.signal()
+        }
+        let stoppedEarly = stopped.wait(timeout: .now() + 0.3) == .success
+        XCTAssertFalse(stoppedEarly, "stop() returned while a frame callback was still running")
+        ctx.release.signal()
+        if !stoppedEarly {
+            XCTAssertEqual(stopped.wait(timeout: .now() + 2), .success)
+        }
+
+        ctx.countLock.lock()
+        let callsAtStop = ctx.calls
+        ctx.countLock.unlock()
+        Thread.sleep(forTimeInterval: 0.2)
+        ctx.countLock.lock()
+        XCTAssertEqual(ctx.calls, callsAtStop, "frame callback ran after stop() returned")
+        ctx.countLock.unlock()
+
+        withExtendedLifetime(ctx) {}
+    }
+
+    func testVideoCaptureDriverDeliversNoFramesWhileDisabled() {
+        let captureDriver = IosVideoCaptureDriver()
+
+        final class CountingContext {
+            let countLock = NSLock()
+            var calls = 0
+        }
+        let ctx = CountingContext()
+
+        captureDriver.setFrameHandler({ _, arg in
+            guard let arg = arg else { return }
+            let ctx = Unmanaged<CountingContext>.fromOpaque(arg).takeUnretainedValue()
+            ctx.countLock.lock()
+            ctx.calls += 1
+            ctx.countLock.unlock()
+        }, arg: Unmanaged.passUnretained(ctx).toOpaque())
+
+        captureDriver.setEnabled(false)
+        XCTAssertEqual(captureDriver.start(width: 64, height: 48, fps: 30), 0)
+        Thread.sleep(forTimeInterval: 0.3)
+        captureDriver.stop()
+
+        ctx.countLock.lock()
+        XCTAssertEqual(ctx.calls, 0, "frames reached the handler while capture was disabled")
+        ctx.countLock.unlock()
+
+        withExtendedLifetime(ctx) {}
+    }
+
+    @MainActor
+    func testAudioSessionManager() {
+        let audioMgr = IosAudioManager.shared
+        XCTAssertFalse(audioMgr.isSpeakerEnabled)
 
         audioMgr.setSpeakerphone(true)
         XCTAssertTrue(audioMgr.isSpeakerEnabled)

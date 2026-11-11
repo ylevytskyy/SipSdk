@@ -60,6 +60,8 @@ no SIP over TLS in `BaresipCore`.
   `bash scripts/verify-spm-video-sdk.sh`
 - Run automated iOS Simulator test suite (engine lifecycle, VideoToolbox H.264 RTP round-trip, `SipVideoView`, `SipClient`/`SipCall` controls, `SipCallKitCoordinator`, `SipPushRegistry`, Asterisk PBX registration & video echo call):
   `bash scripts/verify-ios-video-tests.sh`
+- Run the same iOS Simulator test suite under AddressSanitizer (build in `.build-asan`; `--self-test` proves a planted overflow is caught):
+  `bash scripts/verify-ios-asan-tests.sh`
 - Build `SipPhone.xcodeproj` for both `arm64` iOS Simulator and `arm64` generic iOS device:
   `bash scripts/verify-xcode-app-build.sh`
 - Launch `SipPhone.app` on a booted iOS Simulator and verify Keypad / Home screen with screenshots:

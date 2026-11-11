@@ -12,6 +12,10 @@ import SipCore
 /// Native iOS video capture driver bridging AVCaptureSession and synthetic generator to `sip_video_capture_driver_t`.
 public final class IosVideoCaptureDriver: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, @unchecked Sendable {
     private let lock = NSLock()
+    /// Held while a frame is handed to the frame handler. `stop()` and `setFrameHandler` take it
+    /// after changing state, so they return only once an in-flight callback has finished.
+    /// Recursive so a handler may call `stop()` on the capture queue. Always taken before `lock`.
+    private let deliveryLock = NSRecursiveLock()
     private var captureSession: AVCaptureSession?
     private var videoOutput: AVCaptureVideoDataOutput?
     private var videoDeviceInput: AVCaptureDeviceInput?
@@ -99,6 +103,7 @@ public final class IosVideoCaptureDriver: NSObject, AVCaptureVideoDataOutputSamp
         frameHandler = handler
         frameHandlerArg = arg
         lock.unlock()
+        waitForInFlightDelivery()
     }
 
     public func start(width: Int, height: Int, fps: Int) -> Int {
@@ -137,11 +142,11 @@ public final class IosVideoCaptureDriver: NSObject, AVCaptureVideoDataOutputSamp
 
     public func stop() {
         lock.lock()
-        defer { lock.unlock() }
-
         isRunning = false
         stopSyntheticTimer()
         stopHardwareCamera()
+        lock.unlock()
+        waitForInFlightDelivery()
     }
 
     public func switchCamera() {
@@ -167,6 +172,29 @@ public final class IosVideoCaptureDriver: NSObject, AVCaptureVideoDataOutputSamp
         lock.lock()
         defer { lock.unlock() }
         isEnabled = enabled
+    }
+
+    // MARK: - Frame Delivery
+
+    /// Hands a frame to the frame handler unless the driver was stopped or disabled meanwhile.
+    private func deliver(_ frame: sip_video_frame_t) {
+        deliveryLock.lock()
+        defer { deliveryLock.unlock() }
+
+        lock.lock()
+        let active = isRunning && isEnabled
+        let handler = frameHandler
+        let arg = frameHandlerArg
+        lock.unlock()
+
+        guard active, let handler = handler else { return }
+        var frame = frame
+        handler(&frame, arg)
+    }
+
+    private func waitForInFlightDelivery() {
+        deliveryLock.lock()
+        deliveryLock.unlock()
     }
 
     // MARK: - Hardware Camera
@@ -291,7 +319,7 @@ public final class IosVideoCaptureDriver: NSObject, AVCaptureVideoDataOutputSamp
             let uStride = CVPixelBufferGetBytesPerRowOfPlane(imageBuffer, 1)
             let vStride = CVPixelBufferGetBytesPerRowOfPlane(imageBuffer, 2)
 
-            var frame = sip_video_frame_t(
+            let frame = sip_video_frame_t(
                 width: Int32(width),
                 height: Int32(height),
                 y: yPlane.assumingMemoryBound(to: UInt8.self),
@@ -303,12 +331,7 @@ public final class IosVideoCaptureDriver: NSObject, AVCaptureVideoDataOutputSamp
                 timestamp_ns: ts
             )
 
-            lock.lock()
-            let handler = frameHandler
-            let arg = frameHandlerArg
-            lock.unlock()
-
-            handler?(&frame, arg)
+            deliver(frame)
         } else if planeCount == 2 {
             guard let yPlane = CVPixelBufferGetBaseAddressOfPlane(imageBuffer, 0),
                   let uvPlane = CVPixelBufferGetBaseAddressOfPlane(imageBuffer, 1) else { return }
@@ -337,7 +360,7 @@ public final class IosVideoCaptureDriver: NSObject, AVCaptureVideoDataOutputSamp
                         }
                     }
 
-                    var frame = sip_video_frame_t(
+                    let frame = sip_video_frame_t(
                         width: Int32(width),
                         height: Int32(height),
                         y: yPlane.assumingMemoryBound(to: UInt8.self),
@@ -349,12 +372,7 @@ public final class IosVideoCaptureDriver: NSObject, AVCaptureVideoDataOutputSamp
                         timestamp_ns: ts
                     )
 
-                    lock.lock()
-                    let handler = frameHandler
-                    let arg = frameHandlerArg
-                    lock.unlock()
-
-                    handler?(&frame, arg)
+                    deliver(frame)
                 }
             }
         }
@@ -423,7 +441,7 @@ public final class IosVideoCaptureDriver: NSObject, AVCaptureVideoDataOutputSamp
             }
         }
 
-        var frame = sip_video_frame_t(
+        let frame = sip_video_frame_t(
             width: Int32(w),
             height: Int32(h),
             y: yPlane,
@@ -435,11 +453,6 @@ public final class IosVideoCaptureDriver: NSObject, AVCaptureVideoDataOutputSamp
             timestamp_ns: UInt64(mach_absolute_time())
         )
 
-        lock.lock()
-        let handler = frameHandler
-        let arg = frameHandlerArg
-        lock.unlock()
-
-        handler?(&frame, arg)
+        deliver(frame)
     }
 }
