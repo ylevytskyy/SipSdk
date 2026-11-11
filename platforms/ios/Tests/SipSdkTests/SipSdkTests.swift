@@ -86,7 +86,6 @@ final class SipSdkTests: XCTestCase {
         let account = SipAccount(
             username: "alice",
             domain: "sip.example.invalid",
-            password: "secret",
             transport: .udp,
             port: 15091,
             displayName: "Alice Wonderland",
