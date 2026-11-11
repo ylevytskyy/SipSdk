@@ -15,26 +15,34 @@ sip_call_t::sip_call_t(sip_client_t *owner, sip_core::Engine *engine, struct cal
     , m_is_outgoing(is_outgoing)
     , m_has_video(with_video)
 {
+    std::string id;
+    std::string peer_display_name;
+    std::string peer_uri;
     if (call != nullptr) {
         const char *cid = call_id(call);
         if (cid) {
-            m_id = cid;
+            id = cid;
         }
         const char *peer_name = call_peername(call);
         if (peer_name) {
-            m_peer_display_name = peer_name;
+            peer_display_name = peer_name;
         }
-        const char *peer_uri = call_peeruri(call);
-        if (peer_uri) {
-            m_remote_uri = peer_uri;
+        const char *uri = call_peeruri(call);
+        if (uri) {
+            peer_uri = uri;
         }
     }
-    if (m_remote_uri.empty() && remote_uri) {
-        m_remote_uri = remote_uri;
+    if (peer_uri.empty() && remote_uri) {
+        peer_uri = remote_uri;
     }
-    if (m_id.empty()) {
-        m_id = "call_" + std::to_string(reinterpret_cast<uintptr_t>(this));
+    if (id.empty()) {
+        id = "call_" + std::to_string(reinterpret_cast<uintptr_t>(this));
     }
+
+    std::lock_guard<std::mutex> lock(m_mutex);
+    publish_locked(m_id, id.c_str());
+    publish_locked(m_peer_display_name, peer_display_name.c_str());
+    publish_locked(m_remote_uri, peer_uri.c_str());
 }
 
 sip_call_t::~sip_call_t()
@@ -44,20 +52,35 @@ sip_call_t::~sip_call_t()
 
 const char *sip_call_t::get_id() const
 {
-    std::lock_guard<std::mutex> lock(m_mutex);
-    return m_id.c_str();
+    return m_id.load(std::memory_order_acquire);
 }
 
 const char *sip_call_t::get_remote_uri() const
 {
-    std::lock_guard<std::mutex> lock(m_mutex);
-    return m_remote_uri.c_str();
+    return m_remote_uri.load(std::memory_order_acquire);
 }
 
 const char *sip_call_t::get_peer_display_name() const
 {
-    std::lock_guard<std::mutex> lock(m_mutex);
-    return m_peer_display_name.c_str();
+    return m_peer_display_name.load(std::memory_order_acquire);
+}
+
+void sip_call_t::publish_locked(std::atomic<const char *> &slot, const char *value)
+{
+    const char *current = slot.load(std::memory_order_relaxed);
+    if (current && std::strcmp(current, value) == 0) {
+        return;
+    }
+    // Reuse an earlier string with the same value, so the list only grows with
+    // distinct values.
+    for (const std::string &published : m_published_strings) {
+        if (published == value) {
+            slot.store(published.c_str(), std::memory_order_release);
+            return;
+        }
+    }
+    m_published_strings.emplace_back(value);
+    slot.store(m_published_strings.back().c_str(), std::memory_order_release);
 }
 
 bool sip_call_t::has_video() const
@@ -146,21 +169,26 @@ void sip_call_t::set_closed(uint32_t dur)
 
 void sip_call_t::attach_raw_call(struct call *c)
 {
-    std::lock_guard<std::mutex> lock(m_mutex);
-    m_raw_call = c;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_raw_call = c;
+    }
     if (c != nullptr) {
-        const char *cid = call_id(c);
-        if (cid && std::strlen(cid) > 0) {
-            m_id = cid;
-        }
-        const char *peer_name = call_peername(c);
-        if (peer_name && std::strlen(peer_name) > 0) {
-            m_peer_display_name = peer_name;
-        }
-        const char *peer_uri = call_peeruri(c);
-        if (peer_uri && std::strlen(peer_uri) > 0) {
-            m_remote_uri = peer_uri;
-        }
+        update_identity(call_id(c), call_peername(c), call_peeruri(c));
+    }
+}
+
+void sip_call_t::update_identity(const char *cid, const char *peer_name, const char *peer_uri)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (cid && std::strlen(cid) > 0) {
+        publish_locked(m_id, cid);
+    }
+    if (peer_name && std::strlen(peer_name) > 0) {
+        publish_locked(m_peer_display_name, peer_name);
+    }
+    if (peer_uri && std::strlen(peer_uri) > 0) {
+        publish_locked(m_remote_uri, peer_uri);
     }
 }
 

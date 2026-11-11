@@ -5,6 +5,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <list>
 #include <mutex>
 #include <string>
 
@@ -41,6 +42,8 @@ public:
     void set_established();
     void set_closed(uint32_t dur);
     void attach_raw_call(struct call *c);
+    // Updates the call identity strings; empty or null values are ignored.
+    void update_identity(const char *call_id, const char *peer_name, const char *peer_uri);
     void detach_raw_call();
 
     void retain();
@@ -62,9 +65,18 @@ private:
     sip_core::Engine *m_engine{nullptr};
     struct call *m_raw_call{nullptr};
 
-    std::string m_id;
-    std::string m_remote_uri;
-    std::string m_peer_display_name;
+    // Publishes value as the current string of slot. Requires m_mutex.
+    void publish_locked(std::atomic<const char *> &slot, const char *value);
+
+    // Strings handed out through the C ABI. A published string is never changed
+    // or freed while the call exists, so pointers returned by get_id(),
+    // get_remote_uri() and get_peer_display_name() stay valid until the call is
+    // destroyed. An update publishes the new value; the list holds each distinct
+    // value once. Guarded by m_mutex.
+    std::list<std::string> m_published_strings;
+    std::atomic<const char *> m_id{""};
+    std::atomic<const char *> m_remote_uri{""};
+    std::atomic<const char *> m_peer_display_name{""};
 
     bool m_is_outgoing{false};
     bool m_has_video{false};

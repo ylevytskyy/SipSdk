@@ -210,12 +210,13 @@ SIP_ABI_EXPORT bool sip_client_is_mic_muted(const sip_client_t *client);
 SIP_ABI_EXPORT const char *sip_call_get_id(const sip_call_t *call);
 
 /**
- * Returns the remote peer SIP URI string.
+ * Returns the remote peer SIP URI string. Pointer valid until call session destroyed.
  */
 SIP_ABI_EXPORT const char *sip_call_get_remote_uri(const sip_call_t *call);
 
 /**
  * Returns the remote peer display name string (if present in From/To header).
+ * Pointer valid until call session destroyed.
  */
 SIP_ABI_EXPORT const char *sip_call_get_peer_display_name(const sip_call_t *call);
 
