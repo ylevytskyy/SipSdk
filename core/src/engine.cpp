@@ -1330,6 +1330,10 @@ int Engine::send_message(const char *peer_uri, const char *content_type, const u
     std::string ctype_str = ctype;
     std::string payload(reinterpret_cast<const char *>(body), body_len);
 
+    // Hand the id to the caller before the task is posted: with an inline dispatcher the
+    // status callback can run before this function returns.
+    if (message_id) *message_id = id;
+
     bool posted = post_task([this, id, uri_str, ctype_str, payload]() {
         if (m_ua == nullptr) {
             dispatch_message_status(id, SIP_MESSAGE_STATUS_FAILED, 0, "No account registered");
@@ -1347,9 +1351,10 @@ int Engine::send_message(const char *peer_uri, const char *content_type, const u
             dispatch_message_status(id, SIP_MESSAGE_STATUS_FAILED, 0, std::strerror(rc));
         }
     });
-    if (!posted) return EIO;
-
-    if (message_id) *message_id = id;
+    if (!posted) {
+        if (message_id) *message_id = 0;
+        return EIO;
+    }
     return 0;
 }
 

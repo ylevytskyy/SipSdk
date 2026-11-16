@@ -98,6 +98,7 @@ struct MessageStatusEvent {
     sip_message_status_t status;
     int code;
     std::string reason;
+    bool id_known_to_caller;  // the caller's message_id out-param already held this id when the callback ran
 };
 
 struct ReceivedMessage {
@@ -107,6 +108,8 @@ struct ReceivedMessage {
 };
 
 static std::vector<MessageStatusEvent> g_msg_status;
+static std::atomic<const uint64_t *> g_caller_ids{nullptr};
+static std::atomic<size_t> g_caller_ids_count{0};
 static std::vector<ReceivedMessage> g_msg_received;
 
 static void test_on_message_status(sip_client_t *client, uint64_t message_id, sip_message_status_t status,
@@ -116,7 +119,16 @@ static void test_on_message_status(sip_client_t *client, uint64_t message_id, si
     (void)user_data;
     {
         std::lock_guard<std::mutex> lock(g_reg_mutex);
-        g_msg_status.push_back({message_id, status, code, reason ? reason : ""});
+        const uint64_t *ids = g_caller_ids.load();
+        bool known = true;
+        if (ids) {
+            known = false;
+            size_t n = g_caller_ids_count.load();
+            for (size_t i = 0; i < n && !known; i++) {
+                known = reinterpret_cast<const volatile uint64_t *>(ids)[i] == message_id;
+            }
+        }
+        g_msg_status.push_back({message_id, status, code, reason ? reason : "", known});
     }
     g_reg_cv.notify_all();
 }
@@ -308,6 +320,47 @@ int main(int argc, char *argv[])
             std::printf("FAIL: expected FAILED for a message without an account\n");
             sip_client_destroy(client);
             return 21;
+        }
+    }
+    // The dispatcher here is inline, so the status callback can run before
+    // sip_client_send_message returns. The id the caller holds must already be set.
+    // A burst keeps the engine thread awake, which makes the early callback likely.
+    {
+        std::string self_uri = std::string("sip:1001@") + asterisk_host + ":" + std::to_string(asterisk_port);
+        const uint8_t b[] = {'x'};
+        const size_t burst = 3000;
+        std::vector<uint64_t> outs(burst, 0);
+        g_caller_ids.store(outs.data());
+        g_caller_ids_count.store(burst);
+        // Busy threads make the sending thread lose the CPU between post and return.
+        std::atomic<bool> spin{true};
+        std::vector<std::thread> spinners;
+        for (unsigned t = 0; t < std::thread::hardware_concurrency() * 2; t++) {
+            spinners.emplace_back([&spin] { while (spin.load(std::memory_order_relaxed)) {} });
+        }
+        for (size_t i = 0; i < burst; i++) {
+            CHECK(sip_client_send_message(client, self_uri.c_str(), "text/plain", b, sizeof(b), &outs[i]) == 0);
+        }
+        spin.store(false);
+        for (auto &t : spinners) t.join();
+        MessageStatusEvent last{};
+        CHECK(wait_for_message_status(outs[burst - 1], 10, last));
+        for (size_t i = 0; i < burst; i++) {
+            MessageStatusEvent ev{};
+            CHECK(wait_for_message_status(outs[i], 10, ev));
+        }
+        g_caller_ids.store(nullptr);
+        size_t early = 0;
+        {
+            std::lock_guard<std::mutex> lock(g_reg_mutex);
+            for (const auto &ev : g_msg_status) {
+                if (!ev.id_known_to_caller) early++;
+            }
+        }
+        if (early != 0) {
+            std::printf("FAIL: %zu of %zu status callbacks fired before the caller had the message id\n", early, burst);
+            sip_client_destroy(client);
+            return 27;
         }
     }
     std::printf("PASS: Message input validation (EINVAL on bad input, FAILED without an account)\n");

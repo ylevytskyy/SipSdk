@@ -408,7 +408,11 @@ SIP_ABI_EXPORT int sip_client_set_message_callbacks(sip_client_t *client, const 
  * @param content_type MIME type "type/subtype"; nullptr means "text/plain".
  * @param body Message body bytes (UTF-8 text for text/plain); 1..SIP_MESSAGE_MAX_BODY_SIZE bytes.
  * @param body_len Body length in bytes.
- * @param message_id Optional out-param: local id later reported by on_message_status.
+ * @param message_id Optional out-param: local id later reported by on_message_status. It is
+ *        written before the call returns and before the message is queued, so it already
+ *        holds the id if on_message_status fires first. The status callback may run before
+ *        this call returns (an inline dispatch_to_main); do not wait for the return value
+ *        to start tracking the id. Set to 0 when the call fails with EIO.
  * @return 0 when the message was queued; EINVAL on invalid arguments (null or empty values,
  *         control characters, a content type without '/'); EMSGSIZE for a body that is too
  *         large; EIO when the engine is not running.
