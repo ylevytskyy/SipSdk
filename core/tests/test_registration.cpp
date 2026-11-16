@@ -1,10 +1,14 @@
 #include "sip_abi.h"
+#include "engine.h"
+
+#include <re.h>
 
 #include <atomic>
 #include <cassert>
 #include <cerrno>
 #include <chrono>
 #include <condition_variable>
+#include <future>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -98,6 +102,7 @@ struct MessageStatusEvent {
     sip_message_status_t status;
     int code;
     std::string reason;
+    bool id_known_to_caller;  // the caller's message_id out-param already held this id when the callback ran
 };
 
 struct ReceivedMessage {
@@ -107,6 +112,8 @@ struct ReceivedMessage {
 };
 
 static std::vector<MessageStatusEvent> g_msg_status;
+static std::atomic<const uint64_t *> g_caller_ids{nullptr};
+static std::atomic<size_t> g_caller_ids_count{0};
 static std::vector<ReceivedMessage> g_msg_received;
 
 static void test_on_message_status(sip_client_t *client, uint64_t message_id, sip_message_status_t status,
@@ -116,7 +123,16 @@ static void test_on_message_status(sip_client_t *client, uint64_t message_id, si
     (void)user_data;
     {
         std::lock_guard<std::mutex> lock(g_reg_mutex);
-        g_msg_status.push_back({message_id, status, code, reason ? reason : ""});
+        const uint64_t *ids = g_caller_ids.load();
+        bool known = true;
+        if (ids) {
+            known = false;
+            size_t n = g_caller_ids_count.load();
+            for (size_t i = 0; i < n && !known; i++) {
+                known = reinterpret_cast<const volatile uint64_t *>(ids)[i] == message_id;
+            }
+        }
+        g_msg_status.push_back({message_id, status, code, reason ? reason : "", known});
     }
     g_reg_cv.notify_all();
 }
@@ -165,6 +181,47 @@ static bool wait_for_received_body(const std::string &body, int timeout_sec, Rec
         g_reg_cv.wait_for(lock, std::chrono::milliseconds(50));
     }
     return false;
+}
+
+namespace sip_core {
+// Feeds one decoded SIP request to the engine's incoming MESSAGE handler on the loop thread.
+struct EngineTestAccess {
+    static bool handle_message(Engine &engine, const std::string &raw, int reply_port, bool &handled)
+    {
+        std::promise<bool> done;
+        bool posted = engine.post_task([&]() {
+            struct mbuf *mb = mbuf_alloc(raw.size());
+            mbuf_write_mem(mb, reinterpret_cast<const uint8_t *>(raw.data()), raw.size());
+            mb->pos = 0;
+            struct sip_msg *msg = nullptr;
+            bool ok = false;
+            if (sip_msg_decode(&msg, mb) == 0) {
+                sa_set_str(&msg->src, "127.0.0.1", static_cast<uint16_t>(reply_port));
+                msg->tp = SIP_TRANSP_UDP;
+                ok = engine.handle_incoming_message(msg);
+            }
+            mem_deref(msg);
+            mem_deref(mb);
+            done.set_value(ok);
+        });
+        if (!posted) return false;
+        handled = done.get_future().get();
+        return true;
+    }
+};
+}  // namespace sip_core
+
+static std::string incoming_message_text(int port, size_t body_len)
+{
+    std::string body(body_len, 'a');
+    return "MESSAGE sip:1001@127.0.0.1 SIP/2.0\r\n"
+           "Via: SIP/2.0/UDP 127.0.0.1:" + std::to_string(port) + ";branch=z9hG4bKincoming" + std::to_string(body_len) + "\r\n"
+           "From: <sip:2002@127.0.0.1>;tag=incoming\r\n"
+           "To: <sip:1001@127.0.0.1>\r\n"
+           "Call-ID: incoming-" + std::to_string(body_len) + "\r\n"
+           "CSeq: 1 MESSAGE\r\n"
+           "Content-Type: text/plain\r\n"
+           "Content-Length: " + std::to_string(body_len) + "\r\n\r\n" + body;
 }
 
 // assert() is compiled out in Release builds; messaging checks must always run.
@@ -229,6 +286,132 @@ static std::string raw_peer_answer_one(int fd, int timeout_ms)
     sendto(fd, reply.data(), reply.size(), 0, reinterpret_cast<sockaddr *>(&src), src_len);
     return request;
 }
+
+// Hand-written SIP user agent (UDP + MD5 digest) used to send requests the SDK would never
+// send, such as a MESSAGE whose From header carries a forged display name.
+struct RawUa {
+    std::string user, password;
+    int fd{-1};
+    int local_port{0};
+    sockaddr_in server{};
+    int cseq{0};
+    std::string call_id;
+    // Knobs for the Authorization header of authed(): how a real client may lay it out.
+    bool algorithm_first = false;      // JsSIP style: "Digest algorithm=MD5, username=..."
+    bool lowercase_scheme = false;     // "digest ..." (RFC 3261: the scheme is case-insensitive)
+    std::string header_username;       // when set, the username written in the header (digest still made for `user`)
+
+    RawUa(const std::string &u, const std::string &pw, const char *host, int port) : user(u), password(pw)
+    {
+        fd = open_raw_peer(local_port);
+        server.sin_family = AF_INET;
+        server.sin_port = htons(static_cast<uint16_t>(port));
+        inet_pton(AF_INET, host, &server.sin_addr);
+        call_id = "rawua-" + u + "-" + std::to_string(local_port);
+        timeval tv{3, 0};
+        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    }
+    ~RawUa() { if (fd >= 0) close(fd); }
+
+    static std::string md5_hex(const std::string &in)
+    {
+        uint8_t md[16];
+        md5(reinterpret_cast<const uint8_t *>(in.data()), in.size(), md);
+        char hex[33];
+        for (int i = 0; i < 16; i++) std::snprintf(hex + 2 * i, 3, "%02x", md[i]);
+        return std::string(hex, 32);
+    }
+    static std::string header_param(const std::string &msg, const std::string &key)
+    {
+        size_t p = msg.find(key + "=\"");
+        if (p == std::string::npos) return "";
+        p += key.size() + 2;
+        return msg.substr(p, msg.find('"', p) - p);
+    }
+    // Sends one request and returns the first SIP response (requests from the PBX are skipped).
+    std::string request(const std::string &method, const std::string &uri, const std::string &extra_headers,
+                        const std::string &body, const std::string &authorization)
+    {
+        cseq++;
+        std::string msg = method + " " + uri + " SIP/2.0\r\nVia: SIP/2.0/UDP 127.0.0.1:" + std::to_string(local_port) +
+                          ";branch=z9hG4bK" + std::to_string(cseq) + "x" + std::to_string(local_port) + ";rport\r\n"
+                          "Max-Forwards: 70\r\nCall-ID: " + call_id + "\r\nCSeq: " + std::to_string(cseq) + " " + method +
+                          "\r\n" + extra_headers;
+        if (!authorization.empty()) msg += "Authorization: " + authorization + "\r\n";
+        msg += "Content-Length: " + std::to_string(body.size()) + "\r\n\r\n" + body;
+        sendto(fd, msg.data(), msg.size(), 0, reinterpret_cast<sockaddr *>(&server), sizeof(server));
+        for (int i = 0; i < 20; i++) {
+            char buf[8192];
+            ssize_t n = recvfrom(fd, buf, sizeof(buf) - 1, 0, nullptr, nullptr);
+            if (n <= 0) return "";
+            std::string d(buf, static_cast<size_t>(n));
+            if (d.compare(0, 8, "SIP/2.0 ") == 0) return d;
+        }
+        return "";
+    }
+    std::string authed(const std::string &method, const std::string &uri, const std::string &headers,
+                       const std::string &body = "")
+    {
+        std::string r = request(method, uri, headers, body, "");
+        if (r.compare(0, 11, "SIP/2.0 401") != 0) return r;
+        std::string realm = header_param(r, "realm"), nonce = header_param(r, "nonce");
+        std::string resp = md5_hex(md5_hex(user + ":" + realm + ":" + password) + ":" + nonce + ":" +
+                                   md5_hex(method + ":" + uri));
+        std::string name = header_username.empty() ? user : header_username;
+        std::string params = "username=\"" + name + "\", realm=\"" + realm + "\", nonce=\"" + nonce + "\", uri=\"" +
+                             uri + "\", response=\"" + resp + "\"";
+        params = algorithm_first ? "algorithm=MD5, " + params : params + ", algorithm=MD5";
+        return request(method, uri, headers, body, std::string(lowercase_scheme ? "digest " : "Digest ") + params);
+    }
+    std::string register_contact(int expires, const std::string &host)
+    {
+        std::string aor = "<sip:" + user + "@" + host + ">";
+        return authed("REGISTER", "sip:" + host,
+                      "From: " + aor + ";tag=r" + std::to_string(local_port) + "\r\nTo: " + aor +
+                          "\r\nContact: <sip:" + user + "@127.0.0.1:" + std::to_string(local_port) +
+                          ">\r\nExpires: " + std::to_string(expires) + "\r\n");
+    }
+    std::string send_message(const std::string &to_user, const std::string &host, const std::string &from_header,
+                             const std::string &body)
+    {
+        std::string uri = "sip:" + to_user + "@" + host;
+        return authed("MESSAGE", uri,
+                      "From: " + from_header + ";tag=m" + std::to_string(local_port) + "\r\nTo: <" + uri +
+                          ">\r\nContent-Type: text/plain\r\n",
+                      body);
+    }
+    // Waits for a MESSAGE from the PBX, answers 200 OK and returns its From header line.
+    std::string receive_message_from(int timeout_ms, const std::string &expected_body)
+    {
+        auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
+        while (std::chrono::steady_clock::now() < deadline) {
+            char buf[8192];
+            sockaddr_in src{};
+            socklen_t sl = sizeof(src);
+            ssize_t n = recvfrom(fd, buf, sizeof(buf) - 1, 0, reinterpret_cast<sockaddr *>(&src), &sl);
+            if (n <= 0) return "";
+            std::string d(buf, static_cast<size_t>(n));
+            if (d.compare(0, 8, "MESSAGE ") != 0 || d.find("\r\n\r\n" + expected_body) == std::string::npos) continue;
+            std::string ok = "SIP/2.0 200 OK\r\n";
+            std::string from_line;
+            size_t pos = d.find("\r\n") + 2;
+            while (pos < d.size()) {
+                size_t end = d.find("\r\n", pos);
+                if (end == std::string::npos || end == pos) break;
+                std::string line = d.substr(pos, end - pos);
+                if (line.compare(0, 4, "Via:") == 0 || line.compare(0, 5, "From:") == 0 ||
+                    line.compare(0, 8, "Call-ID:") == 0 || line.compare(0, 5, "CSeq:") == 0) ok += line + "\r\n";
+                if (line.compare(0, 5, "From:") == 0) from_line = line;
+                if (line.compare(0, 3, "To:") == 0) ok += line + ";tag=rawua\r\n";
+                pos = end + 2;
+            }
+            ok += "Content-Length: 0\r\n\r\n";
+            sendto(fd, ok.data(), ok.size(), 0, reinterpret_cast<sockaddr *>(&src), sl);
+            return from_line;
+        }
+        return "";
+    }
+};
 
 static uint64_t send_text(sip_client_t *client, const std::string &uri, const char *ctype, const std::string &body)
 {
@@ -308,6 +491,47 @@ int main(int argc, char *argv[])
             std::printf("FAIL: expected FAILED for a message without an account\n");
             sip_client_destroy(client);
             return 21;
+        }
+    }
+    // The dispatcher here is inline, so the status callback can run before
+    // sip_client_send_message returns. The id the caller holds must already be set.
+    // A burst keeps the engine thread awake, which makes the early callback likely.
+    {
+        std::string self_uri = std::string("sip:1001@") + asterisk_host + ":" + std::to_string(asterisk_port);
+        const uint8_t b[] = {'x'};
+        const size_t burst = 3000;
+        std::vector<uint64_t> outs(burst, 0);
+        g_caller_ids.store(outs.data());
+        g_caller_ids_count.store(burst);
+        // Busy threads make the sending thread lose the CPU between post and return.
+        std::atomic<bool> spin{true};
+        std::vector<std::thread> spinners;
+        for (unsigned t = 0; t < std::thread::hardware_concurrency() * 2; t++) {
+            spinners.emplace_back([&spin] { while (spin.load(std::memory_order_relaxed)) {} });
+        }
+        for (size_t i = 0; i < burst; i++) {
+            CHECK(sip_client_send_message(client, self_uri.c_str(), "text/plain", b, sizeof(b), &outs[i]) == 0);
+        }
+        spin.store(false);
+        for (auto &t : spinners) t.join();
+        MessageStatusEvent last{};
+        CHECK(wait_for_message_status(outs[burst - 1], 10, last));
+        for (size_t i = 0; i < burst; i++) {
+            MessageStatusEvent ev{};
+            CHECK(wait_for_message_status(outs[i], 10, ev));
+        }
+        g_caller_ids.store(nullptr);
+        size_t early = 0;
+        {
+            std::lock_guard<std::mutex> lock(g_reg_mutex);
+            for (const auto &ev : g_msg_status) {
+                if (!ev.id_known_to_caller) early++;
+            }
+        }
+        if (early != 0) {
+            std::printf("FAIL: %zu of %zu status callbacks fired before the caller had the message id\n", early, burst);
+            sip_client_destroy(client);
+            return 27;
         }
     }
     std::printf("PASS: Message input validation (EINVAL on bad input, FAILED without an account)\n");
@@ -410,6 +634,122 @@ int main(int argc, char *argv[])
         std::printf("PASS: Unknown peer message FAILED (code=%d reason='%s')\n", bst.code, bst.reason.c_str());
     }
 
+    // Test 2c: the PBX must put the authenticated sender in From, not what the sender claims.
+    // Extension 1004 authenticates, but claims a display name that impersonates 1002 (and one
+    // with a comma, which must not break the forwarding either). 1005 receives.
+    std::printf("--- Test 2c: forged From display name is replaced by the real sender ---\n");
+    {
+        const std::string host = asterisk_host;
+        RawUa receiver("1005", "test1005", asterisk_host, asterisk_port);
+        RawUa sender("1004", "test1004", asterisk_host, asterisk_port);
+        CHECK(receiver.register_contact(60, host).compare(0, 11, "SIP/2.0 200") == 0);
+        const char *forged[] = {"\"Boss 1002\" <sip:1004@127.0.0.1>", "\"Mallory, sip:1002@127.0.0.1\" <sip:1004@127.0.0.1>"};
+        int idx = 0;
+        for (const char *from_header : forged) {
+            std::string body = "forged-from-" + std::to_string(idx++);
+            std::string resp = sender.send_message("1005", host, from_header, body);
+            CHECK(resp.compare(0, 11, "SIP/2.0 202") == 0 || resp.compare(0, 11, "SIP/2.0 200") == 0);
+            std::string from_line = receiver.receive_message_from(5000, body);
+            if (from_line.empty() || from_line.find("sip:1004@") == std::string::npos ||
+                from_line.find("1002") != std::string::npos || from_line.find("Mallory") != std::string::npos ||
+                from_line.find("Boss") != std::string::npos) {
+                std::printf("FAIL: receiver saw '%s' for a message claiming %s\n", from_line.c_str(), from_header);
+                (void)receiver.register_contact(0, host);
+                sip_client_destroy(client);
+                return 31;
+            }
+        }
+        (void)receiver.register_contact(0, host);
+        std::printf("PASS: forwarded From carries only the authenticated sender\n");
+    }
+
+    // Test 2d: the PBX accepts the Authorization layouts real clients send (JsSIP puts
+    // algorithm= before username=; the scheme name is case-insensitive).
+    std::printf("--- Test 2d: Authorization header layouts are delivered ---\n");
+    {
+        const std::string host = asterisk_host;
+        RawUa receiver("1005", "test1005", asterisk_host, asterisk_port);
+        RawUa sender("1004", "test1004", asterisk_host, asterisk_port);
+        CHECK(receiver.register_contact(60, host).compare(0, 11, "SIP/2.0 200") == 0);
+        struct Layout { const char *name; bool algo_first; bool lower; };
+        const Layout layouts[] = {{"algorithm-first", true, false}, {"lowercase-scheme", false, true},
+                                  {"algorithm-first-lowercase", true, true}};
+        for (const auto &l : layouts) {
+            sender.algorithm_first = l.algo_first;
+            sender.lowercase_scheme = l.lower;
+            std::string body = std::string("layout-") + l.name;
+            std::string resp = sender.send_message("1005", host, "<sip:1004@127.0.0.1>", body);
+            CHECK(resp.compare(0, 11, "SIP/2.0 202") == 0 || resp.compare(0, 11, "SIP/2.0 200") == 0);
+            std::string from_line = receiver.receive_message_from(3000, body);
+            if (from_line.find("sip:1004@") == std::string::npos) {
+                std::printf("FAIL: %s Authorization: message not delivered (From line '%s')\n", l.name, from_line.c_str());
+                (void)receiver.register_contact(0, host);
+                sip_client_destroy(client);
+                return 32;
+            }
+        }
+        (void)receiver.register_contact(0, host);
+        std::printf("PASS: algorithm-first and lowercase-scheme Authorization are delivered\n");
+    }
+
+    // Test 2e: a sender that does not match its credentials is not delivered.
+    std::printf("--- Test 2e: mismatched sender identity is not delivered ---\n");
+    {
+        const std::string host = asterisk_host;
+        RawUa receiver("1005", "test1005", asterisk_host, asterisk_port);
+        RawUa sender("1004", "test1004", asterisk_host, asterisk_port);
+        CHECK(receiver.register_contact(60, host).compare(0, 11, "SIP/2.0 200") == 0);
+        // (a) Authorization names another user than the From user.
+        sender.header_username = "1002";
+        (void)sender.send_message("1005", host, "<sip:1004@127.0.0.1>", "auth-user-differs");
+        std::string seen = receiver.receive_message_from(2000, "auth-user-differs");
+        sender.header_username.clear();
+        if (!seen.empty()) {
+            std::printf("FAIL: message with a different Authorization user was delivered ('%s')\n", seen.c_str());
+            (void)receiver.register_contact(0, host);
+            sip_client_destroy(client);
+            return 33;
+        }
+        // (b) From user is another extension, credentials are 1004's.
+        (void)sender.send_message("1005", host, "<sip:1002@127.0.0.1>", "from-user-forged");
+        seen = receiver.receive_message_from(2000, "from-user-forged");
+        if (!seen.empty()) {
+            std::printf("FAIL: message with a forged From user was delivered ('%s')\n", seen.c_str());
+            (void)receiver.register_contact(0, host);
+            sip_client_destroy(client);
+            return 34;
+        }
+        (void)receiver.register_contact(0, host);
+        std::printf("PASS: mismatched Authorization user and forged From user are not delivered\n");
+    }
+
+    // Test 2g: a From URI may carry URI parameters; the PBX forwards the bare URI
+    // (Asterisk already drops the parameters from MESSAGE(from)).
+    std::printf("--- Test 2g: From URI with parameters is delivered ---\n");
+    {
+        const std::string host = asterisk_host;
+        RawUa receiver("1005", "test1005", asterisk_host, asterisk_port);
+        RawUa sender("1004", "test1004", asterisk_host, asterisk_port);
+        CHECK(receiver.register_contact(60, host).compare(0, 11, "SIP/2.0 200") == 0);
+        const char *uris[] = {"sip:1004@127.0.0.1;transport=tcp", "sip:1004@127.0.0.1:5060;transport=tcp;lr"};
+        int idx = 0;
+        for (const char *uri : uris) {
+            std::string body = "from-uri-" + std::to_string(idx++);
+            std::string from_header = std::string("\"Boss 1002\" <") + uri + ">";
+            (void)sender.send_message("1005", host, from_header, body);
+            std::string from_line = receiver.receive_message_from(3000, body);
+            if (from_line.find("<sip:1004@") == std::string::npos ||
+                from_line.find("Boss") != std::string::npos) {
+                std::printf("FAIL: From <%s> forwarded as '%s'\n", uri, from_line.c_str());
+                (void)receiver.register_contact(0, host);
+                sip_client_destroy(client);
+                return 36;
+            }
+        }
+        (void)receiver.register_contact(0, host);
+        std::printf("PASS: From URI parameters are delivered\n");
+    }
+
     // Test 3: Clean unregistration
     std::printf("--- Test 3: Clean unregistration (Expires: 0) ---\n");
     clear_events();
@@ -459,6 +799,129 @@ int main(int argc, char *argv[])
 
     // Teardown
     sip_client_destroy(client);
+
+    // Test 6: a MESSAGE still waiting for a response when the client is destroyed must be
+    // reported FAILED, and its bookkeeping must be released.
+    std::printf("--- Test 6: pending MESSAGE at client destroy ---\n");
+    {
+        int peer_port = 0;
+        int peer_fd = open_raw_peer(peer_port);
+        CHECK(peer_fd >= 0);  // a peer that never answers
+        sip_client_t *c2 = sip_client_create(&callbacks, nullptr);
+        CHECK(c2 != nullptr);
+        {
+            std::lock_guard<std::mutex> lock(g_reg_mutex);
+            g_msg_status.clear();  // message ids restart at 1 for a new client
+        }
+        CHECK(sip_client_init(c2, config_dir) == 0);
+        CHECK(sip_client_set_message_callbacks(c2, &msg_callbacks) == 0);
+        CHECK(sip_client_register(c2, "1001", "127.0.0.1", "test1001", "udp", peer_port) == 0);
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        std::string uri = "sip:1002@127.0.0.1:" + std::to_string(peer_port);
+        uint64_t pending_id = send_text(c2, uri, "text/plain", "never answered");
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        {
+            std::lock_guard<std::mutex> lock(g_reg_mutex);
+            for (const auto &ev : g_msg_status) CHECK(ev.id != pending_id);  // still pending
+        }
+        sip_client_destroy(c2);
+        MessageStatusEvent pst{};
+        if (!wait_for_message_status(pending_id, 2, pst) || pst.status != SIP_MESSAGE_STATUS_FAILED) {
+            std::printf("FAIL: pending message %llu got no FAILED status at destroy\n", (unsigned long long)pending_id);
+            close(peer_fd);
+            return 28;
+        }
+        close(peer_fd);
+        std::printf("PASS: pending MESSAGE reported FAILED at destroy (reason='%s')\n", pst.reason.c_str());
+    }
+
+    // Test 6b: the SDK's TCP account (AOR with ;transport=tcp) can message through the PBX.
+    // A second client lives after the first is destroyed: baresip's account list is per process.
+    std::printf("--- Test 6b: MESSAGE from an account configured for TCP is delivered ---\n");
+    {
+        sip_client_t *tcp = sip_client_create(&callbacks, nullptr);
+        CHECK(tcp != nullptr);
+        CHECK(sip_client_init(tcp, config_dir) == 0);
+        CHECK(sip_client_set_message_callbacks(tcp, &msg_callbacks) == 0);
+        {
+            std::lock_guard<std::mutex> lock(g_reg_mutex);
+            g_msg_status.clear();  // message ids restart at 1 for a new client
+            g_msg_received.clear();
+        }
+        clear_events();
+        CHECK(sip_client_register(tcp, "1003", asterisk_host, "test1003", "tcp", asterisk_port) == 0);
+        RegEvent tev{};
+        CHECK(wait_for_state(SIP_REG_STATE_REGISTERED, 10, tev));
+        const std::string text = "hello over tcp";
+        uint64_t tid = send_text(tcp, std::string("sip:1003@") + asterisk_host + ":" + std::to_string(asterisk_port) + ";transport=tcp",
+                                 "text/plain", text);
+        MessageStatusEvent tst{};
+        ReceivedMessage trx{};
+        bool sent = wait_for_message_status(tid, 10, tst);
+        bool got = wait_for_received_body(text, 5, trx);
+        sip_client_destroy(tcp);
+        if (!sent || !got) {
+            std::printf("FAIL: TCP message sent=%d (status=%d code=%d) received=%d\n", sent ? 1 : 0, tst.status, tst.code, got ? 1 : 0);
+            return 35;
+        }
+        std::printf("PASS: MESSAGE from a TCP-configured account delivered (from=%s)\n", trx.from.c_str());
+    }
+
+    // Test 7: an incoming MESSAGE body over SIP_MESSAGE_MAX_BODY_SIZE is answered 413 and not delivered.
+    // libre's TCP buffer and the UDP datagram limit keep such a message off the wire, so the
+    // handler is fed a decoded request directly.
+    std::printf("--- Test 7: oversized incoming MESSAGE body ---\n");
+    {
+        int peer_port = 0;
+        int peer_fd = open_raw_peer(peer_port);
+        CHECK(peer_fd >= 0);
+        {
+            std::lock_guard<std::mutex> lock(g_reg_mutex);
+            g_msg_received.clear();
+        }
+        sip_core::Engine engine(nullptr, &callbacks, nullptr);
+        CHECK(engine.init(config_dir) == 0);
+        CHECK(engine.set_message_callbacks(&msg_callbacks) == 0);
+        CHECK(engine.register_account("1001", "127.0.0.1", "test1001", "udp", peer_port) == 0);
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+
+        struct Case { size_t len; const char *status; bool delivered; };
+        const Case cases[] = {
+            {SIP_MESSAGE_MAX_BODY_SIZE, "SIP/2.0 200", true},       // at the limit: accepted
+            {SIP_MESSAGE_MAX_BODY_SIZE + 1, "SIP/2.0 413", false},  // one over: rejected
+        };
+        for (const auto &c : cases) {
+            bool handled = false;
+            CHECK(sip_core::EngineTestAccess::handle_message(engine, incoming_message_text(peer_port, c.len), peer_port,
+                                                             handled));
+            CHECK(handled);
+            timeval tv{2, 0};
+            setsockopt(peer_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+            std::string reply;
+            for (int i = 0; i < 20; i++) {  // skip the account's own REGISTER (re)transmissions
+                char buf[2048];
+                ssize_t n = recvfrom(peer_fd, buf, sizeof(buf) - 1, 0, nullptr, nullptr);
+                if (n <= 0) break;
+                reply.assign(buf, static_cast<size_t>(n));
+                if (reply.compare(0, 8, "SIP/2.0 ") == 0) break;
+            }
+            bool got;
+            {
+                std::lock_guard<std::mutex> lock(g_reg_mutex);
+                got = !g_msg_received.empty();
+                g_msg_received.clear();
+            }
+            if (reply.compare(0, std::strlen(c.status), c.status) != 0 || got != c.delivered) {
+                std::printf("FAIL: body %zu bytes: reply='%.40s' delivered=%d (want %s, delivered=%d)\n", c.len,
+                            reply.c_str(), got ? 1 : 0, c.status, c.delivered ? 1 : 0);
+                close(peer_fd);
+                return 29;
+            }
+        }
+        close(peer_fd);
+        std::printf("PASS: oversized incoming MESSAGE answered 413 and not delivered\n");
+    }
+
     std::printf("ALL_REGISTRATION_TESTS_PASSED\n");
     return 0;
 }

@@ -80,6 +80,7 @@ public:
     int set_message_callbacks(const sip_message_callbacks_t *callbacks);
     int send_message(const char *peer_uri, const char *content_type, const uint8_t *body, size_t body_len,
                      uint64_t *message_id);
+    void fail_pending_messages(const char *reason);
     void dispatch_message_status(uint64_t message_id, sip_message_status_t status, int code, const char *reason);
     void dispatch_message_received(std::string from_uri, std::string content_type, std::string body);
 
@@ -124,6 +125,7 @@ private:
     static void mqueue_callback(int id, void *data, void *arg);
     static bool sip_request_handler(const struct sip_msg *msg, void *arg);
     bool handle_incoming_message(const struct sip_msg *msg);
+    friend struct EngineTestAccess;  // lets core tests feed a decoded MESSAGE
 
     sip_client_t *m_owner{nullptr};
     sip_callbacks_t m_callbacks{};

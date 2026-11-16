@@ -138,6 +138,8 @@ if(BARESIP_LIBRARY)
     target_include_directories(sip_core_registration_test
         PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/include
+            ${CMAKE_CURRENT_SOURCE_DIR}/src
+            ${BARESIP_INCLUDE_DIR}
     )
 
     target_link_libraries(sip_core_registration_test
