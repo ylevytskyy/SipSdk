@@ -19,10 +19,8 @@ if [ -n "$EXTERNAL_IP" ] && [ "$EXTERNAL_IP" != "127.0.0.1" ]; then
     echo "==> Configuring external NAT IP: $EXTERNAL_IP"
     sed -i "s/;EXTERNAL_IP_PLACEHOLDER_UDP/external_media_address=$EXTERNAL_IP\nexternal_signaling_address=$EXTERNAL_IP/" /etc/asterisk/pjsip.conf
     sed -i "s/;EXTERNAL_IP_PLACEHOLDER_TCP/external_media_address=$EXTERNAL_IP\nexternal_signaling_address=$EXTERNAL_IP/" /etc/asterisk/pjsip.conf
-    sed -i "/\[1001\]/a media_address=$EXTERNAL_IP" /etc/asterisk/pjsip.conf
-    sed -i "/\[1003\]/a media_address=$EXTERNAL_IP" /etc/asterisk/pjsip.conf
-    sed -i "/\[1004\]/a media_address=$EXTERNAL_IP" /etc/asterisk/pjsip.conf
-    sed -i "/\[1005\]/a media_address=$EXTERNAL_IP" /etc/asterisk/pjsip.conf
+    # Only the endpoint sections take media_address; [1001] etc. also name the aor sections.
+    sed -i "/^\[100[1345]\]$/{n;s/^type=endpoint$/type=endpoint\nmedia_address=$EXTERNAL_IP/}" /etc/asterisk/pjsip.conf
 fi
 
 # 3. Ensure permissions for asterisk user
