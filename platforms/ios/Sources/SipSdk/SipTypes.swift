@@ -122,6 +122,42 @@ public struct SipAccount: Sendable, Codable, Hashable {
     }
 }
 
+/// Status of a message sent with `SipClient.sendMessage`.
+public enum SipMessageStatus: Int, Sendable, Equatable {
+    /// The server or peer accepted the message (2xx).
+    case sent = 0
+    /// Non-2xx final response, transport error, or no registered account.
+    case failed = 1
+    /// Reserved: delivery notification (IMDN, RFC 5438) from the peer.
+    case delivered = 2
+    /// Reserved: display (read) notification (IMDN, RFC 5438) from the peer.
+    case displayed = 3
+}
+
+/// A SIP MESSAGE received for the registered account.
+public struct SipIncomingMessage: Sendable, Hashable {
+    /// Sender address, e.g. `sip:1002@pbx.example.com`.
+    public let from: String
+    /// MIME type, e.g. `text/plain`.
+    public let contentType: String
+    /// Raw body bytes.
+    public let body: Data
+    public let receivedAt: Date
+
+    public init(from: String, contentType: String, body: Data, receivedAt: Date = Date()) {
+        self.from = from
+        self.contentType = contentType
+        self.body = body
+        self.receivedAt = receivedAt
+    }
+
+    /// Body as UTF-8 text for `text/*` content types; nil otherwise.
+    public var text: String? {
+        guard contentType.lowercased().hasPrefix("text/") else { return nil }
+        return String(data: body, encoding: .utf8)
+    }
+}
+
 /// Typed event dispatch streamed by `SipClient`.
 public enum SipEvent: Sendable {
     case registrationChanged(SipRegistrationState)
@@ -129,6 +165,8 @@ public enum SipEvent: Sendable {
     case callStateChanged(SipCall, SipCallState)
     case mediaUpdated(SipCall, width: Int, height: Int, onHold: Bool, isMuted: Bool)
     case dtmfReceived(SipCall, digit: String)
+    case messageReceived(SipIncomingMessage)
+    case messageStatusChanged(id: UInt64, status: SipMessageStatus, code: Int, reason: String)
 }
 
 /// Strongly typed SIP error domain.
@@ -137,6 +175,7 @@ public enum SipError: LocalizedError, Sendable {
     case alreadyStarted
     case registrationFailed(Int, String)
     case callCreationFailed(String)
+    case messageSendFailed(Int, String)
     case invalidParameter(String)
     case audioSessionFailed(String)
     case coreError(Int, String)
@@ -151,6 +190,8 @@ public enum SipError: LocalizedError, Sendable {
             return "SIP registration failed (\(code)): \(reason)"
         case .callCreationFailed(let detail):
             return "Failed to create SIP call: \(detail)"
+        case .messageSendFailed(let code, let detail):
+            return "Failed to send SIP message (\(code)): \(detail)"
         case .invalidParameter(let detail):
             return "Invalid parameter: \(detail)"
         case .audioSessionFailed(let detail):

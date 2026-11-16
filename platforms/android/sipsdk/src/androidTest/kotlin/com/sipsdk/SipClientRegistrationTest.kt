@@ -110,4 +110,57 @@ class SipClientRegistrationTest {
 
         client.destroy()
     }
+
+    @Test
+    fun testMessageRoundTrip() {
+        val client = SipClient("1001", TestConfig.host, context).apply {
+            password = "test1001"
+            port = 5060
+            transport = "udp"
+        }
+
+        val regLatch = CountDownLatch(1)
+        val statusLatch = CountDownLatch(1)
+        val receiveLatch = CountDownLatch(1)
+        var receivedStatus: SipMessageStatus? = null
+        var receivedCode = 0
+        var receivedMsg: SipIncomingMessage? = null
+
+        client.listener = object : SipClientListener {
+            override fun onRegistrationStateChanged(state: SipRegistrationState, code: Int, reason: String) {
+                if (state == SipRegistrationState.REGISTERED) {
+                    regLatch.countDown()
+                }
+            }
+
+            override fun onMessageStatusChanged(messageId: Long, status: SipMessageStatus, code: Int, reason: String) {
+                receivedStatus = status
+                receivedCode = code
+                statusLatch.countDown()
+            }
+
+            override fun onMessageReceived(message: SipIncomingMessage) {
+                receivedMsg = message
+                receiveLatch.countDown()
+            }
+        }
+
+        assertEquals(0, client.start())
+        assertEquals(0, client.register())
+        assertTrue("Timeout waiting for SIP registration", regLatch.await(10, TimeUnit.SECONDS))
+
+        val msgId = client.sendMessage("1001", "hello from Android")
+        assertTrue("Expected positive message id", msgId > 0)
+        assertTrue("Timeout waiting for message status", statusLatch.await(10, TimeUnit.SECONDS))
+        assertEquals(SipMessageStatus.SENT, receivedStatus)
+        assertTrue("Expected 2xx status code, got $receivedCode", receivedCode in 200..299)
+
+        assertTrue("Timeout waiting for echoed message", receiveLatch.await(10, TimeUnit.SECONDS))
+        assertEquals("text/plain", receivedMsg?.contentType)
+        assertEquals("hello from Android", receivedMsg?.text)
+        assertTrue("Expected sender sip:1001@, got ${receivedMsg?.from}", receivedMsg?.from?.startsWith("sip:1001@") == true)
+
+        client.unregister()
+        client.destroy()
+    }
 }

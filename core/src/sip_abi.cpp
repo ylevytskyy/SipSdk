@@ -335,4 +335,21 @@ SIP_ABI_EXPORT bool sip_client_is_local_preview_active(const sip_client_t *clien
     return client->engine->is_local_preview_active();
 }
 
+SIP_ABI_EXPORT int sip_client_set_message_callbacks(sip_client_t *client, const sip_message_callbacks_t *callbacks)
+{
+    if (!client || !client->engine) return EINVAL;
+    return client->engine->set_message_callbacks(callbacks);
+}
+
+SIP_ABI_EXPORT int sip_client_send_message(sip_client_t *client,
+                                           const char *peer_uri,
+                                           const char *content_type,
+                                           const uint8_t *body,
+                                           size_t body_len,
+                                           uint64_t *message_id)
+{
+    if (!client || !client->engine) return EINVAL;
+    return client->engine->send_message(peer_uri, content_type, body, body_len, message_id);
+}
+
 } // extern "C"

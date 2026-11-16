@@ -45,6 +45,16 @@ public:
 
     std::shared_ptr<Call> make_call(const std::string &target_uri, bool with_video = false);
 
+    /**
+     * Sends a SIP MESSAGE. body holds UTF-8 text for text/plain or raw bytes for other
+     * content types. Returns 0 when queued (message_id gets the id later reported by
+     * IClientListener::on_message_status), or an errno-style code.
+     */
+    int send_message(const std::string &target_uri,
+                     const std::string &body,
+                     const std::string &content_type = "text/plain",
+                     uint64_t *message_id = nullptr);
+
     void set_mic_muted(bool muted);
     bool is_mic_muted() const;
 

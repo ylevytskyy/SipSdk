@@ -22,7 +22,16 @@ export const SipCallState = Object.freeze({
   Closed: 5,
 });
 
+/** Status of a sent SIP MESSAGE; same values as sip_message_status_t. */
+export const SipMessageStatus = Object.freeze({
+  Sent: 0,
+  Failed: 1,
+  Delivered: 2, // reserved: IMDN delivery notification (RFC 5438)
+  Displayed: 3, // reserved: IMDN display (read) notification (RFC 5438)
+});
+
 const VIDEO_CONSTRAINTS = { width: { ideal: 640 }, height: { ideal: 480 } };
+const CONTENT_TYPE = /^[^\s/;]+\/[^\s/;]+(\s*;.*)?$/;
 const DTMF_DIGITS = /^[0-9A-D#*]+$/i;
 
 class Emitter {
@@ -343,6 +352,7 @@ export class SipClient extends Emitter {
   #registered = false;
   #domain = '';
   #calls = new Set();
+  #nextMessageId = 1;
 
   /**
    * @param {object} [options]
@@ -420,6 +430,15 @@ export class SipClient extends Emitter {
       this.#calls.add(call);
       this.emit('incomingCall', { call });
     });
+    ua.on('newMessage', (e) => {
+      if (this.#ua !== ua || e.originator !== 'remote') return;
+      const contentType = (e.request?.getHeader?.('Content-Type') || 'text/plain').split(';')[0].trim();
+      this.emit('messageReceived', {
+        from: e.message?.remote_identity?.uri?.toString() || '',
+        contentType,
+        body: e.request?.body || '',
+      });
+    });
 
     this.emit('registrationStateChanged', { state: SipRegistrationState.Registering, code: 0, reason: '' });
     ua.start();
@@ -446,6 +465,37 @@ export class SipClient extends Emitter {
     const call = new SipCall(this, session, { outgoing: true, video: !!video });
     this.#calls.add(call);
     return call;
+  }
+
+  /**
+   * Sends a SIP MESSAGE (RFC 3428). target is an extension ("1002"), user@host, or a sip: URI.
+   * The result arrives as a 'messageStatusChanged' event { id, status, code, reason }.
+   * @param {string} target
+   * @param {string} body text, or a serialized body for other content types
+   * @param {{contentType?: string}} [options] MIME type, default "text/plain"
+   * @returns {number} local message id
+   */
+  sendMessage(target, body, { contentType = 'text/plain' } = {}) {
+    if (!this.#started) throw new Error('SipSdk: call start() before sendMessage()');
+    if (!this.#ua || !this.#registered) throw new Error('SipSdk: register an account before sendMessage()');
+    if (!target) throw new Error('SipSdk: target is required');
+    if (!body) throw new Error('SipSdk: message body is required');
+    if (!CONTENT_TYPE.test(contentType)) throw new Error(`SipSdk: invalid content type "${contentType}"`);
+
+    const id = this.#nextMessageId++;
+    const report = (status, e) => {
+      const code = e?.response?.status_code || 0;
+      const reason = e?.response?.reason_phrase || e?.cause || '';
+      this.emit('messageStatusChanged', { id, status, code, reason });
+    };
+    this.#ua.sendMessage(toSipUri(target, this.#domain), body, {
+      contentType,
+      eventHandlers: {
+        succeeded: (e) => report(SipMessageStatus.Sent, e),
+        failed: (e) => report(SipMessageStatus.Failed, e),
+      },
+    });
+    return id;
   }
 
   /** @internal */

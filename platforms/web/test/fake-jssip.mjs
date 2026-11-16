@@ -51,7 +51,13 @@ export function createFakeJsSIP() {
       this.stopped = false;
       this.unregisterCalls = [];
       this.outgoing = [];
+      this.messages = [];
       uas.push(this);
+    }
+    sendMessage(target, body, options) {
+      const message = { target, body, options };
+      this.messages.push(message);
+      return message;
     }
     start() { this.started = true; }
     stop() { this.stopped = true; }

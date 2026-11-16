@@ -22,6 +22,8 @@ namespace SipSdk
         private readonly NativeCallStateCallback _callStateCallback;
         private readonly NativeCallMediaCallback _callMediaCallback;
         private readonly NativeDtmfDigitCallback _dtmfCallback;
+        private readonly NativeMessageReceivedCallback _messageReceivedCallback;
+        private readonly NativeMessageStatusCallback _messageStatusCallback;
 
         private GCHandle _gcHandle;
         private bool _disposed;
@@ -33,6 +35,8 @@ namespace SipSdk
 
         public event EventHandler<RegistrationStateChangedEventArgs>? RegistrationStateChanged;
         public event EventHandler<IncomingCallEventArgs>? IncomingCall;
+        public event EventHandler<MessageReceivedEventArgs>? MessageReceived;
+        public event EventHandler<MessageStatusChangedEventArgs>? MessageStatusChanged;
 
         public SipClient()
         {
@@ -43,6 +47,8 @@ namespace SipSdk
             _callStateCallback = HandleNativeCallState;
             _callMediaCallback = HandleNativeCallMedia;
             _dtmfCallback = HandleNativeDtmfDigit;
+            _messageReceivedCallback = HandleNativeMessageReceived;
+            _messageStatusCallback = HandleNativeMessageStatus;
 
             _gcHandle = GCHandle.Alloc(this);
             IntPtr userData = GCHandle.ToIntPtr(_gcHandle);
@@ -61,6 +67,13 @@ namespace SipSdk
             {
                 throw new InvalidOperationException("Failed to allocate native SIP client handle.");
             }
+
+            var messageCallbacks = new SipMessageCallbacksNative
+            {
+                OnMessageReceived = Marshal.GetFunctionPointerForDelegate(_messageReceivedCallback),
+                OnMessageStatus = Marshal.GetFunctionPointerForDelegate(_messageStatusCallback)
+            };
+            SipNativeAbi.sip_client_set_message_callbacks(_clientHandle, ref messageCallbacks);
         }
 
         public int Start(string? configPath = null)
@@ -108,6 +121,41 @@ namespace SipSdk
             var call = new SipCall(callHandle, this);
             _activeCalls[callHandle] = call;
             return call;
+        }
+
+        /// <summary>
+        /// Sends a UTF-8 text message (SIP MESSAGE, text/plain).
+        /// Returns the local message id; its result arrives through <see cref="MessageStatusChanged"/>.
+        /// </summary>
+        public ulong SendMessage(string targetUri, string text)
+        {
+            if (string.IsNullOrEmpty(text)) throw new ArgumentException("Message text cannot be empty", nameof(text));
+            return SendMessage(targetUri, System.Text.Encoding.UTF8.GetBytes(text), "text/plain");
+        }
+
+        /// <summary>
+        /// Sends a SIP MESSAGE with any MIME content type (e.g. "application/json").
+        /// Returns the local message id; its result arrives through <see cref="MessageStatusChanged"/>.
+        /// </summary>
+        public ulong SendMessage(string targetUri, byte[] body, string contentType)
+        {
+            ThrowIfDisposed();
+            if (string.IsNullOrEmpty(targetUri)) throw new ArgumentException("Target URI cannot be empty", nameof(targetUri));
+            if (body == null || body.Length == 0) throw new ArgumentException("Message body cannot be empty", nameof(body));
+            if (string.IsNullOrEmpty(contentType)) throw new ArgumentException("Content type cannot be empty", nameof(contentType));
+
+            int rc = SipNativeAbi.sip_client_send_message(
+                _clientHandle,
+                SipNativeAbi.ToUtf8Z(targetUri),
+                SipNativeAbi.ToUtf8Z(contentType),
+                body,
+                (UIntPtr)body.Length,
+                out ulong messageId);
+            if (rc != 0)
+            {
+                throw new InvalidOperationException($"Failed to send message to {targetUri} (error {rc})");
+            }
+            return messageId;
         }
 
         public void SetMicMuted(bool muted)
@@ -217,6 +265,31 @@ namespace SipSdk
             {
                 call.HandleDtmf(digit);
             }
+        }
+
+        private void HandleNativeMessageReceived(IntPtr client, IntPtr fromUri, IntPtr contentType, IntPtr body, UIntPtr bodyLen, IntPtr userData)
+        {
+            string from = SipNativeAbi.PtrToStringUtf8(fromUri) ?? string.Empty;
+            string ctype = SipNativeAbi.PtrToStringUtf8(contentType) ?? "text/plain";
+            byte[] bytes = new byte[(int)bodyLen];
+            if (body != IntPtr.Zero && bytes.Length > 0)
+            {
+                Marshal.Copy(body, bytes, 0, bytes.Length);
+            }
+            var args = new MessageReceivedEventArgs(from, ctype, bytes);
+            DispatchToUi(() =>
+            {
+                MessageReceived?.Invoke(this, args);
+            });
+        }
+
+        private void HandleNativeMessageStatus(IntPtr client, ulong messageId, int status, int code, IntPtr reason, IntPtr userData)
+        {
+            var args = new MessageStatusChangedEventArgs(messageId, (SipMessageStatus)status, code, SipNativeAbi.PtrToStringUtf8(reason) ?? string.Empty);
+            DispatchToUi(() =>
+            {
+                MessageStatusChanged?.Invoke(this, args);
+            });
         }
 
         private void ThrowIfDisposed()

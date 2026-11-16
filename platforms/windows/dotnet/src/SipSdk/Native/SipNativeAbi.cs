@@ -45,6 +45,19 @@ namespace SipSdk.Native
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     public delegate void NativeDtmfDigitCallback(IntPtr call, [MarshalAs(UnmanagedType.LPStr)] string digit, IntPtr userData);
 
+    [StructLayout(LayoutKind.Sequential)]
+    public struct SipMessageCallbacksNative
+    {
+        public IntPtr OnMessageReceived;
+        public IntPtr OnMessageStatus;
+    }
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    public delegate void NativeMessageReceivedCallback(IntPtr client, IntPtr fromUri, IntPtr contentType, IntPtr body, UIntPtr bodyLen, IntPtr userData);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    public delegate void NativeMessageStatusCallback(IntPtr client, ulong messageId, int status, int code, IntPtr reason, IntPtr userData);
+
     internal static class SipNativeAbi
     {
         public const string LibraryName = "sipcore";
@@ -167,5 +180,37 @@ namespace SipSdk.Native
         [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
         [return: MarshalAs(UnmanagedType.I1)]
         public static extern bool sip_client_is_local_preview_active(IntPtr client);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int sip_client_set_message_callbacks(IntPtr client, ref SipMessageCallbacksNative callbacks);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int sip_client_send_message(
+            IntPtr client,
+            byte[] peerUriUtf8Z,
+            byte[] contentTypeUtf8Z,
+            byte[] body,
+            UIntPtr bodyLen,
+            out ulong messageId);
+
+        /// <summary>NUL-terminated UTF-8 bytes (netstandard2.0 has no LPUTF8Str marshalling).</summary>
+        public static byte[] ToUtf8Z(string value)
+        {
+            int len = System.Text.Encoding.UTF8.GetByteCount(value);
+            byte[] bytes = new byte[len + 1];
+            System.Text.Encoding.UTF8.GetBytes(value, 0, value.Length, bytes, 0);
+            return bytes;
+        }
+
+        /// <summary>Reads a NUL-terminated UTF-8 string; null for a null pointer.</summary>
+        public static string? PtrToStringUtf8(IntPtr ptr)
+        {
+            if (ptr == IntPtr.Zero) return null;
+            int len = 0;
+            while (Marshal.ReadByte(ptr, len) != 0) len++;
+            byte[] bytes = new byte[len];
+            Marshal.Copy(ptr, bytes, 0, len);
+            return System.Text.Encoding.UTF8.GetString(bytes);
+        }
     }
 }

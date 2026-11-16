@@ -594,6 +594,39 @@ struct ClientCallbacks {
         });
     }
 
+    static void on_message_received(sip_client_t *c, const char *from_uri, const char *content_type,
+                                    const uint8_t *body, size_t body_len, void *user_data)
+    {
+        (void)c;
+        auto *self = (__bridge SipMacClient *)user_data;
+        if (!self) return;
+
+        NSString *from = from_uri ? [NSString stringWithUTF8String:from_uri] : @"";
+        NSString *ctype = content_type ? [NSString stringWithUTF8String:content_type] : @"text/plain";
+        NSData *data = (body && body_len > 0) ? [NSData dataWithBytes:body length:body_len] : [NSData data];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if ([self.delegate respondsToSelector:@selector(client:didReceiveMessageFrom:contentType:body:)]) {
+                [self.delegate client:self didReceiveMessageFrom:from contentType:ctype body:data];
+            }
+        });
+    }
+
+    static void on_message_status(sip_client_t *c, uint64_t message_id, sip_message_status_t status,
+                                  int code, const char *reason, void *user_data)
+    {
+        (void)c;
+        auto *self = (__bridge SipMacClient *)user_data;
+        if (!self) return;
+
+        NSString *rStr = reason ? [NSString stringWithUTF8String:reason] : @"";
+        SipMacMessageStatus msgStatus = static_cast<SipMacMessageStatus>(status);
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if ([self.delegate respondsToSelector:@selector(client:message:didChangeStatus:code:reason:)]) {
+                [self.delegate client:self message:message_id didChangeStatus:msgStatus code:code reason:rStr];
+            }
+        });
+    }
+
     static void on_dtmf_digit(sip_call_t *call, const char *digit, void *user_data)
     {
         auto *self = (__bridge SipMacClient *)user_data;
@@ -774,6 +807,12 @@ static bool set_default_audio_device_by_name(NSString *targetName, bool is_input
     _client = sip_client_create(&cb, (__bridge void *)self);
     if (!_client) return -1;
 
+    sip_message_callbacks_t msgCb;
+    std::memset(&msgCb, 0, sizeof(msgCb));
+    msgCb.on_message_received = ClientCallbacks::on_message_received;
+    msgCb.on_message_status = ClientCallbacks::on_message_status;
+    sip_client_set_message_callbacks(_client, &msgCb);
+
     std::string path = configPath ? [configPath UTF8String] : ensure_default_config_dir();
     int rc = sip_client_init(_client, path.c_str());
     if (rc != 0) {
@@ -919,6 +958,27 @@ static bool set_default_audio_device_by_name(NSString *targetName, bool is_input
     if (!h) return nil;
 
     return [self getOrCreateCall:h];
+}
+
+- (uint64_t)sendMessageToUri:(NSString *)uri text:(NSString *)text
+{
+    NSData *body = [text dataUsingEncoding:NSUTF8StringEncoding];
+    return [self sendMessageToUri:uri body:body ?: [NSData data] contentType:@"text/plain"];
+}
+
+- (uint64_t)sendMessageToUri:(NSString *)uri body:(NSData *)body contentType:(NSString *)contentType
+{
+    sip_client_t *c = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(_mutex);
+        c = _client;
+    }
+    if (!c || uri.length == 0 || body.length == 0 || contentType.length == 0) return 0;
+
+    uint64_t messageId = 0;
+    int rc = sip_client_send_message(c, [uri UTF8String], [contentType UTF8String],
+                                     static_cast<const uint8_t *>(body.bytes), body.length, &messageId);
+    return rc == 0 ? messageId : 0;
 }
 
 - (void)setRemoteVideoView:(nullable SipMacVideoView *)videoView

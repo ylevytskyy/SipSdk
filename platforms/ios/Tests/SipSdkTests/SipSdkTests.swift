@@ -228,6 +228,26 @@ final class SipSdkTests: XCTestCase {
         // Test network handover transport reset
         client.resetTransports(reRegister: false)
 
+        // Test sendMessage argument validation while started
+        XCTAssertThrowsError(try client.sendMessage(to: "sip:1002@127.0.0.1", text: "")) { error in
+            guard case SipError.invalidParameter = error else {
+                XCTFail("Expected invalidParameter for empty text, got \(error)")
+                return
+            }
+        }
+        XCTAssertThrowsError(try client.sendMessage(to: "", text: "hi")) { error in
+            guard case SipError.invalidParameter = error else {
+                XCTFail("Expected invalidParameter for empty target, got \(error)")
+                return
+            }
+        }
+        XCTAssertThrowsError(try client.sendMessage(to: "sip:1002@127.0.0.1", body: Data("x".utf8), contentType: "badtype")) { error in
+            guard case SipError.messageSendFailed = error else {
+                XCTFail("Expected messageSendFailed for invalid content type, got \(error)")
+                return
+            }
+        }
+
         await client.stop()
         XCTAssertFalse(client.isStarted)
     }
@@ -302,6 +322,54 @@ final class SipSdkTests: XCTestCase {
                 try await Task.sleep(nanoseconds: 300_000_000)
             }
 
+            // SIP MESSAGE round-trip (1001 -> 1001) and 404 negative case
+            var receivedMessages: [SipIncomingMessage] = []
+            var messageStatuses: [(id: UInt64, status: SipMessageStatus, code: Int, reason: String)] = []
+            let eventTask = Task { @MainActor in
+                for await event in client.events {
+                    switch event {
+                    case .messageReceived(let msg):
+                        receivedMessages.append(msg)
+                    case .messageStatusChanged(let id, let status, let code, let reason):
+                        messageStatuses.append((id, status, code, reason))
+                    default:
+                        break
+                    }
+                }
+            }
+
+            let text = "hello from iOS"
+            let msgId = try client.sendMessage(to: "1001", text: text)
+            XCTAssertGreaterThan(msgId, 0)
+
+            var msgWait = 0
+            while (receivedMessages.isEmpty || !messageStatuses.contains(where: { $0.id == msgId })) && msgWait < 50 {
+                try await Task.sleep(nanoseconds: 100_000_000)
+                msgWait += 1
+            }
+
+            let sentStatus = messageStatuses.first(where: { $0.id == msgId })
+            XCTAssertNotNil(sentStatus, "Expected messageStatusChanged for sent message")
+            XCTAssertEqual(sentStatus?.status, .sent)
+            XCTAssertTrue((200..<300).contains(sentStatus?.code ?? 0))
+
+            let incoming = receivedMessages.first(where: { $0.text == text })
+            XCTAssertNotNil(incoming, "Expected echoed SIP MESSAGE")
+            XCTAssertTrue(incoming?.from.hasPrefix("sip:1001@") ?? false)
+            XCTAssertEqual(incoming?.contentType, "text/plain")
+
+            let unknownId = try client.sendMessage(to: "sip:9999@127.0.0.1:5060", text: "unknown")
+            var failWait = 0
+            while !messageStatuses.contains(where: { $0.id == unknownId }) && failWait < 50 {
+                try await Task.sleep(nanoseconds: 100_000_000)
+                failWait += 1
+            }
+            let failedStatus = messageStatuses.first(where: { $0.id == unknownId })
+            XCTAssertEqual(failedStatus?.status, .failed)
+            XCTAssertEqual(failedStatus?.code, 404)
+
+            eventTask.cancel()
+
             await client.unregister()
             try await Task.sleep(nanoseconds: 200_000_000)
         } else {
@@ -310,5 +378,28 @@ final class SipSdkTests: XCTestCase {
 
         await client.stop()
         try await Task.sleep(nanoseconds: 200_000_000)
+    }
+
+    @MainActor
+    func testSipMessageTypesAndValidation() {
+        XCTAssertEqual(SipMessageStatus(rawValue: 0), .sent)
+        XCTAssertEqual(SipMessageStatus(rawValue: 1), .failed)
+        XCTAssertEqual(SipMessageStatus(rawValue: 2), .delivered)
+        XCTAssertEqual(SipMessageStatus(rawValue: 3), .displayed)
+
+        let textMsg = SipIncomingMessage(from: "sip:1002@pbx", contentType: "text/plain", body: Data("hello".utf8))
+        XCTAssertEqual(textMsg.text, "hello")
+        let upperTextMsg = SipIncomingMessage(from: "sip:1002@pbx", contentType: "TEXT/HTML", body: Data("<p>hi</p>".utf8))
+        XCTAssertEqual(upperTextMsg.text, "<p>hi</p>")
+        let jsonMsg = SipIncomingMessage(from: "sip:1002@pbx", contentType: "application/json", body: Data("{}".utf8))
+        XCTAssertNil(jsonMsg.text)
+
+        let client = SipClient()
+        XCTAssertThrowsError(try client.sendMessage(to: "sip:1002@127.0.0.1", text: "hi")) { error in
+            guard case SipError.engineNotStarted = error else {
+                XCTFail("Expected engineNotStarted, got \(error)")
+                return
+            }
+        }
     }
 }

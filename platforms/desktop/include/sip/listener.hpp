@@ -32,6 +32,14 @@ public:
     virtual void on_dtmf_digit(std::shared_ptr<Call> call, const std::string &digit) {
         (void)call; (void)digit;
     }
+
+    virtual void on_message_received(const IncomingMessage &message) {
+        (void)message;
+    }
+
+    virtual void on_message_status(uint64_t message_id, MessageStatus status, int code, const std::string &reason) {
+        (void)message_id; (void)status; (void)code; (void)reason;
+    }
 };
 
 } // namespace sip

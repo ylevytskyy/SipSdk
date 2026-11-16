@@ -62,4 +62,49 @@ class SipSdkUnitTest {
         assertEquals(-1, call.setHold(true))
         assertEquals(-1, call.sendDtmf("123"))
     }
+
+    @Test
+    fun testMessageStatusEnumMapping() {
+        assertEquals(SipMessageStatus.SENT, SipMessageStatus.fromInt(0))
+        assertEquals(SipMessageStatus.FAILED, SipMessageStatus.fromInt(1))
+        assertEquals(SipMessageStatus.DELIVERED, SipMessageStatus.fromInt(2))
+        assertEquals(SipMessageStatus.DISPLAYED, SipMessageStatus.fromInt(3))
+        assertEquals(SipMessageStatus.FAILED, SipMessageStatus.fromInt(99))
+    }
+
+    @Test
+    fun testIncomingMessageTextDecoding() {
+        val textMsg = SipIncomingMessage("sip:1002@pbx", "text/plain", "héllo".toByteArray(Charsets.UTF_8))
+        assertEquals("héllo", textMsg.text)
+
+        val upperMsg = SipIncomingMessage("sip:1002@pbx", "TEXT/PLAIN", "hi".toByteArray(Charsets.UTF_8))
+        assertEquals("hi", upperMsg.text)
+
+        val jsonMsg = SipIncomingMessage("sip:1002@pbx", "application/json", "{}".toByteArray(Charsets.UTF_8))
+        assertEquals(null, jsonMsg.text)
+    }
+
+    @Test
+    fun testSendMessageValidation() {
+        val client = SipClient("1001", "10.0.2.2")
+        try {
+            client.sendMessage("", "hi")
+            org.junit.Assert.fail("Expected IllegalArgumentException for empty target")
+        } catch (_: IllegalArgumentException) {}
+
+        try {
+            client.sendMessage("1002", "")
+            org.junit.Assert.fail("Expected IllegalArgumentException for empty text")
+        } catch (_: IllegalArgumentException) {}
+
+        try {
+            client.sendMessage("1002", byteArrayOf(1), "")
+            org.junit.Assert.fail("Expected IllegalArgumentException for empty contentType")
+        } catch (_: IllegalArgumentException) {}
+
+        try {
+            client.sendMessage("1002", "hi")
+            org.junit.Assert.fail("Expected IllegalStateException when not started")
+        } catch (_: IllegalStateException) {}
+    }
 }

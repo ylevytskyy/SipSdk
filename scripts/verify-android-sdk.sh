@@ -142,6 +142,8 @@ if [[ "$TARGET_SLICE" == "all" || "$TARGET_SLICE" == "--slice" && "${2:-}" == "2
   cd "$ANDROID_DIR"
   ./gradlew :sipsdk:testReleaseUnitTest
   ./gradlew :sipsdk:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.sipsdk.SipClientRegistrationTest -Pandroid.testInstrumentationRunnerArguments.sip_host="$SIP_HOST"
+  echo "==> [Slice 2] Instrumentation test cases run:"
+  cat "$ANDROID_DIR"/sipsdk/build/outputs/androidTest-results/connected/debug/TEST-*.xml | grep -o 'testcase name="[A-Za-z0-9_]*"' || true
   echo "==> [Slice 2] ALL CHECKS PASSED!"
 fi
 

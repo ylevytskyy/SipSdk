@@ -160,6 +160,48 @@ struct Client::Callbacks {
         }
     }
 
+    static void on_message_received(sip_client_t *client, const char *from_uri, const char *content_type,
+                                    const uint8_t *body, size_t body_len, void *user_data)
+    {
+        (void)client;
+        auto *self = static_cast<Client *>(user_data);
+        if (!self) return;
+
+        std::shared_ptr<IClientListener> listener;
+        {
+            std::lock_guard<std::mutex> lock(self->m_mutex);
+            listener = self->m_listener;
+        }
+
+        if (listener) {
+            IncomingMessage message;
+            message.from = from_uri ? from_uri : "";
+            message.content_type = content_type ? content_type : "text/plain";
+            if (body && body_len > 0) {
+                message.body.assign(reinterpret_cast<const char *>(body), body_len);
+            }
+            listener->on_message_received(message);
+        }
+    }
+
+    static void on_message_status(sip_client_t *client, uint64_t message_id, sip_message_status_t status,
+                                  int code, const char *reason, void *user_data)
+    {
+        (void)client;
+        auto *self = static_cast<Client *>(user_data);
+        if (!self) return;
+
+        std::shared_ptr<IClientListener> listener;
+        {
+            std::lock_guard<std::mutex> lock(self->m_mutex);
+            listener = self->m_listener;
+        }
+
+        if (listener) {
+            listener->on_message_status(message_id, static_cast<MessageStatus>(status), code, reason ? reason : "");
+        }
+    }
+
     static void dispatch_to_main(void (*task)(void *arg), void *arg, void *user_data)
     {
         (void)user_data;
@@ -213,6 +255,12 @@ int Client::start(const std::string &config_path)
     if (!m_client) {
         return -1;
     }
+
+    sip_message_callbacks_t msg_cb;
+    std::memset(&msg_cb, 0, sizeof(msg_cb));
+    msg_cb.on_message_received = Callbacks::on_message_received;
+    msg_cb.on_message_status = Callbacks::on_message_status;
+    sip_client_set_message_callbacks(m_client, &msg_cb);
 
     std::string resolved_path = config_path.empty() ? ensure_default_config_dir() : config_path;
     int rc = sip_client_init(m_client, resolved_path.c_str());
@@ -291,6 +339,26 @@ std::shared_ptr<Call> Client::make_call(const std::string &target_uri, bool with
     if (!handle) return nullptr;
 
     return get_or_create_call(handle);
+}
+
+int Client::send_message(const std::string &target_uri,
+                         const std::string &body,
+                         const std::string &content_type,
+                         uint64_t *message_id)
+{
+    sip_client_t *cli = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        cli = m_client;
+    }
+    if (!cli) return -1;
+
+    return sip_client_send_message(cli,
+                                   target_uri.c_str(),
+                                   content_type.c_str(),
+                                   reinterpret_cast<const uint8_t *>(body.data()),
+                                   body.size(),
+                                   message_id);
 }
 
 void Client::set_mic_muted(bool muted)

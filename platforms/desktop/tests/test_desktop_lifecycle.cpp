@@ -58,6 +58,39 @@ public:
         cv.notify_all();
     }
 
+    std::vector<sip::IncomingMessage> messages;
+    std::vector<std::pair<uint64_t, sip::MessageStatus>> message_statuses;
+
+    void on_message_received(const sip::IncomingMessage &message) override {
+        std::lock_guard<std::mutex> lock(mutex);
+        messages.push_back(message);
+        cv.notify_all();
+    }
+
+    void on_message_status(uint64_t message_id, sip::MessageStatus status, int code, const std::string &reason) override {
+        (void)code; (void)reason;
+        std::lock_guard<std::mutex> lock(mutex);
+        message_statuses.emplace_back(message_id, status);
+        cv.notify_all();
+    }
+
+    bool wait_for_message(uint64_t id, const std::string &body, sip::MessageStatus &status_out,
+                          sip::IncomingMessage &message_out, int timeout_seconds = 10) {
+        auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(timeout_seconds);
+        std::unique_lock<std::mutex> lock(mutex);
+        while (std::chrono::steady_clock::now() < deadline) {
+            bool have_status = false;
+            for (const auto &st : message_statuses) {
+                if (st.first == id) { status_out = st.second; have_status = true; }
+            }
+            for (const auto &m : messages) {
+                if (have_status && m.body == body) { message_out = m; return true; }
+            }
+            cv.wait_for(lock, std::chrono::milliseconds(50));
+        }
+        return false;
+    }
+
     bool wait_for_reg_state(sip::RegistrationState expected_state, int timeout_seconds = 5) {
         auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(timeout_seconds);
         std::unique_lock<std::mutex> lock(mutex);
@@ -151,6 +184,24 @@ int main(int argc, char **argv) {
         call->hangup();
         std::this_thread::sleep_for(std::chrono::milliseconds(300));
         std::printf("PASS: Outgoing call handle verified and hung up\n");
+
+        // Test 6b: Text message round trip through Asterisk (1001 -> 1001)
+        std::printf("--- Test 6b: Text Message Round Trip ---\n");
+        TEST_ASSERT(client->send_message("", "x") != 0, "send_message must reject an empty target");
+        TEST_ASSERT(client->send_message(client->aor(), "") != 0, "send_message must reject an empty body");
+        uint64_t message_id = 0;
+        const std::string text = "hello from desktop";
+        rc = client->send_message(client->aor(), text, "text/plain", &message_id);
+        TEST_ASSERT(rc == 0, "send_message failed");
+        TEST_ASSERT(message_id != 0, "send_message must return a message id");
+        sip::MessageStatus msg_status = sip::MessageStatus::Failed;
+        sip::IncomingMessage incoming;
+        TEST_ASSERT(listener->wait_for_message(message_id, text, msg_status, incoming), "Message status or echo not received");
+        TEST_ASSERT(msg_status == sip::MessageStatus::Sent, "Message status must be Sent");
+        TEST_ASSERT(incoming.content_type == "text/plain", "Received content type mismatch");
+        TEST_ASSERT(incoming.from.rfind("sip:1001@", 0) == 0, "Received sender mismatch");
+        std::printf("PASS: Text message round trip (id=%llu from=%s)\n",
+                    (unsigned long long)message_id, incoming.from.c_str());
 
         // Test 7: Unregister and Teardown
         std::printf("--- Test 7: Unregister and Clean Stop ---\n");

@@ -146,6 +146,19 @@ public final class SipAppModel: NSObject, ObservableObject, SipMacClientDelegate
         }
     }
 
+    /// Sends a text SIP MESSAGE. target is an extension or a sip: URI. Returns the message id, or 0.
+    @discardableResult
+    public func sendMessage(to target: String, text: String) -> UInt64 {
+        guard let client = client else { return 0 }
+        var uri = target.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !uri.hasPrefix("sip:") {
+            uri = "sip:\(uri)@\(accountStore.domain):\(accountStore.port)"
+        }
+        let messageId = client.sendMessage(toUri: uri, text: text)
+        print("[SipAppModel] Sending message id=\(messageId) to \(uri)")
+        return messageId
+    }
+
     public func answerIncomingCall(withVideo: Bool) {
         guard let call = incomingCall else { return }
         _ = call.answer(withVideo: withVideo)
@@ -277,6 +290,10 @@ public final class SipAppModel: NSObject, ObservableObject, SipMacClientDelegate
             self.registrationCode = code
             self.registrationReason = reason
             print("[SipAppModel] Registration state: \(state.rawValue) (\(code) \(reason))")
+            if state == .registered, self.autoCallTarget != nil {
+                // Automated messaging check: send a SIP MESSAGE to our own address.
+                self.sendMessage(to: self.accountStore.username, text: "hello from macOS")
+            }
             if state == .registered, let target = self.autoCallTarget {
                 self.autoCallTarget = nil
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
@@ -382,6 +399,19 @@ public final class SipAppModel: NSObject, ObservableObject, SipMacClientDelegate
 
     public func client(_ client: SipMacClient, call: SipMacCall, didReceiveDtmf digit: String) {
         // Optional DTMF audio feedback can be added here
+    }
+
+    public func client(_ client: SipMacClient, didReceiveMessageFrom from: String, contentType: String, body: Data) {
+        let text = String(data: body, encoding: .utf8) ?? "<\(body.count) bytes>"
+        print("[SipAppModel] Message received from \(from) (\(contentType)): \(text)")
+    }
+
+    public func client(_ client: SipMacClient, message messageId: UInt64, didChange status: SipMacMessageStatus, code: Int, reason: String) {
+        if status == .sent {
+            print("[SipAppModel] Message sent (id=\(messageId), \(code) \(reason))")
+        } else {
+            print("[SipAppModel] Message status \(status.rawValue) (id=\(messageId), \(code) \(reason))")
+        }
     }
 
     // MARK: - Duration Timer

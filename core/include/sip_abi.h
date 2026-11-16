@@ -350,6 +350,76 @@ SIP_ABI_EXPORT int sip_client_start_local_preview(sip_client_t *client);
 SIP_ABI_EXPORT int sip_client_stop_local_preview(sip_client_t *client);
 SIP_ABI_EXPORT bool sip_client_is_local_preview_active(const sip_client_t *client);
 
+/* ============================================================================
+ * Messaging (SIP MESSAGE, RFC 3428)
+ *
+ * Pager-mode messages sent and received outside of calls. Every message carries
+ * a MIME content type, so later extensions reuse the same path:
+ *   - delivery / read receipts: IMDN bodies ("message/imdn+xml", RFC 5438) report
+ *     SIP_MESSAGE_STATUS_DELIVERED / SIP_MESSAGE_STATUS_DISPLAYED for a message id;
+ *   - typing indicators: "application/im-iscomposing+xml" bodies (RFC 3994);
+ *   - rich content: any "type/subtype" body (images, files, JSON);
+ *   - group chat: peer_uri may name a conference or group URI; MSRP sessions
+ *     (RFC 4975) would get their own handle type beside sip_call_t.
+ * See docs/messaging.md.
+ * ============================================================================ */
+
+#define SIP_MESSAGE_CONTENT_TYPE_TEXT "text/plain"
+
+/** Largest body accepted by sip_client_send_message, in bytes. */
+#define SIP_MESSAGE_MAX_BODY_SIZE 65536
+
+typedef enum {
+    SIP_MESSAGE_STATUS_SENT = 0,     /* a 2xx final response came back (server accepted it) */
+    SIP_MESSAGE_STATUS_FAILED,       /* non-2xx final response, transport error, or no account */
+    SIP_MESSAGE_STATUS_DELIVERED,    /* reserved: IMDN delivery notification from the peer */
+    SIP_MESSAGE_STATUS_DISPLAYED     /* reserved: IMDN display (read) notification from the peer */
+} sip_message_status_t;
+
+typedef struct sip_message_callbacks_t {
+    /**
+     * A message arrived for the registered account. from_uri is the sender address
+     * (e.g. "sip:1002@pbx"), content_type its MIME type (e.g. "text/plain"). body is not
+     * NUL-terminated and is valid only during the call.
+     */
+    void (*on_message_received)(sip_client_t *client, const char *from_uri, const char *content_type,
+                                const uint8_t *body, size_t body_len, void *user_data);
+
+    /**
+     * Status update for a message sent with sip_client_send_message. code is the SIP
+     * status code (0 when no response was received), reason its phrase or error text.
+     */
+    void (*on_message_status)(sip_client_t *client, uint64_t message_id, sip_message_status_t status,
+                              int code, const char *reason, void *user_data);
+} sip_message_callbacks_t;
+
+/**
+ * Sets the messaging callbacks. Callbacks run through dispatch_to_main like the other
+ * client callbacks and receive the user_data given to sip_client_create.
+ * Pass nullptr to remove them. Returns 0, or EINVAL for a null client.
+ */
+SIP_ABI_EXPORT int sip_client_set_message_callbacks(sip_client_t *client, const sip_message_callbacks_t *callbacks);
+
+/**
+ * Sends a SIP MESSAGE from the registered account.
+ *
+ * @param client Started client instance.
+ * @param peer_uri Destination SIP URI (e.g. "sip:1002@127.0.0.1:5060").
+ * @param content_type MIME type "type/subtype"; nullptr means "text/plain".
+ * @param body Message body bytes (UTF-8 text for text/plain); 1..SIP_MESSAGE_MAX_BODY_SIZE bytes.
+ * @param body_len Body length in bytes.
+ * @param message_id Optional out-param: local id later reported by on_message_status.
+ * @return 0 when the message was queued; EINVAL on invalid arguments (null or empty values,
+ *         control characters, a content type without '/'); EMSGSIZE for a body that is too
+ *         large; EIO when the engine is not running.
+ */
+SIP_ABI_EXPORT int sip_client_send_message(sip_client_t *client,
+                                           const char *peer_uri,
+                                           const char *content_type,
+                                           const uint8_t *body,
+                                           size_t body_len,
+                                           uint64_t *message_id);
+
 #ifdef __cplusplus
 }
 #endif

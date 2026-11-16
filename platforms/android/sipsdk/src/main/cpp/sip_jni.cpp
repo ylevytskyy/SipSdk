@@ -1,6 +1,8 @@
 #include <jni.h>
 #include <android/log.h>
 #include <android/native_window_jni.h>
+#include <cerrno>
+#include <cstring>
 #include <string>
 #include <mutex>
 #include "sip_abi.h"
@@ -104,6 +106,8 @@ struct ClientJniContext {
     jmethodID onIncomingCallMethodId = nullptr;
     jmethodID onCallMediaMethodId = nullptr;
     jmethodID onDtmfDigitMethodId = nullptr;
+    jmethodID onMessageReceivedMethodId = nullptr;
+    jmethodID onMessageStatusMethodId = nullptr;
     jmethodID prepareAudioSessionMethodId = nullptr;
     jmethodID releaseAudioSessionMethodId = nullptr;
 
@@ -206,6 +210,52 @@ static void jni_on_dtmf_digit(sip_call_t *call, const char *digit, void *user_da
     if (jDigit) guard.env->DeleteLocalRef(jDigit);
 }
 
+// Network-supplied text goes to Kotlin as bytes: NewStringUTF aborts under CheckJNI
+// on invalid modified UTF-8, and a remote peer controls these bytes.
+static jbyteArray jni_bytes(JNIEnv *env, const void *data, size_t len) {
+    jbyteArray arr = env->NewByteArray(static_cast<jsize>(len));
+    if (arr && data && len > 0) {
+        env->SetByteArrayRegion(arr, 0, static_cast<jsize>(len), reinterpret_cast<const jbyte *>(data));
+    }
+    return arr;
+}
+
+static void jni_on_message_received(sip_client_t *client, const char *from_uri, const char *content_type,
+                                    const uint8_t *body, size_t body_len, void *user_data) {
+    (void)client;
+    auto *ctx = static_cast<ClientJniContext *>(user_data);
+    if (!ctx || !ctx->javaClientGlobalRef || !ctx->onMessageReceivedMethodId) return;
+
+    JniEnvGuard guard;
+    if (!guard.env) return;
+
+    const char *from = from_uri ? from_uri : "";
+    const char *ctype = content_type ? content_type : "text/plain";
+    jbyteArray jFrom = jni_bytes(guard.env, from, std::strlen(from));
+    jbyteArray jType = jni_bytes(guard.env, ctype, std::strlen(ctype));
+    jbyteArray jBody = jni_bytes(guard.env, body, body_len);
+    guard.env->CallVoidMethod(ctx->javaClientGlobalRef, ctx->onMessageReceivedMethodId, jFrom, jType, jBody);
+    if (jFrom) guard.env->DeleteLocalRef(jFrom);
+    if (jType) guard.env->DeleteLocalRef(jType);
+    if (jBody) guard.env->DeleteLocalRef(jBody);
+}
+
+static void jni_on_message_status(sip_client_t *client, uint64_t message_id, sip_message_status_t status,
+                                  int code, const char *reason, void *user_data) {
+    (void)client;
+    auto *ctx = static_cast<ClientJniContext *>(user_data);
+    if (!ctx || !ctx->javaClientGlobalRef || !ctx->onMessageStatusMethodId) return;
+
+    JniEnvGuard guard;
+    if (!guard.env) return;
+
+    const char *r = reason ? reason : "";
+    jbyteArray jReason = jni_bytes(guard.env, r, std::strlen(r));
+    guard.env->CallVoidMethod(ctx->javaClientGlobalRef, ctx->onMessageStatusMethodId,
+                              static_cast<jlong>(message_id), (jint)status, (jint)code, jReason);
+    if (jReason) guard.env->DeleteLocalRef(jReason);
+}
+
 static bool jni_prepare_audio_session(sip_client_t *client, void *user_data) {
     (void)client;
     auto *ctx = static_cast<ClientJniContext *>(user_data);
@@ -274,6 +324,8 @@ Java_com_sipsdk_SipClient_nativeCreate(JNIEnv *env, jobject thiz) {
     ctx->onIncomingCallMethodId = env->GetMethodID(clientClass, "onNativeIncomingCall", "(J)V");
     ctx->onCallMediaMethodId = env->GetMethodID(clientClass, "onNativeCallMedia", "(JIIZZ)V");
     ctx->onDtmfDigitMethodId = env->GetMethodID(clientClass, "onNativeDtmfDigit", "(JLjava/lang/String;)V");
+    ctx->onMessageReceivedMethodId = env->GetMethodID(clientClass, "onNativeMessageReceived", "([B[B[B)V");
+    ctx->onMessageStatusMethodId = env->GetMethodID(clientClass, "onNativeMessageStatus", "(JII[B)V");
     ctx->prepareAudioSessionMethodId = env->GetMethodID(clientClass, "onNativePrepareAudioSession", "()Z");
     ctx->releaseAudioSessionMethodId = env->GetMethodID(clientClass, "onNativeReleaseAudioSession", "()V");
 
@@ -311,6 +363,11 @@ Java_com_sipsdk_SipClient_nativeCreate(JNIEnv *env, jobject thiz) {
 
     ctx->coreClient = sip_client_create(&callbacks, ctx);
     if (ctx->coreClient) {
+        sip_message_callbacks_t messageCallbacks = {};
+        messageCallbacks.on_message_received = jni_on_message_received;
+        messageCallbacks.on_message_status = jni_on_message_status;
+        sip_client_set_message_callbacks(ctx->coreClient, &messageCallbacks);
+
         sip_video_codec_driver_t codecDriver = sipsdk::AndroidMediaCodecDriver::get_c_driver();
         sip_client_set_video_codec_driver(ctx->coreClient, &codecDriver);
 
@@ -412,6 +469,28 @@ Java_com_sipsdk_SipClient_nativeMakeCall(JNIEnv *env, jobject thiz, jlong handle
     if (uri) env->ReleaseStringUTFChars(uri, target);
 
     return reinterpret_cast<jlong>(call);
+}
+
+JNIEXPORT jlong JNICALL
+Java_com_sipsdk_SipClient_nativeSendMessage(JNIEnv *env, jobject thiz, jlong handle, jstring uri,
+                                           jstring contentType, jbyteArray body) {
+    (void)thiz;
+    auto *ctx = reinterpret_cast<ClientJniContext *>(handle);
+    if (!ctx || !ctx->coreClient || !uri || !contentType || !body) return -EINVAL;
+
+    const char *target = env->GetStringUTFChars(uri, nullptr);
+    const char *ctype = env->GetStringUTFChars(contentType, nullptr);
+    jsize len = env->GetArrayLength(body);
+    jbyte *bytes = env->GetByteArrayElements(body, nullptr);
+
+    uint64_t messageId = 0;
+    int rc = sip_client_send_message(ctx->coreClient, target, ctype,
+                                     reinterpret_cast<const uint8_t *>(bytes), static_cast<size_t>(len), &messageId);
+
+    env->ReleaseByteArrayElements(body, bytes, JNI_ABORT);
+    env->ReleaseStringUTFChars(contentType, ctype);
+    env->ReleaseStringUTFChars(uri, target);
+    return rc == 0 ? static_cast<jlong>(messageId) : -static_cast<jlong>(rc);
 }
 
 JNIEXPORT void JNICALL
