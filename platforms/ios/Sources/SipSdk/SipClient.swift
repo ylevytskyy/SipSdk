@@ -171,6 +171,23 @@ public final class SipClient {
         }
         self.coreClient = client
 
+        var messageCallbacks = sip_message_callbacks_t()
+        messageCallbacks.on_message_received = { _, fromUri, contentType, body, bodyLen, userData in
+            guard let userData = userData else { return }
+            let sdk = Unmanaged<SipClient>.fromOpaque(userData).takeUnretainedValue()
+            let from = fromUri != nil ? String(cString: fromUri!) : ""
+            let ctype = contentType != nil ? String(cString: contentType!) : "text/plain"
+            let data = (body != nil && bodyLen > 0) ? Data(bytes: body!, count: bodyLen) : Data()
+            sdk.handleMessageReceived(SipIncomingMessage(from: from, contentType: ctype, body: data))
+        }
+        messageCallbacks.on_message_status = { _, messageId, status, code, reason, userData in
+            guard let userData = userData else { return }
+            let sdk = Unmanaged<SipClient>.fromOpaque(userData).takeUnretainedValue()
+            let reasonStr = reason != nil ? String(cString: reason!) : ""
+            sdk.handleMessageStatus(id: messageId, status: status, code: Int(code), reason: reasonStr)
+        }
+        _ = sip_client_set_message_callbacks(client, &messageCallbacks)
+
         // Configure AudioUnit
         _ = sip_client_set_audio_driver(client, "audiounit", "", "audiounit", "")
 
@@ -287,14 +304,7 @@ public final class SipClient {
             throw SipError.engineNotStarted
         }
 
-        var dialUri = destination
-        if !dialUri.hasPrefix("sip:") {
-            if !dialUri.contains("@"), let domain = currentAccount?.domain {
-                dialUri = "sip:\(dialUri)@\(domain)"
-            } else {
-                dialUri = "sip:\(dialUri)"
-            }
-        }
+        let dialUri = sipUri(for: destination)
 
         _ = IosAudioManager.shared.prepareCallAudioSession()
 
@@ -316,6 +326,52 @@ public final class SipClient {
 
         eventContinuation.yield(.callStateChanged(sipCall, .connecting))
         return sipCall
+    }
+
+    /// Turns an extension ("1002"), user@host, or SIP URI into a SIP URI.
+    private func sipUri(for destination: String) -> String {
+        if destination.hasPrefix("sip:") {
+            return destination
+        }
+        if !destination.contains("@"), let domain = currentAccount?.domain {
+            return "sip:\(destination)@\(domain)"
+        }
+        return "sip:\(destination)"
+    }
+
+    // MARK: - Messaging
+
+    /// Sends a UTF-8 text message (SIP MESSAGE, `text/plain`).
+    /// - Returns: Local message id; its result arrives as `.messageStatusChanged` on `events`.
+    @discardableResult
+    public func sendMessage(to destination: String, text: String) throws -> UInt64 {
+        try sendMessage(to: destination, body: Data(text.utf8), contentType: "text/plain")
+    }
+
+    /// Sends a SIP MESSAGE with any MIME content type (e.g. `application/json`).
+    /// - Returns: Local message id; its result arrives as `.messageStatusChanged` on `events`.
+    @discardableResult
+    public func sendMessage(to destination: String, body: Data, contentType: String) throws -> UInt64 {
+        guard isStarted, let client = coreClient else {
+            throw SipError.engineNotStarted
+        }
+        guard !destination.isEmpty else {
+            throw SipError.invalidParameter("Message destination is empty")
+        }
+        guard !body.isEmpty else {
+            throw SipError.invalidParameter("Message body is empty")
+        }
+
+        let uri = sipUri(for: destination)
+        var messageId: UInt64 = 0
+        let rc = body.withUnsafeBytes { raw -> Int32 in
+            sip_client_send_message(client, uri, contentType,
+                                    raw.bindMemory(to: UInt8.self).baseAddress, raw.count, &messageId)
+        }
+        guard rc == 0 else {
+            throw SipError.messageSendFailed(Int(rc), "sip_client_send_message failed for URI: \(uri)")
+        }
+        return messageId
     }
 
     // MARK: - Video & Camera Controls
@@ -435,6 +491,15 @@ public final class SipClient {
     private func handleDtmf(callHandle: OpaquePointer, digit: String) {
         let sipCall = findOrCreateCall(for: callHandle)
         eventContinuation.yield(.dtmfReceived(sipCall, digit: digit))
+    }
+
+    private func handleMessageReceived(_ message: SipIncomingMessage) {
+        eventContinuation.yield(.messageReceived(message))
+    }
+
+    private func handleMessageStatus(id: UInt64, status: sip_message_status_t, code: Int, reason: String) {
+        let newStatus = SipMessageStatus(rawValue: Int(status.rawValue)) ?? .failed
+        eventContinuation.yield(.messageStatusChanged(id: id, status: newStatus, code: code, reason: reason))
     }
 
     private func findOrCreateCall(for callHandle: OpaquePointer) -> SipCall {

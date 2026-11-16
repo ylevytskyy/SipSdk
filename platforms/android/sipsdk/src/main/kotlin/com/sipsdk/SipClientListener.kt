@@ -6,4 +6,6 @@ interface SipClientListener {
     fun onCallStateChanged(call: SipCall, state: SipCallState, code: Int, reason: String) {}
     fun onCallMediaChanged(call: SipCall, width: Int, height: Int, onHold: Boolean, isMuted: Boolean) {}
     fun onDtmfDigit(call: SipCall, digit: String) {}
+    fun onMessageReceived(message: SipIncomingMessage) {}
+    fun onMessageStatusChanged(messageId: Long, status: SipMessageStatus, code: Int, reason: String) {}
 }

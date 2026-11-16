@@ -237,6 +237,11 @@ int Engine::init_on_loop_thread(const char *config_path)
         m_events_registered = true;
     }
 
+    // Incoming SIP MESSAGE requests for our account (any content type).
+    if (uag_sip() != nullptr) {
+        (void)sip_listen(&m_message_lsnr, uag_sip(), true, sip_request_handler, this);
+    }
+
 #if defined(ANDROID) || defined(__ANDROID__)
     (void)module_preload("opensles");
     (void)module_preload("g711");
@@ -244,6 +249,7 @@ int Engine::init_on_loop_thread(const char *config_path)
 
     rc = conf_modules();
     if (rc != 0) {
+        m_message_lsnr = (struct sip_lsnr *)mem_deref(m_message_lsnr);
         if (m_events_registered) {
             bevent_unregister(ua_event_handler);
             m_events_registered = false;
@@ -257,6 +263,7 @@ int Engine::init_on_loop_thread(const char *config_path)
 
     rc = mqueue_alloc(&m_mq, mqueue_callback, this);
     if (rc != 0) {
+        m_message_lsnr = (struct sip_lsnr *)mem_deref(m_message_lsnr);
         if (m_events_registered) {
             bevent_unregister(ua_event_handler);
             m_events_registered = false;
@@ -307,6 +314,8 @@ void Engine::cleanup_on_loop_thread()
     if (m_mq != nullptr) {
         m_mq = (struct mqueue *)mem_deref(m_mq);
     }
+
+    m_message_lsnr = (struct sip_lsnr *)mem_deref(m_message_lsnr);
 
     if (m_events_registered) {
         bevent_unregister(ua_event_handler);
@@ -1244,6 +1253,241 @@ void Engine::dispatch_dtmf_digit(sip_call_t *call, const char *digit)
     dispatch_async_f(dispatch_get_main_queue(), args, run_dtmf_digit_task);
 #else
     run_dtmf_digit_task(args);
+#endif
+}
+
+// ============================================================================
+// Messaging (SIP MESSAGE)
+// ============================================================================
+
+static bool has_control_chars(const char *s)
+{
+    for (; *s; ++s) {
+        unsigned char ch = static_cast<unsigned char>(*s);
+        if (ch < 0x20 || ch == 0x7f) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool is_valid_content_type(const char *ctype)
+{
+    if (has_control_chars(ctype)) return false;
+    const char *slash = std::strchr(ctype, '/');
+    return slash != nullptr && slash != ctype && slash[1] != '\0' && slash[1] != ';';
+}
+
+struct MessageSendContext {
+    Engine *engine{nullptr};
+    uint64_t id{0};
+};
+
+static void message_response_handler(int err, const struct sip_msg *msg, void *arg)
+{
+    auto *ctx = static_cast<MessageSendContext *>(arg);
+    if (!ctx) return;
+    if (!err && msg && msg->scode < 200) {
+        return; // provisional response; wait for the final one
+    }
+
+    if (err) {
+        ctx->engine->dispatch_message_status(ctx->id, SIP_MESSAGE_STATUS_FAILED, 0, std::strerror(err));
+    } else if (msg) {
+        std::string reason = (msg->reason.p && msg->reason.l > 0) ? std::string(msg->reason.p, msg->reason.l) : "";
+        sip_message_status_t status = (msg->scode >= 200 && msg->scode < 300)
+            ? SIP_MESSAGE_STATUS_SENT : SIP_MESSAGE_STATUS_FAILED;
+        ctx->engine->dispatch_message_status(ctx->id, status, static_cast<int>(msg->scode), reason.c_str());
+    } else {
+        ctx->engine->dispatch_message_status(ctx->id, SIP_MESSAGE_STATUS_FAILED, 0, "No response");
+    }
+    delete ctx;
+}
+
+int Engine::set_message_callbacks(const sip_message_callbacks_t *callbacks)
+{
+    std::lock_guard<std::mutex> lock(m_message_mutex);
+    if (callbacks) {
+        m_message_callbacks = *callbacks;
+    } else {
+        m_message_callbacks = sip_message_callbacks_t{};
+    }
+    return 0;
+}
+
+int Engine::send_message(const char *peer_uri, const char *content_type, const uint8_t *body, size_t body_len,
+                         uint64_t *message_id)
+{
+    if (!peer_uri || peer_uri[0] == '\0' || has_control_chars(peer_uri)) return EINVAL;
+    const char *ctype = content_type ? content_type : SIP_MESSAGE_CONTENT_TYPE_TEXT;
+    if (!is_valid_content_type(ctype)) return EINVAL;
+    if (!body || body_len == 0) return EINVAL;
+    if (body_len > SIP_MESSAGE_MAX_BODY_SIZE) return EMSGSIZE;
+    if (!m_started.load()) return EIO;
+
+    uint64_t id = m_next_message_id.fetch_add(1);
+    std::string uri_str = peer_uri;
+    std::string ctype_str = ctype;
+    std::string payload(reinterpret_cast<const char *>(body), body_len);
+
+    bool posted = post_task([this, id, uri_str, ctype_str, payload]() {
+        if (m_ua == nullptr) {
+            dispatch_message_status(id, SIP_MESSAGE_STATUS_FAILED, 0, "No account registered");
+            return;
+        }
+        auto *ctx = new MessageSendContext{this, id};
+        int rc = sip_req_send(m_ua, "MESSAGE", uri_str.c_str(), message_response_handler, ctx,
+                              "Accept: text/plain\r\n"
+                              "Content-Type: %s\r\n"
+                              "Content-Length: %zu\r\n"
+                              "\r\n%b",
+                              ctype_str.c_str(), payload.size(), payload.data(), payload.size());
+        if (rc != 0) {
+            delete ctx;
+            dispatch_message_status(id, SIP_MESSAGE_STATUS_FAILED, 0, std::strerror(rc));
+        }
+    });
+    if (!posted) return EIO;
+
+    if (message_id) *message_id = id;
+    return 0;
+}
+
+bool Engine::sip_request_handler(const struct sip_msg *msg, void *arg)
+{
+    auto *engine = static_cast<Engine *>(arg);
+    return engine ? engine->handle_incoming_message(msg) : false;
+}
+
+bool Engine::handle_incoming_message(const struct sip_msg *msg)
+{
+    if (!msg || pl_strcmp(&msg->met, "MESSAGE") != 0) {
+        return false;
+    }
+    if (m_ua == nullptr || uag_find_msg(msg) != m_ua) {
+        return false;
+    }
+
+    std::string from(msg->from.auri.p ? msg->from.auri.p : "", msg->from.auri.l);
+    std::string ctype = SIP_MESSAGE_CONTENT_TYPE_TEXT;
+    if (msg->ctyp.type.l > 0 && msg->ctyp.subtype.l > 0) {
+        ctype = std::string(msg->ctyp.type.p, msg->ctyp.type.l) + "/" +
+                std::string(msg->ctyp.subtype.p, msg->ctyp.subtype.l);
+    }
+    std::string body;
+    if (msg->mb) {
+        body.assign(reinterpret_cast<const char *>(mbuf_buf(msg->mb)), mbuf_get_left(msg->mb));
+    }
+
+    // Stateful reply: the server transaction absorbs UDP retransmissions of this
+    // request, so a lost 200 OK does not deliver the message twice.
+    (void)sip_treply(nullptr, uag_sip(), msg, 200, "OK");
+    dispatch_message_received(std::move(from), std::move(ctype), std::move(body));
+    return true;
+}
+
+struct MessageStatusTaskArgs {
+    sip_client_t *client{nullptr};
+    uint64_t id{0};
+    sip_message_status_t status{SIP_MESSAGE_STATUS_FAILED};
+    int code{0};
+    std::string reason;
+    void (*on_message_status)(sip_client_t *, uint64_t, sip_message_status_t, int, const char *, void *){nullptr};
+    void *user_data{nullptr};
+};
+
+static void run_message_status_task(void *arg)
+{
+    auto *args = static_cast<MessageStatusTaskArgs *>(arg);
+    if (args) {
+        if (args->on_message_status) {
+            args->on_message_status(args->client, args->id, args->status, args->code, args->reason.c_str(),
+                                    args->user_data);
+        }
+        delete args;
+    }
+}
+
+void Engine::dispatch_message_status(uint64_t message_id, sip_message_status_t status, int code, const char *reason)
+{
+    sip_message_callbacks_t cbs;
+    {
+        std::lock_guard<std::mutex> lock(m_message_mutex);
+        cbs = m_message_callbacks;
+    }
+    if (!cbs.on_message_status) return;
+
+    auto *args = new MessageStatusTaskArgs{
+        m_owner,
+        message_id,
+        status,
+        code,
+        reason ? reason : "",
+        cbs.on_message_status,
+        m_user_data
+    };
+
+    if (m_callbacks.dispatch_to_main) {
+        m_callbacks.dispatch_to_main(run_message_status_task, args, m_user_data);
+        return;
+    }
+
+#if defined(__APPLE__)
+    dispatch_async_f(dispatch_get_main_queue(), args, run_message_status_task);
+#else
+    run_message_status_task(args);
+#endif
+}
+
+struct MessageReceivedTaskArgs {
+    sip_client_t *client{nullptr};
+    std::string from;
+    std::string content_type;
+    std::string body;
+    void (*on_message_received)(sip_client_t *, const char *, const char *, const uint8_t *, size_t, void *){nullptr};
+    void *user_data{nullptr};
+};
+
+static void run_message_received_task(void *arg)
+{
+    auto *args = static_cast<MessageReceivedTaskArgs *>(arg);
+    if (args) {
+        if (args->on_message_received) {
+            args->on_message_received(args->client, args->from.c_str(), args->content_type.c_str(),
+                                      reinterpret_cast<const uint8_t *>(args->body.data()), args->body.size(),
+                                      args->user_data);
+        }
+        delete args;
+    }
+}
+
+void Engine::dispatch_message_received(std::string from_uri, std::string content_type, std::string body)
+{
+    sip_message_callbacks_t cbs;
+    {
+        std::lock_guard<std::mutex> lock(m_message_mutex);
+        cbs = m_message_callbacks;
+    }
+    if (!cbs.on_message_received) return;
+
+    auto *args = new MessageReceivedTaskArgs{
+        m_owner,
+        std::move(from_uri),
+        std::move(content_type),
+        std::move(body),
+        cbs.on_message_received,
+        m_user_data
+    };
+
+    if (m_callbacks.dispatch_to_main) {
+        m_callbacks.dispatch_to_main(run_message_received_task, args, m_user_data);
+        return;
+    }
+
+#if defined(__APPLE__)
+    dispatch_async_f(dispatch_get_main_queue(), args, run_message_received_task);
+#else
+    run_message_received_task(args);
 #endif
 }
 

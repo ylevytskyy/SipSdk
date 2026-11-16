@@ -17,6 +17,8 @@ struct mqueue;
 struct ua;
 struct bevent;
 struct call;
+struct sip_lsnr;
+struct sip_msg;
 
 namespace sip_core {
 
@@ -75,6 +77,12 @@ public:
     int stop_local_preview();
     bool is_local_preview_active() const;
 
+    int set_message_callbacks(const sip_message_callbacks_t *callbacks);
+    int send_message(const char *peer_uri, const char *content_type, const uint8_t *body, size_t body_len,
+                     uint64_t *message_id);
+    void dispatch_message_status(uint64_t message_id, sip_message_status_t status, int code, const char *reason);
+    void dispatch_message_received(std::string from_uri, std::string content_type, std::string body);
+
     int set_video_capture_driver(std::shared_ptr<IVideoCaptureDriver> driver);
     int set_remote_renderer(std::shared_ptr<IVideoRendererDriver> renderer);
     int set_local_renderer(std::shared_ptr<IVideoRendererDriver> renderer);
@@ -114,6 +122,8 @@ private:
     void cleanup_on_loop_thread();
 
     static void mqueue_callback(int id, void *data, void *arg);
+    static bool sip_request_handler(const struct sip_msg *msg, void *arg);
+    bool handle_incoming_message(const struct sip_msg *msg);
 
     sip_client_t *m_owner{nullptr};
     sip_callbacks_t m_callbacks{};
@@ -137,6 +147,11 @@ private:
 
     mutable std::mutex m_calls_mutex;
     std::vector<sip_call_t *> m_all_calls;
+
+    mutable std::mutex m_message_mutex;
+    sip_message_callbacks_t m_message_callbacks{};
+    std::atomic<uint64_t> m_next_message_id{1};
+    struct sip_lsnr *m_message_lsnr{nullptr};
 
     std::unique_ptr<MediaDriverManager> m_media_manager;
 };

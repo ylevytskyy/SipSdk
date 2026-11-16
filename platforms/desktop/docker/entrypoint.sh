@@ -33,6 +33,10 @@ rm -rf "$BUILD_DIR"
 cmake -S "$ROOT_DIR/platforms/desktop" -B "$BUILD_DIR" -DCMAKE_BUILD_TYPE=Release
 cmake --build "$BUILD_DIR" --parallel
 
+# Export the fresh Linux core library for the .NET tests (scripts/verify-windows-sdk.sh).
+mkdir -p "$ROOT_DIR/.build/desktop-linux/core"
+cp "$BUILD_DIR/core/libsipcore.so" "$ROOT_DIR/.build/desktop-linux/core/libsipcore.so"
+
 # 4. Resolve Asterisk host to IP and run native CTest / unit tests
 ASTERISK_HOST="${ASTERISK_HOST:-asterisk}"
 ASTERISK_PORT="${ASTERISK_PORT:-5060}"
@@ -45,7 +49,7 @@ fi
 
 echo "==> Running desktop native unit tests on Linux..."
 cd "$BUILD_DIR"
-ctest --output-on-failure
+ctest --output-on-failure -V
 
 # 5. Live PBX test against Asterisk
 echo "==> Running headless CLI call against Asterisk ($ASTERISK_HOST:$ASTERISK_PORT)..."

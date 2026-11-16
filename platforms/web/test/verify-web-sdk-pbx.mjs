@@ -1,6 +1,7 @@
 // Live check of the web SDK against the local Asterisk PBX (docker compose, see
 // scripts/run-pbx.sh): registers extension 1002 over ws://<host>:8088/ws, calls the
 // 9001 audio+video echo, holds and resumes, sends DTMF, hangs up and unregisters.
+// Before the call it sends a SIP MESSAGE to 1002 itself and waits for it to come back.
 // Usage: node platforms/web/test/verify-web-sdk-pbx.mjs [pbx-host]   (default 127.0.0.1)
 
 import { startStaticServer, launchBrowser, checker } from './browser-harness.mjs';
@@ -28,6 +29,26 @@ async function main() {
 
     await page.click('#btnRegister');
     expect('1002 registers with Asterisk (state 2)', await waitState('#regStatus', 2), await page.locator('#regStatus').innerText());
+
+    // SIP MESSAGE to our own extension: Asterisk routes it back over the WebSocket.
+    const msg = await page.evaluate(async () => {
+      const client = window.sipClient;
+      const text = `hello from web ${Date.now()}`;
+      const timeout = (ms) => new Promise((resolve) => setTimeout(() => resolve(null), ms));
+      const received = new Promise((resolve) => {
+        const off = client.on('messageReceived', (e) => { if (e.body === text) { off(); resolve(e); } });
+      });
+      let id = 0;
+      const status = new Promise((resolve) => {
+        const off = client.on('messageStatusChanged', (e) => { if (e.id === id) { off(); resolve(e); } });
+      });
+      id = client.sendMessage('1002', text);
+      return { id, text, status: await Promise.race([status, timeout(10000)]), received: await Promise.race([received, timeout(10000)]) };
+    });
+    expect('text message round trip',
+      msg.status?.status === 0 && msg.status.code >= 200 && msg.status.code < 300 &&
+        msg.received?.contentType === 'text/plain' && /^sip:1002@/.test(msg.received?.from || ''),
+      JSON.stringify(msg));
 
     await page.fill('#target', '9001');
     await page.check('#withVideo');

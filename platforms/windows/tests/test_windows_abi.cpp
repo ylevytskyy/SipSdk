@@ -120,6 +120,8 @@ int main()
         "sip_client_start_local_preview",
         "sip_client_stop_local_preview",
         "sip_client_is_local_preview_active",
+        "sip_client_set_message_callbacks",
+        "sip_client_send_message",
         nullptr
     };
 
@@ -152,7 +154,7 @@ int main()
     if (lib) dlclose(lib);
 #endif
 
-    printf("PASS: All 40 public C ABI symbols dynamically exported and resolvable!\n");
+    printf("PASS: All 42 public C ABI symbols dynamically exported and resolvable (incl. sip_client_send_message, sip_client_set_message_callbacks)!\n");
     printf("ALL_WINDOWS_ABI_TESTS_PASSED\n");
     return 0;
 }

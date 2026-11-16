@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Threading;
 using Xunit;
 
@@ -71,6 +72,66 @@ namespace SipSdk.Tests
             {
                 SynchronizationContext.SetSynchronizationContext(prevContext);
             }
+        }
+
+        [Fact]
+        public void Client_SendMessage_RejectsInvalidArguments()
+        {
+            using var client = new SipClient();
+            Assert.Throws<ArgumentException>(() => client.SendMessage("", "hello"));
+            Assert.Throws<ArgumentException>(() => client.SendMessage("sip:1001@127.0.0.1", ""));
+            Assert.Throws<ArgumentException>(() => client.SendMessage("sip:1001@127.0.0.1", new byte[] { 1 }, ""));
+        }
+
+        [Fact]
+        public void Client_SendMessage_BeforeStart_Throws()
+        {
+            using var client = new SipClient();
+            Assert.Throws<InvalidOperationException>(() => client.SendMessage("sip:1001@127.0.0.1", "hello"));
+        }
+
+        [Fact]
+        public void Client_SendMessage_WithoutAccount_ReportsFailedStatus()
+        {
+            string configDir = Path.Combine(Path.GetTempPath(), "sipsdk-dotnet-msg-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(configDir);
+            File.WriteAllText(Path.Combine(configDir, "config"), "sip_listen 127.0.0.1:0\n");
+            try
+            {
+                using var client = new SipClient();
+                using var statusReceived = new ManualResetEventSlim(false);
+                MessageStatusChangedEventArgs? status = null;
+                client.MessageStatusChanged += (sender, args) =>
+                {
+                    status = args;
+                    statusReceived.Set();
+                };
+
+                Assert.Equal(0, client.Start(configDir));
+                ulong id = client.SendMessage("sip:1001@127.0.0.1:5060", "hello from .NET");
+                Assert.True(id > 0);
+
+                Assert.True(statusReceived.Wait(TimeSpan.FromSeconds(5)), "No MessageStatusChanged event");
+                Assert.NotNull(status);
+                Assert.Equal(id, status!.MessageId);
+                Assert.Equal(SipMessageStatus.Failed, status.Status);
+                Assert.False(string.IsNullOrEmpty(status.Reason));
+            }
+            finally
+            {
+                Directory.Delete(configDir, true);
+            }
+        }
+
+        [Fact]
+        public void MessageReceivedEventArgs_DecodesUtf8Text()
+        {
+            byte[] body = System.Text.Encoding.UTF8.GetBytes("héllo");
+            var text = new MessageReceivedEventArgs("sip:1002@pbx", "text/plain", body);
+            Assert.Equal("héllo", text.Text);
+            var json = new MessageReceivedEventArgs("sip:1002@pbx", "application/json", body);
+            Assert.Null(json.Text);
+            Assert.Equal(body, json.Body);
         }
 
         private class TrackingSyncContext : SynchronizationContext

@@ -23,7 +23,10 @@ cmake -S "$ROOT_DIR/platforms/desktop" -B "$BUILD_DIR" -DCMAKE_BUILD_TYPE=Releas
 cmake --build "$BUILD_DIR" --parallel
 
 echo "==> Running macOS desktop CTest suite..."
-(cd "$BUILD_DIR" && ctest --output-on-failure)
+(cd "$BUILD_DIR" && ctest --output-on-failure -V)
+
+echo "==> Running core C ABI registration & SIP MESSAGE tests against Asterisk..."
+"$BUILD_DIR/core/sip_core_registration_test"
 
 echo "==> Running desktop sample application..."
 "$BUILD_DIR/sample/desktop_sample" 1001 127.0.0.1 test1001

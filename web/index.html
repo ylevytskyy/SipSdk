@@ -429,7 +429,8 @@
   };
   $('btnClearLog').onclick = () => { logEl.textContent = ''; };
 
-  const defaultHost = '192.168.0.107';
+  // Served from localhost (or a file): the Docker PBX runs on this machine.
+  const defaultHost = '127.0.0.1';
   const getPbxHost = () => {
     return (location.hostname && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1' && location.hostname !== '')
       ? location.hostname

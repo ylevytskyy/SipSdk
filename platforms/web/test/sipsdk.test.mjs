@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { SipClient, SipCall, SipCallState, SipRegistrationState, sanitizeSdp } from '../src/sipsdk.js';
+import { SipClient, SipCall, SipCallState, SipMessageStatus, SipRegistrationState, sanitizeSdp } from '../src/sipsdk.js';
 import { createFakeJsSIP, FakeSession } from './fake-jssip.mjs';
 
 const ACCOUNT = { username: '1002', domain: 'pbx.local', password: 'pw', wsUri: 'ws://pbx.local:8088/ws' };
@@ -345,4 +345,70 @@ test('sanitizeSdp keeps shared codecs and one H.264, drops other codecs and bad 
     'a=extmap:1 urn:ietf:params:rtp-hdrext:sdes:mid',
   ].join('\r\n') + '\r\n';
   assert.equal(sanitizeSdp(input), expected);
+});
+
+test('sendMessage before register throws', () => {
+  const { client } = setup();
+  client.start();
+  assert.throws(() => client.sendMessage('1001', 'hi'), /register an account before sendMessage/);
+});
+
+test('sendMessage rejects an empty target, empty body and a bad content type', () => {
+  const { client } = registered();
+  assert.throws(() => client.sendMessage('', 'hi'), /target is required/);
+  assert.throws(() => client.sendMessage('1001', ''), /body is required/);
+  assert.throws(() => client.sendMessage('1001', 'hi', { contentType: 'text\r\nX: 1' }), /invalid content type/);
+  assert.throws(() => client.sendMessage('1001', 'hi', { contentType: 'plain' }), /invalid content type/);
+});
+
+test('sendMessage sends a SIP MESSAGE and reports Sent with the response code', () => {
+  const { client, ua } = registered();
+  const statuses = [];
+  client.on('messageStatusChanged', (e) => statuses.push(e));
+  const id = client.sendMessage('1001', 'hello');
+  assert.ok(id > 0);
+  const sent = ua.messages[0];
+  assert.equal(sent.target, 'sip:1001@pbx.local');
+  assert.equal(sent.body, 'hello');
+  assert.equal(sent.options.contentType, 'text/plain');
+  sent.options.eventHandlers.succeeded({ originator: 'remote', response: { status_code: 202, reason_phrase: 'Accepted' } });
+  assert.deepEqual(statuses, [{ id, status: SipMessageStatus.Sent, code: 202, reason: 'Accepted' }]);
+});
+
+test('sendMessage keeps a rich content type and reports Failed with code and cause', () => {
+  const { client, ua } = registered();
+  const statuses = [];
+  client.on('messageStatusChanged', (e) => statuses.push(e));
+  const id = client.sendMessage('sip:1003@pbx.local', '{"a":1}', { contentType: 'application/json' });
+  const sent = ua.messages[0];
+  assert.equal(sent.target, 'sip:1003@pbx.local');
+  assert.equal(sent.options.contentType, 'application/json');
+  sent.options.eventHandlers.failed({ originator: 'remote', response: { status_code: 415, reason_phrase: 'Unsupported Media Type' }, cause: 'Rejected' });
+  assert.deepEqual(statuses, [{ id, status: SipMessageStatus.Failed, code: 415, reason: 'Unsupported Media Type' }]);
+});
+
+test('a failed send without a response reports Failed with code 0 and the cause', () => {
+  const { client, ua } = registered();
+  const statuses = [];
+  client.on('messageStatusChanged', (e) => statuses.push(e));
+  const id = client.sendMessage('1001', 'hello');
+  ua.messages[0].options.eventHandlers.failed({ originator: 'system', cause: 'Request Timeout' });
+  assert.deepEqual(statuses, [{ id, status: SipMessageStatus.Failed, code: 0, reason: 'Request Timeout' }]);
+});
+
+test('an incoming remote message emits messageReceived; local echoes are ignored', () => {
+  const { client, ua } = registered();
+  const received = [];
+  client.on('messageReceived', (e) => received.push(e));
+  const request = {
+    body: 'hi there',
+    getHeader: (name) => (name.toLowerCase() === 'content-type' ? 'text/plain;charset=UTF-8' : undefined),
+  };
+  ua.emit('newMessage', {
+    originator: 'remote',
+    message: { remote_identity: { uri: { toString: () => 'sip:1003@pbx.local' } } },
+    request,
+  });
+  ua.emit('newMessage', { originator: 'local', message: {}, request });
+  assert.deepEqual(received, [{ from: 'sip:1003@pbx.local', contentType: 'text/plain', body: 'hi there' }]);
 });

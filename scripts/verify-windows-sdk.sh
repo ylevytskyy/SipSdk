@@ -20,8 +20,13 @@ echo "==> Running Windows C ABI Export & Client Lifecycle Tests..."
 echo "==> Running Windows Media Foundation Driver Tests..."
 "$BUILD_DIR/test_mf_drivers"
 
-# 2. .NET / C# SDK Build & Test Suite
-echo "==> 2. Verifying .NET / C# Class Library & Unit Tests..."
+# 2. Desktop Native SDK first: its Linux container run exports a fresh
+#    .build/desktop-linux/core/libsipcore.so that the containerized .NET tests load.
+echo "==> 2a. Verifying Desktop Native SDK (zero regressions, fresh Linux libsipcore.so)..."
+bash "$ROOT_DIR/scripts/verify-desktop-sdk.sh"
+
+# .NET / C# SDK Build & Test Suite
+echo "==> 2b. Verifying .NET / C# Class Library & Unit Tests..."
 DOTNET_DIR="$ROOT_DIR/platforms/windows/dotnet"
 
 if command -v dotnet >/dev/null 2>&1; then
@@ -43,7 +48,7 @@ EOF
     docker run --rm \
         -v "$ROOT_DIR:/workspace" \
         -w /workspace/platforms/windows/dotnet \
-        -e SIP_CORE_LIB_DIR=/workspace/.build/desktop/core \
+        -e SIP_CORE_LIB_DIR=/workspace/.build/desktop-linux/core \
         "$DOTNET_IMAGE" \
         bash -c "dotnet build SipSdk.sln -c Release && dotnet test tests/SipSdk.Tests/SipSdk.Tests.csproj -c Release --no-build"
 fi
@@ -63,10 +68,6 @@ if [[ "$SYMBOL_COUNT" -lt 35 ]]; then
     exit 1
 fi
 echo "PASS: C ABI export table satisfies full public API surface"
-
-# 4. Zero-Regression Validation
-echo "==> 4. Verifying zero regressions on existing Desktop Native SDK..."
-bash "$ROOT_DIR/scripts/verify-desktop-sdk.sh"
 
 echo "================================================================="
 echo "ALL_WINDOWS_PLATFORM_SDK_VERIFICATIONS_PASSED"

@@ -37,6 +37,21 @@ struct CallMediaInfo {
     bool is_muted{false};
 };
 
+/** Status of a sent SIP MESSAGE; values match sip_message_status_t. */
+enum class MessageStatus {
+    Sent = 0,
+    Failed,
+    Delivered,  // reserved: IMDN delivery notification
+    Displayed   // reserved: IMDN display (read) notification
+};
+
+/** A SIP MESSAGE received for the registered account. */
+struct IncomingMessage {
+    std::string from;          // sender URI, e.g. "sip:1002@pbx"
+    std::string content_type;  // MIME type, e.g. "text/plain"
+    std::string body;          // raw body bytes
+};
+
 inline const char *to_string(RegistrationState state) {
     switch (state) {
         case RegistrationState::Unregistered: return "Unregistered";
@@ -55,6 +70,16 @@ inline const char *to_string(CallState state) {
         case CallState::Established: return "Established";
         case CallState::Hold:        return "Hold";
         case CallState::Closed:      return "Closed";
+    }
+    return "Unknown";
+}
+
+inline const char *to_string(MessageStatus status) {
+    switch (status) {
+        case MessageStatus::Sent:      return "Sent";
+        case MessageStatus::Failed:    return "Failed";
+        case MessageStatus::Delivered: return "Delivered";
+        case MessageStatus::Displayed: return "Displayed";
     }
     return "Unknown";
 }

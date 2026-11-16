@@ -146,6 +146,18 @@ if ! grep -q "In-call switching" "$APP_LOG"; then
   exit 1
 fi
 
+if ! grep -q "Message sent (" "$APP_LOG"; then
+  echo "ERROR: Missing SIP MESSAGE sent status in log" >&2
+  exit 1
+fi
+echo "PASS: log check Message sent"
+
+if ! grep -q "Message received from sip:" "$APP_LOG"; then
+  echo "ERROR: Missing SIP MESSAGE received in log" >&2
+  exit 1
+fi
+echo "PASS: log check Message received"
+
 if ! grep -q "Exiting automated test cleanly" "$APP_LOG"; then
   echo "ERROR: App did not complete automated test cycle" >&2
   exit 1

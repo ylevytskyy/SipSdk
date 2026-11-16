@@ -300,6 +300,32 @@ class SipClient(
         )
     }
 
+    /**
+     * Sends a UTF-8 text message (SIP MESSAGE, text/plain). [target] is an extension
+     * ("1002"), user@host, or a sip: URI. Returns the local message id; the result arrives
+     * through [SipClientListener.onMessageStatusChanged].
+     */
+    fun sendMessage(target: String, text: String): Long {
+        require(text.isNotEmpty()) { "Message text cannot be empty" }
+        return sendMessage(target, text.toByteArray(Charsets.UTF_8), "text/plain")
+    }
+
+    /** Sends a SIP MESSAGE with any MIME content type (e.g. "application/json"). */
+    fun sendMessage(target: String, body: ByteArray, contentType: String): Long {
+        require(target.isNotEmpty()) { "Target cannot be empty" }
+        require(body.isNotEmpty()) { "Message body cannot be empty" }
+        require(contentType.isNotEmpty()) { "Content type cannot be empty" }
+        check(nativeHandle != 0L) { "SipClient is not started" }
+        val uri = when {
+            target.startsWith("sip:") -> target
+            target.contains("@") -> "sip:$target"
+            else -> "sip:$target@$domain"
+        }
+        val result = nativeSendMessage(nativeHandle, uri, contentType, body)
+        check(result > 0) { "Failed to send message to $uri (error ${-result})" }
+        return result
+    }
+
     fun setMuted(muted: Boolean) {
         isMicrophoneMuted = muted
     }
@@ -404,6 +430,19 @@ class SipClient(
         listener?.onDtmfDigit(call, digit)
     }
 
+    // Text from the network arrives as UTF-8 bytes; malformed bytes decode to U+FFFD.
+    @JvmSynthetic
+    fun onNativeMessageReceived(from: ByteArray, contentType: ByteArray, body: ByteArray) {
+        listener?.onMessageReceived(
+            SipIncomingMessage(String(from, Charsets.UTF_8), String(contentType, Charsets.UTF_8), body)
+        )
+    }
+
+    @JvmSynthetic
+    fun onNativeMessageStatus(messageId: Long, status: Int, code: Int, reason: ByteArray) {
+        listener?.onMessageStatusChanged(messageId, SipMessageStatus.fromInt(status), code, String(reason, Charsets.UTF_8))
+    }
+
     @JvmSynthetic
     fun onNativePrepareAudioSession(): Boolean {
         return audioManager?.prepareAudioSession() ?: true
@@ -423,6 +462,8 @@ class SipClient(
     private external fun nativeIsRegistered(handle: Long): Boolean
     private external fun nativeSetMicMuted(handle: Long, muted: Boolean)
     private external fun nativeMakeCall(handle: Long, uri: String, withVideo: Boolean): Long
+    /** Returns the message id (> 0) or a negative errno-style code. */
+    private external fun nativeSendMessage(handle: Long, uri: String, contentType: String, body: ByteArray): Long
     private external fun nativeDestroy(handle: Long)
 
     private external fun nativeCallGetId(callHandle: Long): String
