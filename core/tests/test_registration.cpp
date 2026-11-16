@@ -296,6 +296,10 @@ struct RawUa {
     sockaddr_in server{};
     int cseq{0};
     std::string call_id;
+    // Knobs for the Authorization header of authed(): how a real client may lay it out.
+    bool algorithm_first = false;      // JsSIP style: "Digest algorithm=MD5, username=..."
+    bool lowercase_scheme = false;     // "digest ..." (RFC 3261: the scheme is case-insensitive)
+    std::string header_username;       // when set, the username written in the header (digest still made for `user`)
 
     RawUa(const std::string &u, const std::string &pw, const char *host, int port) : user(u), password(pw)
     {
@@ -353,9 +357,11 @@ struct RawUa {
         std::string realm = header_param(r, "realm"), nonce = header_param(r, "nonce");
         std::string resp = md5_hex(md5_hex(user + ":" + realm + ":" + password) + ":" + nonce + ":" +
                                    md5_hex(method + ":" + uri));
-        return request(method, uri, headers, body,
-                       "Digest username=\"" + user + "\", realm=\"" + realm + "\", nonce=\"" + nonce + "\", uri=\"" +
-                           uri + "\", response=\"" + resp + "\", algorithm=MD5");
+        std::string name = header_username.empty() ? user : header_username;
+        std::string params = "username=\"" + name + "\", realm=\"" + realm + "\", nonce=\"" + nonce + "\", uri=\"" +
+                             uri + "\", response=\"" + resp + "\"";
+        params = algorithm_first ? "algorithm=MD5, " + params : params + ", algorithm=MD5";
+        return request(method, uri, headers, body, std::string(lowercase_scheme ? "digest " : "Digest ") + params);
     }
     std::string register_contact(int expires, const std::string &host)
     {
@@ -655,6 +661,35 @@ int main(int argc, char *argv[])
         }
         (void)receiver.register_contact(0, host);
         std::printf("PASS: forwarded From carries only the authenticated sender\n");
+    }
+
+    // Test 2d: the PBX accepts the Authorization layouts real clients send (JsSIP puts
+    // algorithm= before username=; the scheme name is case-insensitive).
+    std::printf("--- Test 2d: Authorization header layouts are delivered ---\n");
+    {
+        const std::string host = asterisk_host;
+        RawUa receiver("1005", "test1005", asterisk_host, asterisk_port);
+        RawUa sender("1004", "test1004", asterisk_host, asterisk_port);
+        CHECK(receiver.register_contact(60, host).compare(0, 11, "SIP/2.0 200") == 0);
+        struct Layout { const char *name; bool algo_first; bool lower; };
+        const Layout layouts[] = {{"algorithm-first", true, false}, {"lowercase-scheme", false, true},
+                                  {"algorithm-first-lowercase", true, true}};
+        for (const auto &l : layouts) {
+            sender.algorithm_first = l.algo_first;
+            sender.lowercase_scheme = l.lower;
+            std::string body = std::string("layout-") + l.name;
+            std::string resp = sender.send_message("1005", host, "<sip:1004@127.0.0.1>", body);
+            CHECK(resp.compare(0, 11, "SIP/2.0 202") == 0 || resp.compare(0, 11, "SIP/2.0 200") == 0);
+            std::string from_line = receiver.receive_message_from(3000, body);
+            if (from_line.find("sip:1004@") == std::string::npos) {
+                std::printf("FAIL: %s Authorization: message not delivered (From line '%s')\n", l.name, from_line.c_str());
+                (void)receiver.register_contact(0, host);
+                sip_client_destroy(client);
+                return 32;
+            }
+        }
+        (void)receiver.register_contact(0, host);
+        std::printf("PASS: algorithm-first and lowercase-scheme Authorization are delivered\n");
     }
 
     // Test 3: Clean unregistration
