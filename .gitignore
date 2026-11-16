@@ -37,3 +37,6 @@ platforms/web/test/evidence/
 
 # Windows prebuilts
 platforms/windows/prebuilt/
+
+# Local workspace runtime state and debug logs
+.workspace/
