@@ -125,6 +125,7 @@ private:
     static void mqueue_callback(int id, void *data, void *arg);
     static bool sip_request_handler(const struct sip_msg *msg, void *arg);
     bool handle_incoming_message(const struct sip_msg *msg);
+    friend struct EngineTestAccess;  // lets core tests feed a decoded MESSAGE
 
     sip_client_t *m_owner{nullptr};
     sip_callbacks_t m_callbacks{};

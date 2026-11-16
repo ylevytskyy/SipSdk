@@ -1,10 +1,14 @@
 #include "sip_abi.h"
+#include "engine.h"
+
+#include <re.h>
 
 #include <atomic>
 #include <cassert>
 #include <cerrno>
 #include <chrono>
 #include <condition_variable>
+#include <future>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -177,6 +181,47 @@ static bool wait_for_received_body(const std::string &body, int timeout_sec, Rec
         g_reg_cv.wait_for(lock, std::chrono::milliseconds(50));
     }
     return false;
+}
+
+namespace sip_core {
+// Feeds one decoded SIP request to the engine's incoming MESSAGE handler on the loop thread.
+struct EngineTestAccess {
+    static bool handle_message(Engine &engine, const std::string &raw, int reply_port, bool &handled)
+    {
+        std::promise<bool> done;
+        bool posted = engine.post_task([&]() {
+            struct mbuf *mb = mbuf_alloc(raw.size());
+            mbuf_write_mem(mb, reinterpret_cast<const uint8_t *>(raw.data()), raw.size());
+            mb->pos = 0;
+            struct sip_msg *msg = nullptr;
+            bool ok = false;
+            if (sip_msg_decode(&msg, mb) == 0) {
+                sa_set_str(&msg->src, "127.0.0.1", static_cast<uint16_t>(reply_port));
+                msg->tp = SIP_TRANSP_UDP;
+                ok = engine.handle_incoming_message(msg);
+            }
+            mem_deref(msg);
+            mem_deref(mb);
+            done.set_value(ok);
+        });
+        if (!posted) return false;
+        handled = done.get_future().get();
+        return true;
+    }
+};
+}  // namespace sip_core
+
+static std::string incoming_message_text(int port, size_t body_len)
+{
+    std::string body(body_len, 'a');
+    return "MESSAGE sip:1001@127.0.0.1 SIP/2.0\r\n"
+           "Via: SIP/2.0/UDP 127.0.0.1:" + std::to_string(port) + ";branch=z9hG4bKincoming" + std::to_string(body_len) + "\r\n"
+           "From: <sip:2002@127.0.0.1>;tag=incoming\r\n"
+           "To: <sip:1001@127.0.0.1>\r\n"
+           "Call-ID: incoming-" + std::to_string(body_len) + "\r\n"
+           "CSeq: 1 MESSAGE\r\n"
+           "Content-Type: text/plain\r\n"
+           "Content-Length: " + std::to_string(body_len) + "\r\n\r\n" + body;
 }
 
 // assert() is compiled out in Release builds; messaging checks must always run.
@@ -546,6 +591,61 @@ int main(int argc, char *argv[])
         }
         close(peer_fd);
         std::printf("PASS: pending MESSAGE reported FAILED at destroy (reason='%s')\n", pst.reason.c_str());
+    }
+
+    // Test 7: an incoming MESSAGE body over SIP_MESSAGE_MAX_BODY_SIZE is answered 413 and not delivered.
+    // libre's TCP buffer and the UDP datagram limit keep such a message off the wire, so the
+    // handler is fed a decoded request directly.
+    std::printf("--- Test 7: oversized incoming MESSAGE body ---\n");
+    {
+        int peer_port = 0;
+        int peer_fd = open_raw_peer(peer_port);
+        CHECK(peer_fd >= 0);
+        {
+            std::lock_guard<std::mutex> lock(g_reg_mutex);
+            g_msg_received.clear();
+        }
+        sip_core::Engine engine(nullptr, &callbacks, nullptr);
+        CHECK(engine.init(config_dir) == 0);
+        CHECK(engine.set_message_callbacks(&msg_callbacks) == 0);
+        CHECK(engine.register_account("1001", "127.0.0.1", "test1001", "udp", peer_port) == 0);
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+
+        struct Case { size_t len; const char *status; bool delivered; };
+        const Case cases[] = {
+            {SIP_MESSAGE_MAX_BODY_SIZE, "SIP/2.0 200", true},       // at the limit: accepted
+            {SIP_MESSAGE_MAX_BODY_SIZE + 1, "SIP/2.0 413", false},  // one over: rejected
+        };
+        for (const auto &c : cases) {
+            bool handled = false;
+            CHECK(sip_core::EngineTestAccess::handle_message(engine, incoming_message_text(peer_port, c.len), peer_port,
+                                                             handled));
+            CHECK(handled);
+            timeval tv{2, 0};
+            setsockopt(peer_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+            std::string reply;
+            for (int i = 0; i < 20; i++) {  // skip the account's own REGISTER (re)transmissions
+                char buf[2048];
+                ssize_t n = recvfrom(peer_fd, buf, sizeof(buf) - 1, 0, nullptr, nullptr);
+                if (n <= 0) break;
+                reply.assign(buf, static_cast<size_t>(n));
+                if (reply.compare(0, 8, "SIP/2.0 ") == 0) break;
+            }
+            bool got;
+            {
+                std::lock_guard<std::mutex> lock(g_reg_mutex);
+                got = !g_msg_received.empty();
+                g_msg_received.clear();
+            }
+            if (reply.compare(0, std::strlen(c.status), c.status) != 0 || got != c.delivered) {
+                std::printf("FAIL: body %zu bytes: reply='%.40s' delivered=%d (want %s, delivered=%d)\n", c.len,
+                            reply.c_str(), got ? 1 : 0, c.status, c.delivered ? 1 : 0);
+                close(peer_fd);
+                return 29;
+            }
+        }
+        close(peer_fd);
+        std::printf("PASS: oversized incoming MESSAGE answered 413 and not delivered\n");
     }
 
     std::printf("ALL_REGISTRATION_TESTS_PASSED\n");

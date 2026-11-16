@@ -1429,6 +1429,11 @@ bool Engine::handle_incoming_message(const struct sip_msg *msg)
         return false;
     }
 
+    if (msg->mb && mbuf_get_left(msg->mb) > SIP_MESSAGE_MAX_BODY_SIZE) {
+        (void)sip_treply(nullptr, uag_sip(), msg, 413, "Request Entity Too Large");
+        return true;
+    }
+
     std::string from(msg->from.auri.p ? msg->from.auri.p : "", msg->from.auri.l);
     std::string ctype = SIP_MESSAGE_CONTENT_TYPE_TEXT;
     if (msg->ctyp.type.l > 0 && msg->ctyp.subtype.l > 0) {

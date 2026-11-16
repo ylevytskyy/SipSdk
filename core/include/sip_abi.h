@@ -366,7 +366,11 @@ SIP_ABI_EXPORT bool sip_client_is_local_preview_active(const sip_client_t *clien
 
 #define SIP_MESSAGE_CONTENT_TYPE_TEXT "text/plain"
 
-/** Largest body accepted by sip_client_send_message, in bytes. */
+/**
+ * Largest message body, in bytes. sip_client_send_message rejects a larger body with
+ * EMSGSIZE; an incoming MESSAGE with a larger body is answered 413 Request Entity Too
+ * Large and on_message_received is not called.
+ */
 #define SIP_MESSAGE_MAX_BODY_SIZE 65536
 
 typedef enum {
