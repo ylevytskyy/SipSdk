@@ -12,6 +12,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <map>
+#include <mutex>
 #include <utility>
 
 #if defined(__APPLE__)
@@ -300,6 +302,7 @@ void Engine::run_loop(std::string config_path)
 
 void Engine::cleanup_on_loop_thread()
 {
+    fail_pending_messages("Client stopped");
     {
         std::lock_guard<std::mutex> lock(m_calls_mutex);
         for (auto *sess : m_all_calls) {
@@ -1278,30 +1281,80 @@ static bool is_valid_content_type(const char *ctype)
     return slash != nullptr && slash != ctype && slash[1] != '\0' && slash[1] != ';';
 }
 
-struct MessageSendContext {
+// Pending MESSAGE transactions. libre is handed only an opaque token, never a pointer,
+// so a late or missing callback cannot touch freed memory: whoever removes the token
+// from this registry (the response handler or engine teardown) reports the one final
+// status. libre v4.12.0 does not call the handler when the engine stops: ua_close() ->
+// sip_close(sip, false) only sets sip->closing and returns (re src/sip/sip.c:183-195),
+// while the handler runs on teardown only through sip_request_close()
+// (re src/sip/request.c:991 -> close_handler -> terminate -> resph, ECONNABORTED).
+struct PendingMessage {
     Engine *engine{nullptr};
     uint64_t id{0};
 };
 
+static std::mutex g_pending_messages_mutex;
+static std::map<uintptr_t, PendingMessage> g_pending_messages;
+static uintptr_t g_next_pending_token = 1;
+
+static uintptr_t register_pending_message(Engine *engine, uint64_t id)
+{
+    std::lock_guard<std::mutex> lock(g_pending_messages_mutex);
+    uintptr_t token = g_next_pending_token++;
+    g_pending_messages[token] = PendingMessage{engine, id};
+    return token;
+}
+
+// Returns false when the token is already gone (the final status was reported).
+static bool take_pending_message(uintptr_t token, PendingMessage &out)
+{
+    std::lock_guard<std::mutex> lock(g_pending_messages_mutex);
+    auto it = g_pending_messages.find(token);
+    if (it == g_pending_messages.end()) return false;
+    out = it->second;
+    g_pending_messages.erase(it);
+    return true;
+}
+
+void Engine::fail_pending_messages(const char *reason)
+{
+    std::vector<uint64_t> ids;
+    {
+        std::lock_guard<std::mutex> lock(g_pending_messages_mutex);
+        for (auto it = g_pending_messages.begin(); it != g_pending_messages.end();) {
+            if (it->second.engine == this) {
+                ids.push_back(it->second.id);
+                it = g_pending_messages.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+    for (uint64_t id : ids) {
+        dispatch_message_status(id, SIP_MESSAGE_STATUS_FAILED, 0, reason);
+    }
+}
+
 static void message_response_handler(int err, const struct sip_msg *msg, void *arg)
 {
-    auto *ctx = static_cast<MessageSendContext *>(arg);
-    if (!ctx) return;
+    uintptr_t token = reinterpret_cast<uintptr_t>(arg);
     if (!err && msg && msg->scode < 200) {
         return; // provisional response; wait for the final one
     }
 
+    PendingMessage pending;
+    if (!take_pending_message(token, pending)) return;
+
     if (err) {
-        ctx->engine->dispatch_message_status(ctx->id, SIP_MESSAGE_STATUS_FAILED, 0, std::strerror(err));
+        pending.engine->dispatch_message_status(pending.id, SIP_MESSAGE_STATUS_FAILED, 0, std::strerror(err));
     } else if (msg) {
         std::string reason = (msg->reason.p && msg->reason.l > 0) ? std::string(msg->reason.p, msg->reason.l) : "";
         sip_message_status_t status = (msg->scode >= 200 && msg->scode < 300)
             ? SIP_MESSAGE_STATUS_SENT : SIP_MESSAGE_STATUS_FAILED;
-        ctx->engine->dispatch_message_status(ctx->id, status, static_cast<int>(msg->scode), reason.c_str());
+        pending.engine->dispatch_message_status(pending.id, status, static_cast<int>(msg->scode), reason.c_str());
     } else {
-        ctx->engine->dispatch_message_status(ctx->id, SIP_MESSAGE_STATUS_FAILED, 0, "No response");
+        pending.engine->dispatch_message_status(pending.id, SIP_MESSAGE_STATUS_FAILED, 0, "No response");
     }
-    delete ctx;
 }
 
 int Engine::set_message_callbacks(const sip_message_callbacks_t *callbacks)
@@ -1339,16 +1392,19 @@ int Engine::send_message(const char *peer_uri, const char *content_type, const u
             dispatch_message_status(id, SIP_MESSAGE_STATUS_FAILED, 0, "No account registered");
             return;
         }
-        auto *ctx = new MessageSendContext{this, id};
-        int rc = sip_req_send(m_ua, "MESSAGE", uri_str.c_str(), message_response_handler, ctx,
+        uintptr_t token = register_pending_message(this, id);
+        int rc = sip_req_send(m_ua, "MESSAGE", uri_str.c_str(), message_response_handler,
+                              reinterpret_cast<void *>(token),
                               "Accept: text/plain\r\n"
                               "Content-Type: %s\r\n"
                               "Content-Length: %zu\r\n"
                               "\r\n%b",
                               ctype_str.c_str(), payload.size(), payload.data(), payload.size());
         if (rc != 0) {
-            delete ctx;
-            dispatch_message_status(id, SIP_MESSAGE_STATUS_FAILED, 0, std::strerror(rc));
+            PendingMessage unused;
+            if (take_pending_message(token, unused)) {
+                dispatch_message_status(id, SIP_MESSAGE_STATUS_FAILED, 0, std::strerror(rc));
+            }
         }
     });
     if (!posted) {

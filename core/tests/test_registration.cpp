@@ -512,6 +512,42 @@ int main(int argc, char *argv[])
 
     // Teardown
     sip_client_destroy(client);
+
+    // Test 6: a MESSAGE still waiting for a response when the client is destroyed must be
+    // reported FAILED, and its bookkeeping must be released.
+    std::printf("--- Test 6: pending MESSAGE at client destroy ---\n");
+    {
+        int peer_port = 0;
+        int peer_fd = open_raw_peer(peer_port);
+        CHECK(peer_fd >= 0);  // a peer that never answers
+        sip_client_t *c2 = sip_client_create(&callbacks, nullptr);
+        CHECK(c2 != nullptr);
+        {
+            std::lock_guard<std::mutex> lock(g_reg_mutex);
+            g_msg_status.clear();  // message ids restart at 1 for a new client
+        }
+        CHECK(sip_client_init(c2, config_dir) == 0);
+        CHECK(sip_client_set_message_callbacks(c2, &msg_callbacks) == 0);
+        CHECK(sip_client_register(c2, "1001", "127.0.0.1", "test1001", "udp", peer_port) == 0);
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        std::string uri = "sip:1002@127.0.0.1:" + std::to_string(peer_port);
+        uint64_t pending_id = send_text(c2, uri, "text/plain", "never answered");
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        {
+            std::lock_guard<std::mutex> lock(g_reg_mutex);
+            for (const auto &ev : g_msg_status) CHECK(ev.id != pending_id);  // still pending
+        }
+        sip_client_destroy(c2);
+        MessageStatusEvent pst{};
+        if (!wait_for_message_status(pending_id, 2, pst) || pst.status != SIP_MESSAGE_STATUS_FAILED) {
+            std::printf("FAIL: pending message %llu got no FAILED status at destroy\n", (unsigned long long)pending_id);
+            close(peer_fd);
+            return 28;
+        }
+        close(peer_fd);
+        std::printf("PASS: pending MESSAGE reported FAILED at destroy (reason='%s')\n", pst.reason.c_str());
+    }
+
     std::printf("ALL_REGISTRATION_TESTS_PASSED\n");
     return 0;
 }
