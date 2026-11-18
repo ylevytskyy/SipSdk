@@ -206,3 +206,13 @@ add_test(NAME desktop_video_capture COMMAND test_video_capture)
 if(TARGET sip_core_display_frames_test)
     add_test(NAME core_display_frames COMMAND sip_core_display_frames_test)
 endif()
+
+# sip_cli against a scripted SIP peer on loopback (needs no PBX).
+add_executable(test_cli_media
+    tests/test_cli_media.cpp
+)
+
+add_dependencies(test_cli_media sip_cli)
+
+add_test(NAME desktop_cli_media COMMAND test_cli_media $<TARGET_FILE:sip_cli>)
+set_tests_properties(desktop_cli_media PROPERTIES TIMEOUT 240)
