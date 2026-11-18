@@ -128,11 +128,15 @@ public:
     sip_call_t *find_or_create_call_session(struct call *c, const char *remote_uri, bool is_outgoing, bool with_video);
     sip_call_t *find_call_session(struct call *c);
     void remove_call_session(struct call *c);
+    void evaluate_pending_hold_on_loop(sip_call_t *call);
+    void trigger_hold_fallback_on_loop(sip_call_t *call, int code);
 
 private:
     int init_on_loop_thread(const char *config_path);
     void run_loop(std::string config_path);
     void cleanup_on_loop_thread();
+    void auto_hold_other_calls(sip_call_t *except_call);
+    void hold_call_on_loop(sip_call_t *call, bool hold);
 
     static void mqueue_callback(int id, void *data, void *arg);
     static bool sip_request_handler(const struct sip_msg *msg, void *arg);

@@ -734,14 +734,17 @@ void Engine::handle_ua_event(int ev, struct bevent *event)
         case BEVENT_CALL_REMOTE_SDP: {
             if (bcall != nullptr && text && std::strcmp(text, "answer") == 0) {
                 sip_call_t *sess = find_call_session(bcall);
-                if (sess && sess->has_video()) {
-                    struct video *vid = call_video(bcall);
-                    struct stream *strm = vid ? video_strm(vid) : nullptr;
-                    struct sdp_media *m = strm ? stream_sdpmedia(strm) : nullptr;
-                    if (m && !sdp_media_disabled(m)) {
-                        auto *im = reinterpret_cast<struct sdp_media_internal *>(m);
-                        if (im->ldir == sdp_media_ldir(m) && im->rdir == sdp_media_rdir(m)) {
-                            im->rdir = SDP_SENDRECV;
+                if (sess) {
+                    sess->stop_hold_check_timer();
+                    if (sess->has_video()) {
+                        struct video *vid = call_video(bcall);
+                        struct stream *strm = vid ? video_strm(vid) : nullptr;
+                        struct sdp_media *m = strm ? stream_sdpmedia(strm) : nullptr;
+                        if (m && !sdp_media_disabled(m)) {
+                            auto *im = reinterpret_cast<struct sdp_media_internal *>(m);
+                            if (im->ldir == sdp_media_ldir(m) && im->rdir == sdp_media_rdir(m)) {
+                                im->rdir = SDP_SENDRECV;
+                            }
                         }
                     }
                 }
@@ -886,6 +889,8 @@ int Engine::dial_call(const char *target_uri, bool with_video, sip_call_t **out_
             return;
         }
 
+        auto_hold_other_calls(call_session);
+
         struct call *baresip_call = nullptr;
         enum vidmode vmode = with_video ? VIDMODE_ON : VIDMODE_OFF;
         int rc = ua_connect(m_ua, &baresip_call, nullptr, uri_str.c_str(), vmode);
@@ -923,6 +928,7 @@ int Engine::answer_call(sip_call_t *call, bool with_video)
     post_task([this, call, with_video]() {
         struct call *c = call->raw_call();
         if (m_ua != nullptr && c != nullptr) {
+            auto_hold_other_calls(call);
             enum vidmode vmode = with_video ? VIDMODE_ON : VIDMODE_OFF;
             (void)ua_answer(m_ua, c, vmode);
         } else {
@@ -958,20 +964,109 @@ int Engine::hangup_call(sip_call_t *call, int code, const char *reason)
     return 0;
 }
 
+void Engine::auto_hold_other_calls(sip_call_t *except_call)
+{
+    std::vector<sip_call_t *> to_hold;
+    {
+        std::lock_guard<std::mutex> lock(m_calls_mutex);
+        for (auto *sess : m_all_calls) {
+            if (!sess || sess == except_call || sess->is_closed() || sess->is_on_hold()) {
+                continue;
+            }
+            if (sess->raw_call() != nullptr) {
+                sess->retain();
+                to_hold.push_back(sess);
+            }
+        }
+    }
+    for (auto *sess : to_hold) {
+        hold_call_on_loop(sess, true);
+        sess->release();
+    }
+}
+
+void Engine::trigger_hold_fallback_on_loop(sip_call_t *call, int code)
+{
+    if (!call || call->is_closed()) {
+        return;
+    }
+    struct call *c = call->raw_call();
+    if (c != nullptr) {
+        struct audio *au = call_audio(c);
+        if (au != nullptr) {
+            audio_mute(au, true);
+            audio_stop(au);
+        }
+    }
+    call->set_on_hold(true);
+    dispatch_call_state(call, SIP_CALL_STATE_HOLD, code, "Hold Fallback");
+    dispatch_call_media(call, 0, 0, true, true);
+}
+
+void Engine::evaluate_pending_hold_on_loop(sip_call_t *call)
+{
+    if (!call || call->is_closed() || !call->is_hold_reinvite_pending()) {
+        return;
+    }
+    struct call *c = call->raw_call();
+    if (!c) {
+        call->stop_hold_check_timer();
+        return;
+    }
+    int ticks = call->increment_hold_check_ticks();
+    enum sdp_neg_state neg = call_sdp_neg_state(c);
+    if (neg != SDP_NEG_LOCAL_OFFER) {
+        call->stop_hold_check_timer();
+        trigger_hold_fallback_on_loop(call, 488);
+    } else if (ticks >= 20) {
+        call->stop_hold_check_timer();
+        trigger_hold_fallback_on_loop(call, 408);
+    }
+}
+
+void Engine::hold_call_on_loop(sip_call_t *call, bool hold)
+{
+    if (!call || call->is_closed()) return;
+    struct call *c = call->raw_call();
+    if (c == nullptr) return;
+
+    if (!hold) {
+        call->stop_hold_check_timer();
+        auto_hold_other_calls(call);
+        int rc = call_hold(c, false);
+        (void)rc;
+        struct audio *au = call_audio(c);
+        if (au != nullptr) {
+            audio_mute(au, call->is_muted());
+            if (!audio_started(au)) {
+                (void)audio_update(au);
+            }
+        }
+        call->set_on_hold(false);
+        dispatch_call_state(call, SIP_CALL_STATE_ESTABLISHED, 200, "Resumed");
+        dispatch_call_media(call, 0, 0, false, call->is_muted());
+        return;
+    }
+
+    int rc = call_hold(c, true);
+    if (rc != 0) {
+        trigger_hold_fallback_on_loop(call, rc);
+        return;
+    }
+
+    call->set_on_hold(true);
+    call->start_hold_check_timer();
+    dispatch_call_state(call, SIP_CALL_STATE_HOLD, 200, "Hold");
+    dispatch_call_media(call, 0, 0, true, call->is_muted());
+}
+
 int Engine::hold_call(sip_call_t *call, bool hold)
 {
     if (!call) return EINVAL;
 
     call->retain();
     post_task([this, call, hold]() {
-        struct call *c = call->raw_call();
-        if (c != nullptr) {
-            (void)call_hold(c, hold);
-            call->set_on_hold(hold);
-            dispatch_call_state(call, hold ? SIP_CALL_STATE_HOLD : SIP_CALL_STATE_ESTABLISHED,
-                                200, hold ? "Hold" : "Resumed");
-            dispatch_call_media(call, 0, 0, hold, call->is_muted());
-        }
+        hold_call_on_loop(call, hold);
         call->release();
     });
 
@@ -1285,6 +1380,13 @@ sip_call_t *Engine::find_or_create_call_session(struct call *c, const char *remo
             }
         }
         if (is_outgoing) {
+            for (auto *sess : m_all_calls) {
+                if (sess && sess->raw_call() == nullptr && sess->is_outgoing() &&
+                    remote_uri && std::strcmp(sess->get_remote_uri(), remote_uri) == 0) {
+                    sess->attach_raw_call(c);
+                    return sess;
+                }
+            }
             for (auto *sess : m_all_calls) {
                 if (sess && sess->raw_call() == nullptr && sess->is_outgoing()) {
                     sess->attach_raw_call(c);

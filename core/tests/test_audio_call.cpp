@@ -113,8 +113,11 @@ static void test_on_call_media(sip_call_t *call, int width, int height, bool on_
 {
     (void)user_data;
     MediaEvent ev{call, width, height, on_hold, is_muted};
-    std::lock_guard<std::mutex> lock(g_call_mutex);
-    g_media_events.push_back(ev);
+    {
+        std::lock_guard<std::mutex> lock(g_call_mutex);
+        g_media_events.push_back(ev);
+    }
+    g_call_cv.notify_all();
 }
 
 static std::atomic<int> g_call_stats_count{0};
@@ -217,6 +220,22 @@ static void clear_call_events()
 {
     std::lock_guard<std::mutex> lock(g_call_mutex);
     g_call_events.clear();
+    g_media_events.clear();
+}
+
+static bool wait_for_media_hold(sip_call_t *call, bool expected_hold, int timeout_sec)
+{
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(timeout_sec);
+    std::unique_lock<std::mutex> lock(g_call_mutex);
+    while (std::chrono::steady_clock::now() < deadline) {
+        for (const auto &ev : g_media_events) {
+            if ((call == nullptr || ev.call == call) && ev.on_hold == expected_hold) {
+                return true;
+            }
+        }
+        g_call_cv.wait_for(lock, std::chrono::milliseconds(50));
+    }
+    return false;
 }
 
 static std::mutex g_busy_mutex;
@@ -329,7 +348,7 @@ static std::string extract_header(const std::string &msg, const std::string &nam
 
 class LoopbackCaller {
 public:
-    explicit LoopbackCaller(uint16_t port)
+    explicit LoopbackCaller(uint16_t port = 0)
         : m_port(port)
     {
         m_sock = socket(AF_INET, SOCK_DGRAM, 0);
@@ -348,7 +367,13 @@ public:
         addr.sin_port = htons(port);
         int rc = bind(m_sock, (struct sockaddr *)&addr, sizeof(addr));
         assert(rc == 0);
+        socklen_t len = sizeof(addr);
+        if (getsockname(m_sock, (struct sockaddr *)&addr, &len) == 0) {
+            m_port = ntohs(addr.sin_port);
+        }
     }
+
+    uint16_t port() const { return m_port; }
 
     ~LoopbackCaller()
     {
@@ -515,6 +540,11 @@ public:
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         m_auto_answer_sdp = sdp;
+    }
+
+    void set_reinvite_reject_code(int scode)
+    {
+        m_reinvite_reject_code.store(scode);
     }
 
     bool send_refer(const std::string &target_uri)
@@ -745,7 +775,8 @@ private:
                 std::string to = extract_header(msg, "To");
                 std::string call_id = extract_header(msg, "Call-ID");
                 std::string cseq = extract_header(msg, "CSeq");
-                if (to.find(";tag=") == std::string::npos) {
+                bool is_reinvite = (to.find(";tag=") != std::string::npos);
+                if (!is_reinvite) {
                     to += ";tag=loopback-inv";
                 }
                 std::string body;
@@ -762,6 +793,19 @@ private:
                     answer_sdp = m_auto_answer_sdp;
                 }
                 m_cv.notify_all();
+
+                int reject_code = m_reinvite_reject_code.load();
+                if (is_reinvite && reject_code >= 400) {
+                    std::string resp = "SIP/2.0 " + std::to_string(reject_code) + " Not Acceptable Here\r\n"
+                                       "Via: " + via + "\r\n"
+                                       "From: " + from + "\r\n"
+                                       "To: " + to + "\r\n"
+                                       "Call-ID: " + call_id + "\r\n"
+                                       "CSeq: " + cseq + "\r\n"
+                                       "Content-Length: 0\r\n\r\n";
+                    sendto(m_sock, resp.c_str(), resp.length(), 0, (struct sockaddr *)&peer, peer_len);
+                    continue;
+                }
 
                 if (answer_sdp.empty()) {
                     answer_sdp = "v=0\r\n"
@@ -812,6 +856,7 @@ private:
     bool m_client_invite_received{false};
     std::string m_last_client_invite_sdp;
     std::string m_auto_answer_sdp;
+    std::atomic<int> m_reinvite_reject_code{0};
 };
 
 static int run_test_9(const sip_callbacks_t &callbacks, const char *config_dir, const char *asterisk_host, int asterisk_port)
@@ -1083,6 +1128,7 @@ static int run_test_10(const sip_callbacks_t &callbacks, const char *config_dir,
 
 static int run_test_8b(const sip_callbacks_t &callbacks, const char *config_dir, const char *asterisk_host, int asterisk_port);
 static int run_test_11_cap(const sip_callbacks_t &callbacks, const char *config_dir, const char *asterisk_host, int asterisk_port);
+static int run_test_12_multicall(const sip_callbacks_t &callbacks, const char *config_dir, const char *asterisk_host, int asterisk_port);
 
 int main(int argc, char *argv[])
 {
@@ -1115,6 +1161,9 @@ int main(int argc, char *argv[])
     }
     if (argc > 4 && std::string(argv[4]) == "--only-cap") {
         return run_test_11_cap(callbacks, config_dir, asterisk_host, asterisk_port);
+    }
+    if (argc > 4 && std::string(argv[4]) == "--only-multicall") {
+        return run_test_12_multicall(callbacks, config_dir, asterisk_host, asterisk_port);
     }
 
     // --- Test 1: Client initialization & account registration ---
@@ -1472,6 +1521,9 @@ int main(int argc, char *argv[])
     // --- Test 11: max_calls cap (EBUSY on dial & 486 Busy Here on incoming) ---
     run_test_11_cap(callbacks, config_dir, asterisk_host, asterisk_port);
 
+    // --- Test 12: Multi-call auto-hold, swap, call waiting & rejected hold fallback ---
+    run_test_12_multicall(callbacks, config_dir, asterisk_host, asterisk_port);
+
     std::printf("ALL_AUDIO_CALL_TESTS_PASSED\n");
     return 0;
 }
@@ -1679,5 +1731,180 @@ static int run_test_11_cap(const sip_callbacks_t &callbacks, const char *config_
 
     sip_client_destroy(client);
     std::printf("PASS: max_calls cap (EBUSY & 486 Busy Here) verified\n");
+    return 0;
+}
+
+static int run_test_12_multicall(const sip_callbacks_t &callbacks, const char *config_dir, const char *asterisk_host, int asterisk_port)
+{
+    std::printf("--- Test 12: Multi-call auto-hold, swap, call waiting & rejected hold fallback ---\n");
+    clear_call_events();
+    clear_incoming_events();
+
+    sip_client_t *client = sip_client_create(&callbacks, nullptr);
+    TEST_ASSERT(client != nullptr, "multicall client creation failed");
+    TEST_ASSERT(sip_client_init(client, config_dir) == 0, "sip_client_init failed");
+
+    sip_account_config_t cfg{};
+    cfg.user = "1001";
+    cfg.domain = asterisk_host;
+    cfg.pwd = "test1001";
+    cfg.transport = "udp";
+    cfg.port = asterisk_port;
+    cfg.max_calls = 4;
+    TEST_ASSERT(sip_client_register_account(client, &cfg) == 0, "register_account failed");
+    std::this_thread::sleep_for(std::chrono::milliseconds(600));
+
+    // 1. Dial call1 (9001 Echo), then dial call2 (9001 Echo) -> call1 auto-held.
+    std::string echo_uri = "sip:9001@" + std::string(asterisk_host) + ":" + std::to_string(asterisk_port);
+    sip_call_t *call1 = nullptr;
+    TEST_ASSERT(sip_call_dial(client, echo_uri.c_str(), false, &call1) == 0 && call1 != nullptr, "dial call1 failed");
+    CallEvent ev1;
+    TEST_ASSERT(wait_for_call_state(call1, SIP_CALL_STATE_ESTABLISHED, 10, ev1), "call1 did not establish");
+
+    sip_call_t *call2 = nullptr;
+    TEST_ASSERT(sip_call_dial(client, echo_uri.c_str(), false, &call2) == 0 && call2 != nullptr, "dial call2 failed");
+    CallEvent ev1_hold, ev2_estab;
+    TEST_ASSERT(wait_for_call_state(call1, SIP_CALL_STATE_HOLD, 5, ev1_hold),
+                "call1 did not auto-hold when dialing call2");
+    TEST_ASSERT(wait_for_call_state(call2, SIP_CALL_STATE_ESTABLISHED, 10, ev2_estab),
+                "call2 did not establish");
+    TEST_ASSERT(sip_call_is_on_hold(call1) == true, "call1 must be on hold");
+    TEST_ASSERT(sip_call_is_on_hold(call2) == false, "call2 must not be on hold");
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    {
+        std::lock_guard<std::mutex> lock(g_call_mutex);
+        for (const auto &cev : g_call_events) {
+            TEST_ASSERT(!(cev.call == call1 && cev.reason == "Hold Fallback"),
+                        "Asterisk 200 OK hold falsely triggered Hold Fallback");
+        }
+    }
+
+    // 2. Swap: resume call1 -> call2 auto-holds and call1 resumes.
+    clear_call_events();
+    TEST_ASSERT(sip_call_set_hold(call1, false) == 0, "sip_call_set_hold(call1, false) failed");
+    CallEvent ev2_hold, ev1_resumed;
+    TEST_ASSERT(wait_for_call_state(call2, SIP_CALL_STATE_HOLD, 5, ev2_hold),
+                "call2 did not auto-hold when resuming call1");
+    TEST_ASSERT(wait_for_call_state(call1, SIP_CALL_STATE_ESTABLISHED, 5, ev1_resumed),
+                "call1 did not return to ESTABLISHED on swap");
+    TEST_ASSERT(sip_call_is_on_hold(call1) == false, "call1 must be resumed");
+    TEST_ASSERT(sip_call_is_on_hold(call2) == true, "call2 must be held after swap");
+
+    // 3. Call waiting: trigger Asterisk 9003 delayed callback, close trigger, keep call1 active,
+    //    then receive incoming call3 and answer it -> call1 auto-holds.
+    clear_incoming_events();
+    std::string cb_uri = "sip:9003@" + std::string(asterisk_host) + ":" + std::to_string(asterisk_port);
+    sip_call_t *cb_trigger = nullptr;
+    TEST_ASSERT(sip_call_dial(client, cb_uri.c_str(), false, &cb_trigger) == 0 && cb_trigger != nullptr,
+                "dial 9003 callback trigger failed");
+    CallEvent cb_closed;
+    wait_for_call_state(cb_trigger, SIP_CALL_STATE_CLOSED, 5, cb_closed);
+    sip_call_destroy(cb_trigger);
+
+    // Resume call1 so it is the active audio call when call3 is answered.
+    TEST_ASSERT(sip_call_set_hold(call1, false) == 0, "resume call1 before call waiting failed");
+    CallEvent ev1_active;
+    TEST_ASSERT(wait_for_call_state(call1, SIP_CALL_STATE_ESTABLISHED, 5, ev1_active),
+                "call1 did not resume before incoming call waiting");
+
+    IncomingCallEvent inc_ev;
+    TEST_ASSERT(wait_for_incoming_call(12, inc_ev) && inc_ev.call != nullptr,
+                "did not receive incoming call waiting from 9003");
+    sip_call_t *call3 = inc_ev.call;
+
+    clear_call_events();
+    TEST_ASSERT(sip_call_answer(call3, false) == 0, "answer call3 failed");
+    CallEvent ev1_hold_cw, ev3_estab;
+    TEST_ASSERT(wait_for_call_state(call1, SIP_CALL_STATE_HOLD, 5, ev1_hold_cw),
+                "call1 did not auto-hold when answering call3");
+    TEST_ASSERT(wait_for_call_state(call3, SIP_CALL_STATE_ESTABLISHED, 10, ev3_estab),
+                "call3 did not establish");
+    TEST_ASSERT(sip_call_is_on_hold(call1) == true, "call1 must be held after answering call3");
+    TEST_ASSERT(sip_call_is_on_hold(call2) == true, "call2 must stay held");
+    TEST_ASSERT(sip_call_is_on_hold(call3) == false, "call3 must be active");
+
+    sip_call_hangup(call1, 0, "Hangup");
+    sip_call_hangup(call2, 0, "Hangup");
+    sip_call_hangup(call3, 0, "Hangup");
+    CallEvent c1, c2, c3;
+    wait_for_call_state(call1, SIP_CALL_STATE_CLOSED, 5, c1);
+    wait_for_call_state(call2, SIP_CALL_STATE_CLOSED, 5, c2);
+    wait_for_call_state(call3, SIP_CALL_STATE_CLOSED, 5, c3);
+    sip_call_destroy(call1);
+    sip_call_destroy(call2);
+    sip_call_destroy(call3);
+
+    // 4. Rejected hold re-INVITE fallback (488 Not Acceptable Here):
+    //    LoopbackCaller answers initial INVITE, then rejects hold re-INVITE with 488.
+    //    Core must stop local audio (mute/hold fallback) on call_lb, fire on_call_media(on_hold=true),
+    //    and connect call_b.
+    LoopbackCaller lb;
+    lb.start();
+    std::string lb_uri = "sip:bob@127.0.0.1:" + std::to_string(lb.port());
+
+    sip_call_t *call_lb = nullptr;
+    TEST_ASSERT(sip_call_dial(client, lb_uri.c_str(), false, &call_lb) == 0 && call_lb != nullptr,
+                "dial loopback call failed");
+    CallEvent ev_lb;
+    TEST_ASSERT(wait_for_call_state(call_lb, SIP_CALL_STATE_ESTABLISHED, 10, ev_lb),
+                "call_lb did not establish");
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(150));
+    lb.set_reinvite_reject_code(488);
+    lb.clear_client_invite();
+    clear_call_events();
+
+    sip_call_t *call_b = nullptr;
+    TEST_ASSERT(sip_call_dial(client, echo_uri.c_str(), false, &call_b) == 0 && call_b != nullptr,
+                "dial call_b while call_lb rejects hold failed");
+
+    std::string reinvite_sdp;
+    TEST_ASSERT(lb.wait_for_client_invite(5, reinvite_sdp), "did not receive hold re-INVITE at loopback");
+    TEST_ASSERT(reinvite_sdp.find("a=sendonly") != std::string::npos ||
+                reinvite_sdp.find("a=inactive") != std::string::npos,
+                "re-INVITE SDP did not indicate hold direction");
+
+    CallEvent ev_b;
+    TEST_ASSERT(wait_for_call_state(call_b, SIP_CALL_STATE_ESTABLISHED, 10, ev_b),
+                "call_b did not establish after rejected hold");
+
+    // Allow asynchronous 488 response to arrive and trigger fallback handler.
+    {
+        auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+        bool saw_fallback_state = false;
+        bool saw_fallback_media = false;
+        std::unique_lock<std::mutex> lock(g_call_mutex);
+        while (std::chrono::steady_clock::now() < deadline) {
+            for (const auto &cev : g_call_events) {
+                if (cev.call == call_lb && cev.state == SIP_CALL_STATE_HOLD && cev.reason == "Hold Fallback") {
+                    saw_fallback_state = true;
+                    break;
+                }
+            }
+            for (const auto &mev : g_media_events) {
+                if (mev.call == call_lb && mev.on_hold && mev.is_muted) {
+                    saw_fallback_media = true;
+                    break;
+                }
+            }
+            if (saw_fallback_state && saw_fallback_media) break;
+            g_call_cv.wait_for(lock, std::chrono::milliseconds(50));
+        }
+        TEST_ASSERT(saw_fallback_state, "call_lb did not emit Hold Fallback after 488 hold rejection");
+        TEST_ASSERT(saw_fallback_media, "on_call_media(on_hold=true, is_muted=true) did not fire on fallback");
+    }
+    TEST_ASSERT(sip_call_is_on_hold(call_lb) == true, "call_lb must remain locally held after 488");
+
+    sip_call_hangup(call_lb, 0, "Hangup");
+    sip_call_hangup(call_b, 0, "Hangup");
+    CallEvent clb, cb;
+    wait_for_call_state(call_lb, SIP_CALL_STATE_CLOSED, 5, clb);
+    wait_for_call_state(call_b, SIP_CALL_STATE_CLOSED, 5, cb);
+    sip_call_destroy(call_lb);
+    sip_call_destroy(call_b);
+    lb.stop();
+
+    sip_client_destroy(client);
+    std::printf("PASS: Multi-call auto-hold, swap, call waiting & rejected hold fallback verified\n");
     return 0;
 }
