@@ -11,4 +11,5 @@ interface SipClientListener {
     fun onTransferRequest(call: SipCall, target: String) {}
     fun onMessageReceived(message: SipIncomingMessage) {}
     fun onMessageStatusChanged(messageId: Long, status: SipMessageStatus, code: Int, reason: String) {}
+    fun onCallRejectedBusy(callerUri: String) {}
 }

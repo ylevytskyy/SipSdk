@@ -147,4 +147,63 @@ class SipSdkUnitTest {
         assertEquals(-1, call.attendedTransfer(call))
         assertEquals(-1, call.acceptTransfer(true))
     }
+
+    @Test
+    fun testMultiCallConfigBusyListenerAndTelecomContract() {
+        val client = SipClient("1001", "10.0.2.2")
+        assertEquals(4, client.maxCalls)
+        client.maxCalls = 2
+        assertEquals(2, client.maxCalls)
+
+        var busyUri: String? = null
+        val listener = object : SipClientListener {
+            override fun onCallRejectedBusy(callerUri: String) {
+                busyUri = callerUri
+            }
+        }
+        listener.onCallRejectedBusy("sip:1002@pbx")
+        assertEquals("sip:1002@pbx", busyUri)
+
+        val err = SipBusyException("Max concurrent calls reached")
+        assertTrue(err is IllegalStateException)
+
+        val fakeTelecom: SipTelecomManagerCoordinator = InMemoryTelecomCoordinator()
+        val callId1 = "call-out-1"
+        val callId2 = "call-in-2"
+        fakeTelecom.addCall(
+            callId = callId1,
+            displayName = "Alice",
+            address = "sip:1002@pbx",
+            isOutgoing = true,
+            isVideo = false,
+            callbacks = object : SipTelecomCallCallbacks {
+                override fun onAnswer(isVideo: Boolean) {}
+                override fun onDisconnect() {}
+                override fun onSetActive() {}
+                override fun onSetInactive() {}
+            }
+        )
+        fakeTelecom.addCall(
+            callId = callId2,
+            displayName = "Bob",
+            address = "sip:1003@pbx",
+            isOutgoing = false,
+            isVideo = false,
+            callbacks = object : SipTelecomCallCallbacks {
+                override fun onAnswer(isVideo: Boolean) {}
+                override fun onDisconnect() {}
+                override fun onSetActive() {}
+                override fun onSetInactive() {}
+            }
+        )
+        fakeTelecom.setActive(callId1)
+        fakeTelecom.setInactive(callId1)
+        fakeTelecom.setActive(callId2)
+        fakeTelecom.requestEndpointChange(callId2, SipTelecomEndpoint.SPEAKER)
+        fakeTelecom.disconnect(callId1, SipDisconnectReason.LOCAL)
+        fakeTelecom.disconnect(callId2, SipDisconnectReason.REMOTE)
+        assertEquals(SipTelecomCallState.DISCONNECTED, fakeTelecom.getCallState(callId1))
+        assertEquals(SipTelecomCallState.DISCONNECTED, fakeTelecom.getCallState(callId2))
+        assertEquals(SipTelecomEndpoint.SPEAKER, fakeTelecom.getEndpoint(callId2))
+    }
 }

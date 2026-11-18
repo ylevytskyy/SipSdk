@@ -118,6 +118,7 @@ struct ClientJniContext {
     jmethodID onCallStatsMethodId = nullptr;
     jmethodID onTransferStatusMethodId = nullptr;
     jmethodID onTransferRequestMethodId = nullptr;
+    jmethodID onCallRejectedBusyMethodId = nullptr;
     jmethodID onMessageReceivedMethodId = nullptr;
     jmethodID onMessageStatusMethodId = nullptr;
     jmethodID prepareAudioSessionMethodId = nullptr;
@@ -351,6 +352,20 @@ static jbyteArray jni_bytes(JNIEnv *env, const void *data, size_t len) {
     return arr;
 }
 
+static void jni_on_call_rejected_busy(sip_client_t *client, const char *caller_uri, void *user_data) {
+    (void)client;
+    auto *ctx = static_cast<ClientJniContext *>(user_data);
+    if (!ctx || ctx->destroyed.load() || !ctx->javaClientGlobalRef || !ctx->onCallRejectedBusyMethodId) return;
+
+    JniEnvGuard guard;
+    if (!guard.env) return;
+
+    const char *caller = caller_uri ? caller_uri : "";
+    jbyteArray jCaller = jni_bytes(guard.env, caller, std::strlen(caller));
+    guard.env->CallVoidMethod(ctx->javaClientGlobalRef, ctx->onCallRejectedBusyMethodId, jCaller);
+    if (jCaller) guard.env->DeleteLocalRef(jCaller);
+}
+
 static void jni_on_message_received(sip_client_t *client, const char *from_uri, const char *content_type,
                                     const uint8_t *body, size_t body_len, void *user_data) {
     (void)client;
@@ -458,6 +473,7 @@ Java_com_sipsdk_SipClient_nativeCreate(JNIEnv *env, jobject thiz) {
     ctx->onCallStatsMethodId = env->GetMethodID(clientClass, "onNativeCallStats", "(JFIIILjava/lang/String;FIIILjava/lang/String;)V");
     ctx->onTransferStatusMethodId = env->GetMethodID(clientClass, "onNativeTransferStatus", "(JILjava/lang/String;)V");
     ctx->onTransferRequestMethodId = env->GetMethodID(clientClass, "onNativeTransferRequest", "(JLjava/lang/String;)V");
+    ctx->onCallRejectedBusyMethodId = env->GetMethodID(clientClass, "onNativeCallRejectedBusy", "([B)V");
     ctx->onMessageReceivedMethodId = env->GetMethodID(clientClass, "onNativeMessageReceived", "([B[B[B)V");
     ctx->onMessageStatusMethodId = env->GetMethodID(clientClass, "onNativeMessageStatus", "(JII[B)V");
     ctx->prepareAudioSessionMethodId = env->GetMethodID(clientClass, "onNativePrepareAudioSession", "()Z");
@@ -495,6 +511,7 @@ Java_com_sipsdk_SipClient_nativeCreate(JNIEnv *env, jobject thiz) {
     callbacks.on_call_stats = jni_on_call_stats;
     callbacks.on_transfer_status = jni_on_transfer_status;
     callbacks.on_transfer_request = jni_on_transfer_request;
+    callbacks.on_call_rejected_busy = jni_on_call_rejected_busy;
     callbacks.prepare_audio_session = jni_prepare_audio_session;
     callbacks.release_audio_session = jni_release_audio_session;
 
@@ -563,7 +580,8 @@ JNIEXPORT jint JNICALL
 Java_com_sipsdk_SipClient_nativeRegisterAccount(JNIEnv *env, jobject thiz, jlong handle,
                                                jstring user, jstring domain, jstring pwd,
                                                jstring displayName, jstring transport, jint port,
-                                               jstring tlsCaFile, jboolean verifyTlsCert, jstring mediaEnc) {
+                                               jstring tlsCaFile, jboolean verifyTlsCert,
+                                               jstring mediaEnc, jint maxCalls) {
     (void)thiz;
     auto *ctx = reinterpret_cast<ClientJniContext *>(handle);
     if (!ctx || !ctx->coreClient) return -1;
@@ -586,6 +604,7 @@ Java_com_sipsdk_SipClient_nativeRegisterAccount(JNIEnv *env, jobject thiz, jlong
     cfg.tls_ca_file = (ca && ca[0]) ? ca : nullptr;
     cfg.verify_tls_cert = (verifyTlsCert == JNI_TRUE);
     cfg.media_enc = (me && me[0]) ? me : nullptr;
+    cfg.max_calls = maxCalls > 0 ? maxCalls : 4;
 
     int res = sip_client_register_account(ctx->coreClient, &cfg);
 
@@ -645,6 +664,31 @@ Java_com_sipsdk_SipClient_nativeMakeCall(JNIEnv *env, jobject thiz, jlong handle
     sip_call_t *call = sip_call_make(ctx->coreClient, target, withVideo == JNI_TRUE);
     if (uri) env->ReleaseStringUTFChars(uri, target);
 
+    return reinterpret_cast<jlong>(call);
+}
+
+JNIEXPORT jlong JNICALL
+Java_com_sipsdk_SipClient_nativeDialCall(JNIEnv *env, jobject thiz, jlong handle, jstring uri,
+                                         jboolean withVideo, jintArray outStatus) {
+    (void)thiz;
+    auto *ctx = reinterpret_cast<ClientJniContext *>(handle);
+    if (!ctx || !ctx->coreClient) {
+        if (outStatus && env->GetArrayLength(outStatus) > 0) {
+            jint v = EINVAL;
+            env->SetIntArrayRegion(outStatus, 0, 1, &v);
+        }
+        return 0;
+    }
+
+    const char *target = uri ? env->GetStringUTFChars(uri, nullptr) : "";
+    sip_call_t *call = nullptr;
+    int rc = sip_call_dial(ctx->coreClient, target, withVideo == JNI_TRUE, &call);
+    if (uri) env->ReleaseStringUTFChars(uri, target);
+
+    if (outStatus && env->GetArrayLength(outStatus) > 0) {
+        jint status = (rc == EBUSY) ? 16 : rc;
+        env->SetIntArrayRegion(outStatus, 0, 1, &status);
+    }
     return reinterpret_cast<jlong>(call);
 }
 

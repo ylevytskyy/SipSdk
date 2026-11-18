@@ -197,4 +197,160 @@ class SipCallAudioTest {
         assertTrue("Timeout waiting for call close", closedLatch.await(10, TimeUnit.SECONDS))
         client.destroy()
     }
+
+    @Test
+    fun testMultiCallAutoHoldSwapCapAndCoreTelecom() {
+        val telecom = CoreTelecomCoordinator(context)
+        val client = SipClient("1001", TestConfig.host, context).apply {
+            password = "test1001"
+            port = 5060
+            transport = "udp"
+            maxCalls = 4
+            telecomCoordinator = telecom
+        }
+
+        val regLatch = CountDownLatch(1)
+        val c1Estab = CountDownLatch(1)
+        val c1Hold = CountDownLatch(1)
+        val c2Estab = CountDownLatch(1)
+        val c2Hold = CountDownLatch(1)
+        val swapEstab = CountDownLatch(1)
+        val busyLatch = CountDownLatch(1)
+
+        var call1Id = ""
+        var call2Id = ""
+        var busyCaller = ""
+
+        client.listener = object : SipClientListener {
+            override fun onRegistrationStateChanged(state: SipRegistrationState, code: Int, reason: String) {
+                if (state == SipRegistrationState.REGISTERED && code == 200) {
+                    regLatch.countDown()
+                }
+            }
+
+            override fun onCallStateChanged(call: SipCall, state: SipCallState, code: Int, reason: String) {
+                when (call.callId) {
+                    call1Id -> when (state) {
+                        SipCallState.ESTABLISHED -> {
+                            c1Estab.countDown()
+                            if (c2Estab.count == 0L) swapEstab.countDown()
+                        }
+                        SipCallState.HOLD -> c1Hold.countDown()
+                        else -> {}
+                    }
+                    call2Id -> when (state) {
+                        SipCallState.ESTABLISHED -> c2Estab.countDown()
+                        SipCallState.HOLD -> c2Hold.countDown()
+                        else -> {}
+                    }
+                }
+            }
+
+            override fun onCallRejectedBusy(callerUri: String) {
+                busyCaller = callerUri
+                busyLatch.countDown()
+            }
+        }
+
+        assertEquals(0, client.start())
+        assertEquals(0, client.register())
+        assertTrue("Timeout waiting for registration", regLatch.await(10, TimeUnit.SECONDS))
+
+        // 1. Two concurrent calls to 9001 -> call1 auto-holds when call2 dials, then swap back.
+        val call1 = client.dial("sip:9001@${TestConfig.host}:5060", withVideo = false)
+        call1Id = call1.callId
+        assertTrue("call1 did not establish", c1Estab.await(10, TimeUnit.SECONDS))
+        assertNotNull("Telecom state should exist for call1", telecom.getCallState(call1Id))
+
+        val call2 = client.dial("sip:9001@${TestConfig.host}:5060", withVideo = false)
+        call2Id = call2.callId
+        assertTrue("call1 did not auto-hold", c1Hold.await(6, TimeUnit.SECONDS))
+        assertTrue("call2 did not establish", c2Estab.await(10, TimeUnit.SECONDS))
+        assertTrue("call1 must be on hold", call1.isOnHold)
+        assertEquals(SipTelecomCallState.HELD, telecom.getCallState(call1Id))
+        assertEquals(SipTelecomCallState.ACTIVE, telecom.getCallState(call2Id))
+
+        assertEquals(0, call1.setHold(false))
+        assertTrue("call2 did not auto-hold on swap", c2Hold.await(6, TimeUnit.SECONDS))
+        assertTrue("call1 did not resume on swap", swapEstab.await(6, TimeUnit.SECONDS))
+        assertFalse(call1.isOnHold)
+        assertTrue(call2.isOnHold)
+
+        telecom.requestEndpointChange(call1Id, SipTelecomEndpoint.SPEAKER)
+        assertEquals(SipTelecomEndpoint.SPEAKER, telecom.getEndpoint(call1Id))
+        telecom.requestEndpointChange(call1Id, SipTelecomEndpoint.EARPIECE)
+
+        call1.hangup(0, "Hangup")
+        call2.hangup(0, "Hangup")
+        Thread.sleep(400)
+
+        // 2. Re-register with maxCalls = 1 -> outgoing throws SipBusyException, 9003 callback triggers 486.
+        client.maxCalls = 1
+        assertEquals(0, client.register())
+        Thread.sleep(400)
+
+        val warmEstab = CountDownLatch(1)
+        val warmClosed = CountDownLatch(1)
+        val cbEstab = CountDownLatch(1)
+        val cbClosed = CountDownLatch(1)
+        val capEstab = CountDownLatch(1)
+        var warmId = ""
+        var cbId = ""
+        var capId = ""
+
+        client.listener = object : SipClientListener {
+            override fun onCallStateChanged(call: SipCall, state: SipCallState, code: Int, reason: String) {
+                when (call.callId) {
+                    warmId -> when (state) {
+                        SipCallState.ESTABLISHED -> warmEstab.countDown()
+                        SipCallState.CLOSED -> warmClosed.countDown()
+                        else -> {}
+                    }
+                    cbId -> when (state) {
+                        SipCallState.ESTABLISHED -> cbEstab.countDown()
+                        SipCallState.CLOSED -> cbClosed.countDown()
+                        else -> {}
+                    }
+                    capId -> if (state == SipCallState.ESTABLISHED) capEstab.countDown()
+                }
+            }
+
+            override fun onCallRejectedBusy(callerUri: String) {
+                busyCaller = callerUri
+                busyLatch.countDown()
+            }
+        }
+
+        val warm = client.dial("sip:9001@${TestConfig.host}:5060", withVideo = false)
+        warmId = warm.callId
+        assertTrue("warm call did not establish", warmEstab.await(10, TimeUnit.SECONDS))
+
+        var threwBusy = false
+        try {
+            client.dial("sip:9001@${TestConfig.host}:5060", withVideo = false)
+        } catch (_: SipBusyException) {
+            threwBusy = true
+        }
+        assertTrue("Expected SipBusyException over maxCalls=1", threwBusy)
+
+        warm.hangup(0, "Hangup")
+        assertTrue("warm call did not close", warmClosed.await(6, TimeUnit.SECONDS))
+
+        val cb = client.dial("sip:9003@${TestConfig.host}:5060", withVideo = false)
+        cbId = cb.callId
+        assertTrue("9003 callback trigger did not establish", cbEstab.await(8, TimeUnit.SECONDS))
+        cb.hangup(0, "Hangup")
+        assertTrue("9003 callback trigger did not close", cbClosed.await(6, TimeUnit.SECONDS))
+
+        val cap = client.dial("sip:9001@${TestConfig.host}:5060", withVideo = false)
+        capId = cap.callId
+        assertTrue("cap call did not establish", capEstab.await(10, TimeUnit.SECONDS))
+
+        assertTrue("Expected onCallRejectedBusy on 9003 incoming callback", busyLatch.await(10, TimeUnit.SECONDS))
+        assertTrue("Caller URI must be non-empty", busyCaller.isNotEmpty())
+        assertFalse("Existing cap call must stay active", cap.isClosed)
+
+        cap.hangup(0, "Hangup")
+        client.destroy()
+    }
 }
