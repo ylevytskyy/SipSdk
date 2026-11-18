@@ -91,14 +91,17 @@ jobs:
 
       - name: Build .NET SDK Class Library
         run: |
-          dotnet build platforms/windows/dotnet/SipSdk.sln -c Release
+          Remove-Item Env:Platform -ErrorAction SilentlyContinue
+          dotnet build platforms/windows/dotnet/SipSdk.sln -c Release -p:Platform="Any CPU"
 
       - name: Run .NET Unit Tests
         env:
           SIP_CORE_LIB_DIR: ${{ github.workspace }}\build_win\Release
         run: |
-          dotnet test platforms/windows/dotnet/tests/SipSdk.Tests/SipSdk.Tests.csproj -c Release --verbosity normal
+          Remove-Item Env:Platform -ErrorAction SilentlyContinue
+          dotnet test platforms/windows/dotnet/tests/SipSdk.Tests/SipSdk.Tests.csproj -c Release -p:Platform=AnyCPU --verbosity normal
 
       - name: Build Sample Desktop WPF Application
         run: |
-          dotnet build platforms/windows/sample/SipSdk.WpfSample/SipSdk.WpfSample.csproj -c Release
+          Remove-Item Env:Platform -ErrorAction SilentlyContinue
+          dotnet build platforms/windows/sample/SipSdk.WpfSample/SipSdk.WpfSample.csproj -c Release -p:Platform=AnyCPU
