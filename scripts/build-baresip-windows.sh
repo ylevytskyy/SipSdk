@@ -14,6 +14,11 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PREBUILT_ROOT="${1:-$ROOT_DIR/platforms/windows/prebuilt}"
 OUTPUT_DIR="$PREBUILT_ROOT/windows-x86_64"
 WORK_ROOT="${RUNNER_TEMP:-${TMPDIR:-/tmp}}/sipsdk-windows-build-$$"
+if command -v cygpath >/dev/null 2>&1; then
+  WORK_ROOT="$(cygpath -m "$WORK_ROOT")"
+  OUTPUT_DIR="$(cygpath -m "$OUTPUT_DIR")"
+  PREBUILT_ROOT="$(cygpath -m "$PREBUILT_ROOT")"
+fi
 SOURCE_DIR="$WORK_ROOT/src"
 
 die() {
@@ -52,6 +57,9 @@ fi
 
 OPENSSL_CMAKE_ARGS=()
 if [[ -n "${OPENSSL_ROOT_DIR:-}" ]]; then
+  if command -v cygpath >/dev/null 2>&1; then
+    OPENSSL_ROOT_DIR="$(cygpath -m "$OPENSSL_ROOT_DIR")"
+  fi
   OPENSSL_CMAKE_ARGS+=("-DOPENSSL_ROOT_DIR=$OPENSSL_ROOT_DIR")
 fi
 
@@ -79,11 +87,12 @@ clone_pinned_tag "https://github.com/xiph/opus.git" "v$OPUS_VERSION" "$OPUS_COMM
 # Avoid duplicate srtp.c.o archive member name between srtp and dtls_srtp static modules
 if [[ -f "$SOURCE_DIR/baresip/modules/dtls_srtp/srtp.c" ]]; then
   mv "$SOURCE_DIR/baresip/modules/dtls_srtp/srtp.c" "$SOURCE_DIR/baresip/modules/dtls_srtp/dtls_srtp_stream.c"
-  python3 -c '
+  python3 - "$SOURCE_DIR/baresip/modules/dtls_srtp/CMakeLists.txt" <<'PATCH_DTLS'
 from pathlib import Path
-p = Path("'"$SOURCE_DIR"'/baresip/modules/dtls_srtp/CMakeLists.txt")
+import sys
+p = Path(sys.argv[1])
 p.write_text(p.read_text().replace("dtls.c srtp.c", "dtls.c dtls_srtp_stream.c"))
-'
+PATCH_DTLS
 fi
 
 echo "==> Building static libopus for Windows..."
