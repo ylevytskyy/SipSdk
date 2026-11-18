@@ -13,12 +13,14 @@ SIM_SDK_PATH="$(xcrun --sdk iphonesimulator --show-sdk-path)"
 echo "==> 2. Building SwiftPM package for arm64 iOS Simulator"
 swift build \
   --triple arm64-apple-ios17.0-simulator \
+  -Xswiftc -sdk -Xswiftc "$SIM_SDK_PATH" \
   -Xcc -isysroot -Xcc "$SIM_SDK_PATH" \
   -Xcxx -isysroot -Xcxx "$SIM_SDK_PATH"
 
 echo "==> 3. Building SwiftPM package for x86_64 iOS Simulator"
 swift build \
   --triple x86_64-apple-ios17.0-simulator \
+  -Xswiftc -sdk -Xswiftc "$SIM_SDK_PATH" \
   -Xcc -isysroot -Xcc "$SIM_SDK_PATH" \
   -Xcxx -isysroot -Xcxx "$SIM_SDK_PATH"
 

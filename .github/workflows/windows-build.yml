@@ -43,6 +43,7 @@ jobs:
         run: |
           $candidates = @(
             "C:\Program Files\OpenSSL-Win64",
+            "C:\Program Files\OpenSSL",
             "C:\OpenSSL-Win64"
           )
           $found = $candidates | Where-Object { Test-Path "$_\include\openssl\ssl.h" } | Select-Object -First 1
@@ -51,6 +52,10 @@ jobs:
             $found = $candidates | Where-Object { Test-Path "$_\include\openssl\ssl.h" } | Select-Object -First 1
           }
           if (-not $found) {
+            Get-ChildItem "C:\Program Files" -Filter "*OpenSSL*" -ErrorAction SilentlyContinue | ForEach-Object {
+              Write-Host "Dir: $($_.FullName)"
+              Get-ChildItem $_.FullName -Depth 2 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName
+            }
             throw "OpenSSL headers not found on Windows runner"
           }
           Write-Host "Using OPENSSL_ROOT_DIR=$found"
