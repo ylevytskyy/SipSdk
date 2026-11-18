@@ -12,8 +12,8 @@ let baresipBinaryTarget: Target = useLocalXCFramework
     )
     : .binaryTarget(
         name: "BaresipCore",
-        url: "https://github.com/ylevytskyy/SipSdk/releases/download/baresip-core-v4.12.0/BaresipCore.xcframework.zip",
-        checksum: "822a981895ad00c1fc9a3bfe3f82838be55e292277ce70e8755857f2d71204ad"
+        url: "https://github.com/ylevytskyy/SipSdk/releases/download/baresip-core-v4.12.1/BaresipCore.xcframework.zip",
+        checksum: "00697cf808629d21aedbe11c9ba2ac0e08f4d2ebab9bbbbb9a39c9969cf8924c"
     )
 
 let package = Package(
