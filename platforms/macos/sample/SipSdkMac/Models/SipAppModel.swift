@@ -16,6 +16,10 @@ public final class SipAppModel: NSObject, ObservableObject, SipMacClientDelegate
 
     @Published public var isMuted: Bool = false
     @Published public var isOnHold: Bool = false
+    @Published public var isCallSecure: Bool = false
+    @Published public var callStatsSummary: String = ""
+    @Published public var transferStatusMessage: String?
+    @Published public var pendingTransferUri: String?
     @Published public var hasRemoteVideo: Bool = false
     @Published public var mediaWidth: Int = 0
     @Published public var mediaHeight: Int = 0
@@ -118,7 +122,10 @@ public final class SipAppModel: NSObject, ObservableObject, SipMacClientDelegate
                             outboundProxy: acc.outboundProxy.isEmpty ? nil : acc.outboundProxy,
                             stunServer: acc.stunServer.isEmpty ? nil : acc.stunServer,
                             mediaNat: acc.useIce ? "ice" : nil,
-                            regInterval: acc.regInterval)
+                            regInterval: acc.regInterval,
+                            tlsCaFile: acc.tlsCaFile.isEmpty ? nil : acc.tlsCaFile,
+                            verifyTlsCert: acc.verifyTlsCert,
+                            mediaEnc: acc.mediaEnc == "none" ? nil : acc.mediaEnc)
     }
 
     public func unregisterAccount() {
@@ -203,6 +210,22 @@ public final class SipAppModel: NSObject, ObservableObject, SipMacClientDelegate
     public func sendDtmf(_ digit: String) {
         guard let call = activeCall else { return }
         _ = call.sendDtmf(digit)
+    }
+
+    public func transferActiveCall(to destination: String) {
+        guard let call = activeCall else { return }
+        var uri = destination.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !uri.isEmpty else { return }
+        if !uri.hasPrefix("sip:") {
+            uri = "sip:\(uri)@\(accountStore.domain):\(accountStore.port)"
+        }
+        _ = call.transfer(toUri: uri)
+    }
+
+    public func respondToTransferRequest(accept: Bool) {
+        guard let call = activeCall else { return }
+        _ = call.acceptTransfer(accept)
+        pendingTransferUri = nil
     }
 
     public func refreshMediaDevices() {
@@ -370,6 +393,10 @@ public final class SipAppModel: NSObject, ObservableObject, SipMacClientDelegate
                     self.hasRemoteVideo = false
                     self.isMuted = false
                     self.isOnHold = false
+                    self.isCallSecure = false
+                    self.callStatsSummary = ""
+                    self.transferStatusMessage = nil
+                    self.pendingTransferUri = nil
                 }
                 if self.incomingCall === call {
                     self.incomingCall = nil
@@ -399,6 +426,27 @@ public final class SipAppModel: NSObject, ObservableObject, SipMacClientDelegate
 
     public func client(_ client: SipMacClient, call: SipMacCall, didReceiveDtmf digit: String) {
         // Optional DTMF audio feedback can be added here
+    }
+
+    public func client(_ client: SipMacClient, call: SipMacCall, didUpdateStatsCodec codec: String, bitrateKbps: UInt32, lossRate: Float, jitterMs: UInt32, rttMs: UInt32) {
+        DispatchQueue.main.async {
+            self.isCallSecure = call.isSecure
+            if !codec.isEmpty {
+                self.callStatsSummary = String(format: "%@ • %u kbps • loss %.1f%% • jitter %u ms", codec.uppercased(), bitrateKbps, lossRate, jitterMs)
+            }
+        }
+    }
+
+    public func client(_ client: SipMacClient, call: SipMacCall, didChangeTransferStatus code: Int, reason: String) {
+        DispatchQueue.main.async {
+            self.transferStatusMessage = "Transfer: \(code) \(reason)"
+        }
+    }
+
+    public func client(_ client: SipMacClient, call: SipMacCall, didReceiveTransferRequest referToUri: String, hasReplaces: Bool) {
+        DispatchQueue.main.async {
+            self.pendingTransferUri = referToUri
+        }
     }
 
     public func client(_ client: SipMacClient, didReceiveMessageFrom from: String, contentType: String, body: Data) {

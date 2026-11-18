@@ -412,3 +412,83 @@ test('an incoming remote message emits messageReceived; local echoes are ignored
   ua.emit('newMessage', { originator: 'local', message: {}, request });
   assert.deepEqual(received, [{ from: 'sip:1003@pbx.local', contentType: 'text/plain', body: 'hi there' }]);
 });
+
+test('getStats parses WebRTC audio and video stats and detects bitrate delta', async () => {
+  const { ua, client } = registered();
+  const call = client.makeCall('9001', { video: true });
+  const session = ua.outgoing[0];
+  session.established = true;
+  session.emit('accepted', {});
+
+  let tick = 1000;
+  session.connection = {
+    async getStats() {
+      const bytesAudio = tick === 1000 ? 10_000 : 26_000; // +16 KB in 2s = 64 kbps
+      const bytesVideo = tick === 1000 ? 50_000 : 175_000; // +125 KB in 2s = 500 kbps
+      return new Map([
+        ['c-a', { id: 'c-a', type: 'codec', mimeType: 'audio/opus' }],
+        ['c-v', { id: 'c-v', type: 'codec', mimeType: 'video/H264' }],
+        ['cp', { id: 'cp', type: 'candidate-pair', nominated: true, currentRoundTripTime: 0.025 }],
+        ['in-a', { id: 'in-a', type: 'inbound-rtp', kind: 'audio', codecId: 'c-a', packetsReceived: 98, packetsLost: 2, jitter: 0.012, bytesReceived: bytesAudio, timestamp: tick }],
+        ['rem-a', { id: 'rem-a', type: 'remote-inbound-rtp', kind: 'audio', roundTripTime: 0.018 }],
+        ['in-v', { id: 'in-v', type: 'inbound-rtp', kind: 'video', codecId: 'c-v', packetsReceived: 190, packetsLost: 10, jitter: 0.020, bytesReceived: bytesVideo, framesPerSecond: 30, timestamp: tick }],
+      ]);
+    },
+  };
+
+  assert.equal(call.isSecure, true);
+  const s1 = await call.getStats();
+  assert.equal(s1.audioCodec, 'opus');
+  assert.equal(s1.videoCodec, 'H264');
+  assert.equal(s1.audioRttMs, 18);
+  assert.equal(s1.audioJitterMs, 12);
+  assert.ok(Math.abs(s1.audioLossRate - 0.02) < 1e-6);
+  assert.equal(s1.videoFps, 30);
+
+  tick = 3000;
+  const s2 = await call.getStats();
+  assert.equal(s2.audioBitrateKbps, 64);
+  assert.equal(s2.videoBitrateKbps, 500);
+  call.hangup();
+  session.emit('ended', {});
+});
+
+test('blind transfer, attended transfer, and incoming REFER work over JsSIP refer', () => {
+  const { ua, client } = registered();
+  const call1 = client.makeCall('1001');
+  const s1 = ua.outgoing[0];
+  s1.established = true;
+  const statuses = [];
+  call1.on('transferStatus', (e) => statuses.push(e));
+
+  assert.throws(() => call1.transfer(''), /transfer target is required/);
+  call1.transfer('1003');
+  assert.equal(s1.referCalls[0][0], 'sip:1003@pbx.local');
+  s1.referCalls[0][1].eventHandlers.trying({ status_line: { status_code: 100, reason_phrase: 'Trying' } });
+  s1.referCalls[0][1].eventHandlers.accepted({ status_line: { status_code: 200, reason_phrase: 'OK' } });
+  assert.deepEqual(statuses, [
+    { code: 100, reason: 'Trying' },
+    { code: 200, reason: 'OK' },
+  ]);
+
+  const call2 = client.makeCall('1004');
+  const s2 = ua.outgoing[1];
+  s2.established = true;
+  call1.attendedTransfer(call2);
+  assert.equal(s1.referCalls[1][0], 'sip:1004@pbx.local');
+  assert.equal(s1.referCalls[1][1].replaces, s2);
+
+  const requests = [];
+  call2.on('transferRequest', (e) => requests.push(e));
+  let accepted = false;
+  let rejected = false;
+  s2.emit('refer', {
+    request: { refer_to: { uri: { toString: () => 'sip:9001@pbx.local' } } },
+    accept: () => { accepted = true; },
+    reject: () => { rejected = true; },
+  });
+  assert.deepEqual(requests, [{ target: 'sip:9001@pbx.local' }]);
+  call2.acceptTransfer(true);
+  assert.equal(accepted, true);
+  assert.equal(rejected, false);
+});

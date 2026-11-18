@@ -74,6 +74,19 @@ function bindCall(c) {
     $('dtmfReceived').textContent = digit;
     log(`DTMF received: ${digit}`);
   });
+  c.on('stats', (s) => {
+    const lock = c.isSecure ? 'SRTP/DTLS' : 'Unencrypted';
+    const codec = s.audioCodec || '—';
+    const vCodec = s.videoCodec ? ` · ${s.videoCodec} ${s.videoBitrateKbps} kbps ${s.videoFps} fps` : '';
+    $('callStats').textContent = `${lock} · ${codec} ${s.audioBitrateKbps} kbps · RTT ${s.audioRttMs} ms · Jitter ${s.audioJitterMs} ms · Loss ${(s.audioLossRate * 100).toFixed(1)}%${vCodec}`;
+  });
+  c.on('transferStatus', ({ code, reason }) => {
+    log(`Transfer status: ${code} ${reason}`);
+  });
+  c.on('transferRequest', ({ target }) => {
+    log(`Incoming transfer request to ${target} (accepting)`);
+    try { c.acceptTransfer(true); } catch (err) { log(err.message); }
+  });
 
   if (c.isOutgoing) $('incall').hidden = false;
   durationTimer = setInterval(() => {
@@ -98,6 +111,7 @@ function endCall() {
   $('btnVideo').textContent = 'Video off';
   $('btnHold').textContent = 'Hold';
   $('callDuration').textContent = '0:00';
+  $('callStats').textContent = 'Secure: SRTP/DTLS · Waiting for stats...';
 }
 
 const guard = (fn) => () => {
@@ -124,6 +138,11 @@ $('btnDecline').onclick = guard(() => call.hangup(603, 'Decline'));
 $('btnHangup').onclick = guard(() => call.hangup());
 $('btnMute').onclick = guard(() => call.setMuted(!call.isMuted));
 $('btnHold').onclick = guard(() => call.setHold(!call.isOnHold));
+$('btnTransfer').onclick = guard(() => {
+  const target = $('transferTarget').value.trim();
+  call.transfer(target);
+  log(`Blind transfer requested -> ${target}`);
+});
 $('btnVideo').onclick = guard(() => {
   const enable = !call.isLocalVideoEnabled;
   call.setLocalVideoEnabled(enable);

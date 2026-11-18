@@ -79,10 +79,51 @@
     return _handle ? sip_call_is_closed(_handle) : YES;
 }
 
+- (BOOL)isSecure
+{
+    std::lock_guard<std::mutex> lock(_mutex);
+    return _handle ? sip_call_is_secure(_handle) : NO;
+}
+
 - (uint32_t)duration
 {
     std::lock_guard<std::mutex> lock(_mutex);
     return _handle ? sip_call_get_duration(_handle) : 0;
+}
+
+- (NSString *)audioCodec
+{
+    std::lock_guard<std::mutex> lock(_mutex);
+    if (!_handle) return @"";
+    sip_call_stats_t st{};
+    if (sip_call_get_stats(_handle, &st) == 0 && st.audio_codec[0] != '\0') {
+        return [NSString stringWithUTF8String:st.audio_codec];
+    }
+    return @"";
+}
+
+- (uint32_t)audioBitrateKbps
+{
+    std::lock_guard<std::mutex> lock(_mutex);
+    if (!_handle) return 0;
+    sip_call_stats_t st{};
+    return sip_call_get_stats(_handle, &st) == 0 ? st.audio_bitrate_kbps : 0;
+}
+
+- (float)audioLossRate
+{
+    std::lock_guard<std::mutex> lock(_mutex);
+    if (!_handle) return 0.0f;
+    sip_call_stats_t st{};
+    return sip_call_get_stats(_handle, &st) == 0 ? st.audio_loss_rate : 0.0f;
+}
+
+- (uint32_t)audioJitterMs
+{
+    std::lock_guard<std::mutex> lock(_mutex);
+    if (!_handle) return 0;
+    sip_call_stats_t st{};
+    return sip_call_get_stats(_handle, &st) == 0 ? st.audio_jitter_ms : 0;
 }
 
 - (int)answerWithVideo:(BOOL)withVideo
@@ -125,6 +166,27 @@
     std::lock_guard<std::mutex> lock(_mutex);
     if (!_handle) return -1;
     return sip_call_request_keyframe(_handle);
+}
+
+- (int)transferToUri:(NSString *)targetUri
+{
+    std::lock_guard<std::mutex> lock(_mutex);
+    if (!_handle || !targetUri) return -1;
+    return sip_call_transfer(_handle, [targetUri UTF8String]);
+}
+
+- (int)attendedTransferWithCall:(SipMacCall *)consultCall
+{
+    std::lock_guard<std::mutex> lock(_mutex);
+    if (!_handle || !consultCall || ![consultCall handle]) return -1;
+    return sip_call_attended_transfer(_handle, [consultCall handle]);
+}
+
+- (int)acceptTransfer:(BOOL)accept
+{
+    std::lock_guard<std::mutex> lock(_mutex);
+    if (!_handle) return -1;
+    return sip_call_accept_transfer(_handle, accept);
 }
 
 @end

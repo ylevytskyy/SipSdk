@@ -49,6 +49,9 @@ SIP_ABI_EXPORT int sip_client_register_account(sip_client_t *client, const sip_a
     cfg.stun_pass = config->stun_pass ? config->stun_pass : "";
     cfg.media_nat = config->media_nat ? config->media_nat : "";
     cfg.reg_interval = config->reg_interval;
+    cfg.tls_ca_file = config->tls_ca_file ? config->tls_ca_file : "";
+    cfg.verify_tls_cert = config->verify_tls_cert;
+    cfg.media_enc = config->media_enc ? config->media_enc : "";
     return client->engine->register_account(cfg);
 }
 
@@ -139,6 +142,24 @@ SIP_ABI_EXPORT int sip_call_send_dtmf(sip_call_t *call, const char *digits)
     return call->send_dtmf(digits);
 }
 
+SIP_ABI_EXPORT int sip_call_transfer(sip_call_t *call, const char *target_uri)
+{
+    if (!call || !target_uri) return EINVAL;
+    return call->transfer(target_uri);
+}
+
+SIP_ABI_EXPORT int sip_call_attended_transfer(sip_call_t *call, sip_call_t *consult_call)
+{
+    if (!call || !consult_call) return EINVAL;
+    return call->attended_transfer(consult_call);
+}
+
+SIP_ABI_EXPORT int sip_call_accept_transfer(sip_call_t *call, bool accept)
+{
+    if (!call) return EINVAL;
+    return call->accept_transfer(accept);
+}
+
 SIP_ABI_EXPORT int sip_client_set_mic_muted(sip_client_t *client, bool muted)
 {
     if (!client || !client->engine) return EINVAL;
@@ -209,6 +230,18 @@ SIP_ABI_EXPORT bool sip_call_is_closed(const sip_call_t *call)
 {
     if (!call) return true;
     return call->is_closed();
+}
+
+SIP_ABI_EXPORT bool sip_call_is_secure(const sip_call_t *call)
+{
+    if (!call) return false;
+    return call->is_secure();
+}
+
+SIP_ABI_EXPORT int sip_call_get_stats(const sip_call_t *call, sip_call_stats_t *stats)
+{
+    if (!call || !stats) return EINVAL;
+    return call->get_stats(stats);
 }
 
 SIP_ABI_EXPORT uint32_t sip_call_get_duration(const sip_call_t *call)

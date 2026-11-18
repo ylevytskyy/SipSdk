@@ -133,6 +133,9 @@ export class SipCall extends Emitter {
   #remoteStream = null;
   #localStream = null;
   #wiredConnection = null;
+  #statsTimer = null;
+  #prevStats = null;
+  #pendingRefer = null;
 
   constructor(client, session, { outgoing, video }) {
     super();
@@ -153,8 +156,13 @@ export class SipCall extends Emitter {
   get isMuted() { return this.#muted; }
   get isLocalVideoEnabled() { return this.#localVideoEnabled; }
   get isClosed() { return this.#state === SipCallState.Closed; }
+  get isSecure() {
+    return !this.isClosed && Boolean(this.#session?.connection || this.#wiredConnection || this.#establishedAt);
+  }
   get localStream() { return this.#localStream; }
   get remoteStream() { return this.#remoteStream; }
+  /** @internal */
+  get _session() { return this.#session; }
 
   /** Whole seconds since the call was answered; 0 before that, frozen after close. */
   get duration() {
@@ -216,6 +224,116 @@ export class SipCall extends Emitter {
     this.#session.sendDTMF(digits, { transportType: 'INFO' });
   }
 
+  /** Blind call transfer (SIP REFER) to target extension, user@host, or sip: URI. */
+  transfer(target) {
+    this.#assertOpen();
+    if (!target) throw new Error('SipSdk: transfer target is required');
+    if (typeof this.#session.refer !== 'function') throw new Error('SipSdk: session does not support REFER');
+    const ok = this.#session.refer(toSipUri(target, this.#client._domain), {
+      eventHandlers: this.#referHandlers(),
+    });
+    if (!ok) throw new Error('SipSdk: transfer failed');
+  }
+
+  /** Attended call transfer (SIP REFER with Replaces) to an active consultation call. */
+  attendedTransfer(consultCall) {
+    this.#assertOpen();
+    if (!consultCall || consultCall === this || consultCall.isClosed) {
+      throw new Error('SipSdk: consultCall must be an open SipCall');
+    }
+    if (typeof this.#session.refer !== 'function') throw new Error('SipSdk: session does not support REFER');
+    const ok = this.#session.refer(consultCall.remoteUri || '', {
+      replaces: consultCall._session,
+      eventHandlers: this.#referHandlers(),
+    });
+    if (!ok) throw new Error('SipSdk: attended transfer failed');
+  }
+
+  /** Accepts or rejects a pending incoming REFER transfer request. */
+  acceptTransfer(accept = true) {
+    this.#assertOpen();
+    if (!this.#pendingRefer) throw new Error('SipSdk: no pending transfer request');
+    const req = this.#pendingRefer;
+    this.#pendingRefer = null;
+    if (accept) req.accept?.();
+    else req.reject?.();
+  }
+
+  /** Reads live WebRTC audio/video quality metrics via RTCPeerConnection.getStats(). */
+  async getStats() {
+    const empty = {
+      audioLossRate: 0,
+      audioJitterMs: 0,
+      audioRttMs: 0,
+      audioBitrateKbps: 0,
+      audioCodec: '',
+      videoLossRate: 0,
+      videoJitterMs: 0,
+      videoBitrateKbps: 0,
+      videoFps: 0,
+      videoCodec: '',
+    };
+    const pc = this.#session?.connection || this.#wiredConnection;
+    if (this.isClosed || typeof pc?.getStats !== 'function') return empty;
+
+    const report = await pc.getStats();
+    const entries = typeof report?.values === 'function' ? [...report.values()] : [...(report || [])];
+    const codecs = new Map();
+    for (const item of entries) {
+      if (item?.type === 'codec' && item.id) {
+        const mime = String(item.mimeType || '').replace(/^(audio|video)\//i, '');
+        codecs.set(item.id, mime);
+      }
+    }
+
+    const stats = { ...empty };
+    const nextPrev = this.#prevStats || {};
+    let candidateRttMs = 0;
+
+    for (const item of entries) {
+      if (!item) continue;
+      if (item.type === 'candidate-pair' && (item.nominated || item.state === 'succeeded') && typeof item.currentRoundTripTime === 'number') {
+        candidateRttMs = Math.round(item.currentRoundTripTime * 1000);
+      } else if (item.type === 'remote-inbound-rtp' && (item.kind === 'audio' || item.mediaType === 'audio')) {
+        if (typeof item.roundTripTime === 'number') {
+          stats.audioRttMs = Math.round(item.roundTripTime * 1000);
+        }
+      } else if (item.type === 'inbound-rtp') {
+        const kind = item.kind || item.mediaType;
+        const rx = Number(item.packetsReceived || 0);
+        const lost = Math.max(0, Number(item.packetsLost || 0));
+        const lossRate = rx + lost > 0 ? lost / (rx + lost) : 0;
+        const jitterMs = Math.round(Number(item.jitter || 0) * 1000);
+        const codec = codecs.get(item.codecId) || '';
+
+        const bytes = Number(item.bytesReceived || 0);
+        const ts = Number(item.timestamp || 0);
+        let kbps = 0;
+        const prev = nextPrev[kind];
+        if (prev && ts > prev.ts && bytes >= prev.bytes) {
+          kbps = Math.round(((bytes - prev.bytes) * 8) / (ts - prev.ts));
+        }
+        nextPrev[kind] = { bytes, ts };
+
+        if (kind === 'audio') {
+          stats.audioLossRate = lossRate;
+          stats.audioJitterMs = jitterMs;
+          stats.audioBitrateKbps = kbps;
+          if (codec) stats.audioCodec = codec;
+        } else if (kind === 'video') {
+          stats.videoLossRate = lossRate;
+          stats.videoJitterMs = jitterMs;
+          stats.videoBitrateKbps = kbps;
+          stats.videoFps = Math.round(Number(item.framesPerSecond || 0));
+          if (codec) stats.videoCodec = codec;
+        }
+      }
+    }
+    this.#prevStats = nextPrev;
+    if (!stats.audioRttMs && candidateRttMs > 0) stats.audioRttMs = candidateRttMs;
+    return stats;
+  }
+
   /**
    * Binds media elements. remoteVideo / remoteAudio get the remote stream, localVideo the
    * camera preview (muted). Elements can be bound before or after media starts.
@@ -236,13 +354,54 @@ export class SipCall extends Emitter {
   #setState(state, code = 0, reason = '') {
     if (this.#state === state || this.isClosed) return;
     this.#state = state;
-    if (state === SipCallState.Established && !this.#establishedAt) this.#establishedAt = this.#client.now();
+    if (state === SipCallState.Established && !this.#establishedAt) {
+      this.#establishedAt = this.#client.now();
+      this.#startStatsTimer();
+    }
     if (state === SipCallState.Closed) {
       this.#closedAt = this.#client.now();
+      this.#stopStatsTimer();
       this.#client._removeCall(this);
       this.#detachStreams();
     }
     this.emit('stateChanged', { state, code, reason });
+  }
+
+  #startStatsTimer() {
+    this.#stopStatsTimer();
+    this.#statsTimer = setInterval(() => {
+      if (this.isClosed) {
+        this.#stopStatsTimer();
+        return;
+      }
+      this.getStats()
+        .then((stats) => {
+          if (!this.isClosed) this.emit('stats', stats);
+        })
+        .catch(() => {});
+    }, 2000);
+    this.#statsTimer.unref?.();
+  }
+
+  #stopStatsTimer() {
+    if (this.#statsTimer) {
+      clearInterval(this.#statsTimer);
+      this.#statsTimer = null;
+    }
+  }
+
+  #referHandlers() {
+    const report = (code, reason) => this.emit('transferStatus', { code, reason });
+    return {
+      trying: (e) => report(e?.status_line?.status_code || 100, e?.status_line?.reason_phrase || 'Trying'),
+      progress: (e) => report(e?.status_line?.status_code || 180, e?.status_line?.reason_phrase || 'Ringing'),
+      accepted: (e) => report(e?.status_line?.status_code || 200, e?.status_line?.reason_phrase || 'OK'),
+      failed: (e) => report(e?.status_line?.status_code || 500, e?.status_line?.reason_phrase || 'Transfer Failed'),
+      requestFailed: (e) => report(
+        e?.response?.status_code || 500,
+        e?.response?.reason_phrase || e?.cause || 'Transfer Failed',
+      ),
+    };
   }
 
   #emitMedia() {
@@ -291,6 +450,11 @@ export class SipCall extends Emitter {
       if (e.originator !== 'remote' || !/dtmf-relay/i.test(e.info?.contentType || '')) return;
       const m = /Signal\s*=\s*([0-9A-D#*])/i.exec(e.info.body || '');
       if (m) this.emit('dtmfReceived', { digit: m[1] });
+    });
+    s.on('refer', (data) => {
+      this.#pendingRefer = data;
+      const target = data?.request?.refer_to?.uri?.toString?.() || '';
+      this.emit('transferRequest', { target });
     });
     s.on('peerconnection', (e) => this.#wireConnection(e.peerconnection));
     if (s.connection) this.#wireConnection(s.connection);
@@ -371,6 +535,8 @@ export class SipClient extends Emitter {
   get isRegistered() { return this.#registered; }
   get isStarted() { return this.#started; }
   get calls() { return [...this.#calls]; }
+  /** @internal */
+  get _domain() { return this.#domain; }
 
   start() {
     this.#started = true;

@@ -28,6 +28,9 @@ echo "==> Running macOS desktop CTest suite..."
 echo "==> Running core C ABI registration & SIP MESSAGE tests against Asterisk..."
 "$BUILD_DIR/core/sip_core_registration_test"
 
+echo "==> Running core C ABI audio calling tests against Asterisk..."
+"$BUILD_DIR/core/sip_core_audio_call_test"
+
 echo "==> Running desktop sample application..."
 "$BUILD_DIR/sample/desktop_sample" 1001 127.0.0.1 test1001
 

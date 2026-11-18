@@ -171,10 +171,10 @@ int Engine::init_on_loop_thread(const char *config_path)
             snprintf(cfg->audio.play_dev, sizeof(cfg->audio.play_dev), "%s", "nil");
         }
 #elif defined(__APPLE__)
-        if (cfg->audio.src_mod[0] == '\0') {
+        if (cfg->audio.src_mod[0] == '\0' || strcmp(cfg->audio.src_mod, "coreaudio") == 0) {
             snprintf(cfg->audio.src_mod, sizeof(cfg->audio.src_mod), "%s", "audiounit");
         }
-        if (cfg->audio.play_mod[0] == '\0') {
+        if (cfg->audio.play_mod[0] == '\0' || strcmp(cfg->audio.play_mod, "coreaudio") == 0) {
             snprintf(cfg->audio.play_mod, sizeof(cfg->audio.play_mod), "%s", "audiounit");
         }
 #if TARGET_OS_OSX || (defined(TARGET_OS_MAC) && !TARGET_OS_IPHONE)
@@ -201,6 +201,7 @@ int Engine::init_on_loop_thread(const char *config_path)
             cfg->video.bitrate = 512000;
         }
         cfg->video.enc_fmt = VID_FMT_YUV420P;
+        cfg->avt.rxmode = RECEIVE_MODE_MAIN;
     }
 
     rc = baresip_init(conf_config());
@@ -226,7 +227,7 @@ int Engine::init_on_loop_thread(const char *config_path)
         m_media_manager->register_baresip_plugins();
     }
 
-    rc = ua_init("SipSdk", true, true, false);
+    rc = ua_init("SipSdk", true, true, true);
     if (rc != 0) {
         baresip_close();
         re_thread_async_close();
@@ -244,10 +245,19 @@ int Engine::init_on_loop_thread(const char *config_path)
         (void)sip_listen(&m_message_lsnr, uag_sip(), true, sip_request_handler, this);
     }
 
-#if defined(ANDROID) || defined(__ANDROID__)
+#if defined(__APPLE__)
+    (void)module_preload("audiounit");
+#elif defined(ANDROID) || defined(__ANDROID__)
     (void)module_preload("opensles");
-    (void)module_preload("g711");
 #endif
+    (void)module_preload("g711");
+    (void)module_preload("account");
+    (void)module_preload("stun");
+    (void)module_preload("turn");
+    (void)module_preload("ice");
+    (void)module_preload("srtp");
+    (void)module_preload("dtls_srtp");
+    (void)module_preload("opus");
 
     rc = conf_modules();
     if (rc != 0) {
@@ -365,9 +375,32 @@ int Engine::register_account(const AccountConfig &config)
         }
         if (lower_transport == "tcp") {
             transport_param = ";transport=tcp";
+        } else if (lower_transport == "tls") {
+            transport_param = ";transport=tls";
         }
 
-        std::string aor = "sip:" + cfg.user + "@" + cfg.domain + ":" + std::to_string(cfg.port) + transport_param;
+        int port = cfg.port;
+        if (port <= 0) {
+            port = (lower_transport == "tls") ? 5061 : 5060;
+        }
+
+        std::string aor = "sip:" + cfg.user + "@" + cfg.domain + ":" + std::to_string(port) + transport_param;
+
+        if (lower_transport == "tls") {
+            struct tls *t = uag_tls();
+            if (t != nullptr) {
+                if (!cfg.verify_tls_cert) {
+                    tls_disable_verify_server(t);
+                }
+                if (!cfg.tls_ca_file.empty()) {
+                    int ca_rc = tls_add_ca(t, cfg.tls_ca_file.c_str());
+                    if (ca_rc != 0 && cfg.verify_tls_cert) {
+                        dispatch_reg_state(SIP_REG_STATE_FAILED, ca_rc, "Failed to load TLS CA certificate");
+                        return;
+                    }
+                }
+            }
+        }
 
         int rc = ua_alloc(&m_ua, aor.c_str());
         if (rc != 0 || m_ua == nullptr) {
@@ -386,6 +419,9 @@ int Engine::register_account(const AccountConfig &config)
             }
             if (!cfg.outbound_proxy.empty()) {
                 (void)account_set_outbound(acc, cfg.outbound_proxy.c_str(), 0);
+            } else if (lower_transport == "tls" || lower_transport == "tcp") {
+                std::string outbound = "sip:" + cfg.domain + ":" + std::to_string(port) + transport_param;
+                (void)account_set_outbound(acc, outbound.c_str(), 0);
             }
             if (!cfg.stun_server.empty()) {
                 (void)account_set_stun_uri(acc, cfg.stun_server.c_str());
@@ -402,7 +438,21 @@ int Engine::register_account(const AccountConfig &config)
             if (cfg.reg_interval > 0) {
                 (void)account_set_regint(acc, cfg.reg_interval);
             }
-            (void)account_set_video_codecs(acc, "H264");
+
+            std::string media_enc = cfg.media_enc;
+            if (media_enc.empty() && lower_transport == "tls") {
+                media_enc = "srtp-mand";
+            }
+            if (!media_enc.empty() && media_enc != "none") {
+                (void)account_set_mediaenc(acc, media_enc.c_str());
+            }
+
+            (void)account_set_video_codecs(acc, "H264/packetization-mode=1");
+            if (aucodec_find(baresip_aucodecl(), "opus", 48000, 2) != nullptr) {
+                (void)account_set_audio_codecs(acc, "opus/48000/2,G722/16000/1,PCMU/8000/1,PCMA/8000/1");
+            } else {
+                (void)account_set_audio_codecs(acc, "G722/16000/1,PCMU/8000/1,PCMA/8000/1");
+            }
         }
 
         rc = ua_register(m_ua);
@@ -564,6 +614,7 @@ void Engine::handle_ua_event(int ev, struct bevent *event)
             if (bcall) {
                 sip_call_t *sess = find_or_create_call_session(bcall, call_peeruri(bcall), false, call_has_video(bcall));
                 sess->set_established();
+                sess->start_stats_timer();
                 dispatch_call_state(sess, SIP_CALL_STATE_ESTABLISHED, 200, extract_reason("Established").c_str());
                 if (sess->has_video()) {
                     preserve_video_rx_and_display(bcall);
@@ -605,14 +656,59 @@ void Engine::handle_ua_event(int ev, struct bevent *event)
             if (bcall) {
                 sip_call_t *sess = find_call_session(bcall);
                 if (sess) {
+                    sess->stop_stats_timer();
                     uint32_t dur = call_duration(bcall);
                     sess->set_closed(dur);
                     int scode = (msg && msg->scode > 0) ? static_cast<int>(msg->scode) : static_cast<int>(call_scode(bcall));
-                    dispatch_call_state(sess, SIP_CALL_STATE_CLOSED, scode, extract_reason("Call Closed").c_str());
+                    if (text && (strstr(text, "transfer") || strstr(text, "transferred") || strstr(text, "transfered"))) {
+                        dispatch_transfer_status(sess, 200, "Call transferred");
+                        sip_call_t *consult = sess->take_consult_call();
+                        if (consult) {
+                            if (!consult->is_closed()) {
+                                consult->stop_stats_timer();
+                                struct call *cc = consult->raw_call();
+                                if (m_ua != nullptr && cc != nullptr) {
+                                    ua_hangup(m_ua, cc, 0, "Transfer completed");
+                                } else {
+                                    consult->set_closed(0);
+                                    dispatch_call_state(consult, SIP_CALL_STATE_CLOSED, 200, "Transfer completed");
+                                }
+                            }
+                            consult->release();
+                        }
+                    }
                     remove_call_session(bcall);
+                    dispatch_call_state(sess, SIP_CALL_STATE_CLOSED, scode, extract_reason("Call Closed").c_str());
                 }
             }
             release_audio_session_if_idle();
+            break;
+        }
+        case BEVENT_CALL_TRANSFER: {
+            if (bcall && text) {
+                sip_call_t *sess = find_call_session(bcall);
+                if (sess) {
+                    sess->set_pending_transfer_uri(text);
+                    bool has_replaces = (strstr(text, "Replaces=") != nullptr || strstr(text, "replaces=") != nullptr);
+                    dispatch_transfer_request(sess, text, has_replaces);
+                }
+            }
+            break;
+        }
+        case BEVENT_CALL_TRANSFER_FAILED: {
+            if (bcall) {
+                sip_call_t *sess = find_call_session(bcall);
+                if (sess) {
+                    int code = 500;
+                    if (text) {
+                        int parsed = 0;
+                        if (sscanf(text, "%d", &parsed) == 1 && parsed >= 300 && parsed < 700) {
+                            code = parsed;
+                        }
+                    }
+                    dispatch_transfer_status(sess, code, text ? text : "Transfer Failed");
+                }
+            }
             break;
         }
         case BEVENT_CALL_DTMF_START: {
@@ -779,6 +875,7 @@ int Engine::hangup_call(sip_call_t *call, int code, const char *reason)
 
     call->retain();
     post_task([this, call, scode, reason_str]() {
+        call->stop_stats_timer();
         struct call *c = call->raw_call();
         if (m_ua != nullptr && c != nullptr) {
             ua_hangup(m_ua, c, scode, reason_str.empty() ? nullptr : reason_str.c_str());
@@ -848,6 +945,99 @@ int Engine::send_dtmf(sip_call_t *call, const char *digits)
                 (void)call_send_digit(c, ch);
             }
             (void)call_send_digit(c, KEYCODE_REL);
+        }
+        call->release();
+    });
+
+    return 0;
+}
+
+int Engine::transfer_call(sip_call_t *call, const char *target_uri)
+{
+    if (!call || !target_uri || target_uri[0] == '\0') return EINVAL;
+
+    std::string uri_str = target_uri;
+    call->retain();
+    post_task([this, call, uri_str]() {
+        struct call *c = call->raw_call();
+        if (c != nullptr) {
+            int err = call_transfer(c, uri_str.c_str());
+            if (err != 0) {
+                dispatch_transfer_status(call, 500, "call_transfer failed");
+            }
+        } else {
+            dispatch_transfer_status(call, 500, "Call object invalid");
+        }
+        call->release();
+    });
+
+    return 0;
+}
+
+int Engine::attended_transfer_call(sip_call_t *call, sip_call_t *consult_call)
+{
+    if (!call || !consult_call) return EINVAL;
+
+    call->retain();
+    consult_call->retain();
+    post_task([this, call, consult_call]() {
+        struct call *c = call->raw_call();
+        struct call *sc = consult_call->raw_call();
+        if (c != nullptr && sc != nullptr) {
+            call->set_consult_call(consult_call);
+            int err = call_replace_transfer(c, sc);
+            if (err != 0) {
+                call->set_consult_call(nullptr);
+                dispatch_transfer_status(call, 500, "call_replace_transfer failed");
+            }
+        } else {
+            dispatch_transfer_status(call, 500, "Call objects invalid");
+        }
+        consult_call->release();
+        call->release();
+    });
+
+    return 0;
+}
+
+int Engine::accept_transfer(sip_call_t *call, bool accept)
+{
+    if (!call) return EINVAL;
+
+    call->retain();
+    post_task([this, call, accept]() {
+        struct call *c = call->raw_call();
+        if (c != nullptr) {
+            if (!accept) {
+                (void)call_notify_sipfrag(c, 603, "Decline");
+                call->set_pending_transfer_uri("");
+            } else {
+                std::string target = call->pending_transfer_uri();
+                if (!target.empty()) {
+                    std::string clean_uri = target;
+                    if (!clean_uri.empty() && clean_uri.front() == '<' && clean_uri.back() == '>') {
+                        clean_uri = clean_uri.substr(1, clean_uri.size() - 2);
+                    }
+                    struct call *call2 = nullptr;
+                    enum vidmode vmode = call_has_video(c) ? VIDMODE_ON : VIDMODE_OFF;
+                    int err = ua_call_alloc(&call2, m_ua, vmode, nullptr, c, call_localuri(c), true);
+                    if (err == 0 && call2 != nullptr) {
+                        struct pl pl;
+                        pl_set_str(&pl, clean_uri.c_str());
+                        err = call_connect(call2, &pl);
+                        if (err == 0) {
+                            (void)find_or_create_call_session(call2, clean_uri.c_str(), true, call_has_video(call2));
+                        } else {
+                            (void)call_notify_sipfrag(c, 500, "Connect Error");
+                            mem_deref(call2);
+                        }
+                    } else {
+                        (void)call_notify_sipfrag(c, 500, "Alloc Error");
+                    }
+                } else {
+                    (void)call_notify_sipfrag(c, 500, "No Pending URI");
+                }
+            }
         }
         call->release();
     });
@@ -1256,6 +1446,145 @@ void Engine::dispatch_dtmf_digit(sip_call_t *call, const char *digit)
     dispatch_async_f(dispatch_get_main_queue(), args, run_dtmf_digit_task);
 #else
     run_dtmf_digit_task(args);
+#endif
+}
+
+struct CallStatsTaskArgs {
+    sip_call_t *call{nullptr};
+    sip_call_stats_t stats{};
+    void (*callback)(sip_call_t *call, const sip_call_stats_t *stats, void *user_data){nullptr};
+    void *user_data{nullptr};
+};
+
+static void run_call_stats_task(void *arg)
+{
+    auto *args = static_cast<CallStatsTaskArgs *>(arg);
+    if (args && args->callback) {
+        args->callback(args->call, &args->stats, args->user_data);
+    }
+    if (args && args->call) {
+        args->call->release();
+    }
+    delete args;
+}
+
+void Engine::dispatch_call_stats(sip_call_t *call, const sip_call_stats_t *stats)
+{
+    if (!m_callbacks.on_call_stats || !stats) return;
+
+    if (call) {
+        call->retain();
+    }
+    auto *args = new CallStatsTaskArgs{
+        call,
+        *stats,
+        m_callbacks.on_call_stats,
+        m_user_data
+    };
+
+    if (m_callbacks.dispatch_to_main) {
+        m_callbacks.dispatch_to_main(run_call_stats_task, args, m_user_data);
+        return;
+    }
+
+#if defined(__APPLE__)
+    dispatch_async_f(dispatch_get_main_queue(), args, run_call_stats_task);
+#else
+    run_call_stats_task(args);
+#endif
+}
+
+struct TransferStatusTaskArgs {
+    sip_call_t *call{nullptr};
+    int code{0};
+    std::string reason;
+    void (*callback)(sip_call_t *call, int code, const char *reason, void *user_data){nullptr};
+    void *user_data{nullptr};
+};
+
+static void run_transfer_status_task(void *arg)
+{
+    auto *args = static_cast<TransferStatusTaskArgs *>(arg);
+    if (args && args->callback) {
+        args->callback(args->call, args->code, args->reason.c_str(), args->user_data);
+    }
+    if (args && args->call) {
+        args->call->release();
+    }
+    delete args;
+}
+
+void Engine::dispatch_transfer_status(sip_call_t *call, int code, const char *reason)
+{
+    if (!m_callbacks.on_transfer_status) return;
+
+    if (call) {
+        call->retain();
+    }
+    auto *args = new TransferStatusTaskArgs{
+        call,
+        code,
+        reason ? reason : "",
+        m_callbacks.on_transfer_status,
+        m_user_data
+    };
+
+    if (m_callbacks.dispatch_to_main) {
+        m_callbacks.dispatch_to_main(run_transfer_status_task, args, m_user_data);
+        return;
+    }
+
+#if defined(__APPLE__)
+    dispatch_async_f(dispatch_get_main_queue(), args, run_transfer_status_task);
+#else
+    run_transfer_status_task(args);
+#endif
+}
+
+struct TransferRequestTaskArgs {
+    sip_call_t *call{nullptr};
+    std::string refer_to_uri;
+    bool has_replaces{false};
+    void (*callback)(sip_call_t *call, const char *refer_to_uri, bool has_replaces, void *user_data){nullptr};
+    void *user_data{nullptr};
+};
+
+static void run_transfer_request_task(void *arg)
+{
+    auto *args = static_cast<TransferRequestTaskArgs *>(arg);
+    if (args && args->callback) {
+        args->callback(args->call, args->refer_to_uri.c_str(), args->has_replaces, args->user_data);
+    }
+    if (args && args->call) {
+        args->call->release();
+    }
+    delete args;
+}
+
+void Engine::dispatch_transfer_request(sip_call_t *call, const char *refer_to_uri, bool has_replaces)
+{
+    if (!m_callbacks.on_transfer_request || !refer_to_uri) return;
+
+    if (call) {
+        call->retain();
+    }
+    auto *args = new TransferRequestTaskArgs{
+        call,
+        refer_to_uri,
+        has_replaces,
+        m_callbacks.on_transfer_request,
+        m_user_data
+    };
+
+    if (m_callbacks.dispatch_to_main) {
+        m_callbacks.dispatch_to_main(run_transfer_request_task, args, m_user_data);
+        return;
+    }
+
+#if defined(__APPLE__)
+    dispatch_async_f(dispatch_get_main_queue(), args, run_transfer_request_task);
+#else
+    run_transfer_request_task(args);
 #endif
 }
 

@@ -2,6 +2,7 @@
 #include "engine.h"
 
 #include <re.h>
+#include <baresip.h>
 
 #include <atomic>
 #include <cassert>
@@ -426,6 +427,118 @@ static uint64_t send_text(sip_client_t *client, const std::string &uri, const ch
     return id;
 }
 
+static const char *resolve_ca_cert_path()
+{
+    static const char *const kPaths[] = {
+        "docker/asterisk/keys/asterisk.crt",
+        "../../docker/asterisk/keys/asterisk.crt",
+        "../docker/asterisk/keys/asterisk.crt",
+        "/workspace/docker/asterisk/keys/asterisk.crt",
+    };
+    for (const char *p : kPaths) {
+        FILE *f = std::fopen(p, "r");
+        if (f) {
+            std::fclose(f);
+            return p;
+        }
+    }
+    return "docker/asterisk/keys/asterisk.crt";
+}
+
+static int run_test_8(const sip_callbacks_t &callbacks, const char *config_dir, const char *asterisk_host)
+{
+    // Test 8: SIP over TLS (SIPS) registration against Asterisk port 5061
+    std::printf("--- Test 8: SIP over TLS registration (port 5061) ---\n");
+    {
+        // 8a: Register over TLS with valid CA certificate
+        sip_client_t *tls_client = sip_client_create(&callbacks, nullptr);
+        CHECK(tls_client != nullptr);
+        CHECK(sip_client_init(tls_client, config_dir) == 0);
+        clear_events();
+
+        sip_account_config_t cfg{};
+        cfg.user = "1004";
+        cfg.domain = asterisk_host;
+        cfg.pwd = "test1004";
+        cfg.transport = "tls";
+        cfg.port = 5061;
+        cfg.verify_tls_cert = true;
+        cfg.tls_ca_file = resolve_ca_cert_path();
+
+        CHECK(sip_client_register_account(tls_client, &cfg) == 0);
+        RegEvent ev{};
+        bool reg_ok = wait_for_state(SIP_REG_STATE_REGISTERED, 10, ev);
+        if (!reg_ok) {
+            std::printf("FAIL: TLS registration with valid CA failed (events=%zu):\n", g_reg_events.size());
+            for (const auto &e : g_reg_events) {
+                std::printf("  event: state=%d code=%d reason='%s'\n", (int)e.state, e.code, e.reason.c_str());
+            }
+            sip_client_destroy(tls_client);
+            return 36;
+        }
+        CHECK(sip_client_is_registered(tls_client));
+        std::printf("PASS: TLS registration with valid CA succeeded (code=%d reason='%s')\n", ev.code, ev.reason.c_str());
+        sip_client_destroy(tls_client);
+
+        // 8b: Register over TLS with verify_tls_cert = false (trust all)
+        sip_client_t *tls_client2 = sip_client_create(&callbacks, nullptr);
+        CHECK(tls_client2 != nullptr);
+        CHECK(sip_client_init(tls_client2, config_dir) == 0);
+        clear_events();
+
+        sip_account_config_t cfg2{};
+        cfg2.user = "1004";
+        cfg2.domain = asterisk_host;
+        cfg2.pwd = "test1004";
+        cfg2.transport = "tls";
+        cfg2.port = 5061;
+        cfg2.verify_tls_cert = false;
+        cfg2.tls_ca_file = nullptr;
+
+        CHECK(sip_client_register_account(tls_client2, &cfg2) == 0);
+        RegEvent ev2{};
+        bool reg_ok2 = wait_for_state(SIP_REG_STATE_REGISTERED, 10, ev2);
+        if (!reg_ok2) {
+            std::printf("FAIL: TLS registration with verify_tls_cert=false failed\n");
+            sip_client_destroy(tls_client2);
+            return 37;
+        }
+        std::printf("PASS: TLS registration with verify_tls_cert=false succeeded\n");
+        sip_client_destroy(tls_client2);
+
+        // 8c: Register over TLS with verify_tls_cert = true against untrusted self-signed cert (no matching CA)
+        sip_client_t *tls_client3 = sip_client_create(&callbacks, nullptr);
+        CHECK(tls_client3 != nullptr);
+        CHECK(sip_client_init(tls_client3, config_dir) == 0);
+        clear_events();
+
+        sip_account_config_t cfg3{};
+        cfg3.user = "1004";
+        cfg3.domain = asterisk_host;
+        cfg3.pwd = "test1004";
+        cfg3.transport = "tls";
+        cfg3.port = 5061;
+        cfg3.verify_tls_cert = true;
+        cfg3.tls_ca_file = nullptr;
+
+        CHECK(sip_client_register_account(tls_client3, &cfg3) == 0);
+        RegEvent ev3{};
+        bool reg_failed3 = wait_for_state(SIP_REG_STATE_FAILED, 10, ev3);
+        if (!reg_failed3 || sip_client_is_registered(tls_client3)) {
+            std::printf("FAIL: TLS registration with untrusted cert did not fail (events=%zu):\n", g_reg_events.size());
+            for (const auto &e : g_reg_events) {
+                std::printf("  event: state=%d code=%d reason='%s'\n", (int)e.state, e.code, e.reason.c_str());
+            }
+            sip_client_destroy(tls_client3);
+            return 38;
+        }
+        std::printf("PASS: TLS registration with verify_tls_cert=true rejected untrusted cert (code=%d reason='%s')\n",
+                    ev3.code, ev3.reason.c_str());
+        sip_client_destroy(tls_client3);
+    }
+    return 0;
+}
+
 int main(int argc, char *argv[])
 {
     const char *config_dir = (argc > 1) ? argv[1] : nullptr;
@@ -438,6 +551,10 @@ int main(int argc, char *argv[])
     sip_callbacks_t callbacks = {};
     callbacks.dispatch_to_main = test_dispatch_to_main;
     callbacks.on_reg_state = test_on_reg_state;
+
+    if (argc > 4 && std::string(argv[4]) == "--only-tls") {
+        return run_test_8(callbacks, config_dir, asterisk_host);
+    }
 
     // Test 1: Null safety and parameter validation
     std::printf("--- Test 1: Null safety and argument validation ---\n");
@@ -920,6 +1037,11 @@ int main(int argc, char *argv[])
         }
         close(peer_fd);
         std::printf("PASS: oversized incoming MESSAGE answered 413 and not delivered\n");
+    }
+
+    int rc8 = run_test_8(callbacks, config_dir, asterisk_host);
+    if (rc8 != 0) {
+        return rc8;
     }
 
     std::printf("ALL_REGISTRATION_TESTS_PASSED\n");

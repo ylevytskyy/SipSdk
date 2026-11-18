@@ -138,4 +138,63 @@ class SipCallAudioTest {
 
         client.destroy()
     }
+
+    @Test
+    fun testTlsSrtpOpusStatsAndTransferValidation() {
+        val client = SipClient("1004", TestConfig.host, context).apply {
+            password = "test1004"
+            port = 5061
+            transport = "tls"
+            verifyTlsCert = false
+            mediaEnc = "srtp-mand"
+        }
+
+        val regLatch = CountDownLatch(1)
+        val establishedLatch = CountDownLatch(1)
+        val statsLatch = CountDownLatch(1)
+        val closedLatch = CountDownLatch(1)
+        var observedStats: SipCallStats? = null
+
+        client.listener = object : SipClientListener {
+            override fun onRegistrationStateChanged(state: SipRegistrationState, code: Int, reason: String) {
+                if (state == SipRegistrationState.REGISTERED && code == 200) {
+                    regLatch.countDown()
+                }
+            }
+
+            override fun onCallStateChanged(call: SipCall, state: SipCallState, code: Int, reason: String) {
+                when (state) {
+                    SipCallState.ESTABLISHED -> establishedLatch.countDown()
+                    SipCallState.CLOSED -> closedLatch.countDown()
+                    else -> {}
+                }
+            }
+
+            override fun onCallStats(call: SipCall, stats: SipCallStats) {
+                observedStats = stats
+                statsLatch.countDown()
+            }
+        }
+
+        assertEquals(0, client.start())
+        assertEquals(0, client.register())
+        assertTrue("Timeout waiting for TLS registration", regLatch.await(10, TimeUnit.SECONDS))
+
+        val call = client.makeCall("sip:9001@${TestConfig.host}:5061")
+        assertNotNull(call)
+        call!!
+
+        assertTrue("Timeout waiting for TLS+SRTP call established", establishedLatch.await(10, TimeUnit.SECONDS))
+        assertTrue("TLS + SRTP call must report isSecure=true", call.isSecure)
+        assertTrue("Timeout waiting for periodic onCallStats", statsLatch.await(6, TimeUnit.SECONDS))
+
+        val liveStats = observedStats ?: call.getStats()
+        assertNotNull("Expected call stats", liveStats)
+        assertTrue("Expected opus/G722/PCM codec, got ${liveStats?.audioCodec}", liveStats?.audioCodec?.isNotEmpty() == true)
+        assertTrue("Invalid empty blind transfer must fail", call.transfer("") != 0)
+
+        assertEquals(0, call.hangup(0, "Hangup"))
+        assertTrue("Timeout waiting for call close", closedLatch.await(10, TimeUnit.SECONDS))
+        client.destroy()
+    }
 }

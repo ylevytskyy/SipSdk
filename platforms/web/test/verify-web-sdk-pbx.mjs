@@ -57,6 +57,8 @@ async function main() {
 
     await page.waitForTimeout(5000);
     expect('call is still Established after 5 s', (await callState()) === '3', await page.locator('#callState').innerText());
+    const statsText = await page.locator('#callStats').innerText();
+    expect('live WebRTC call stats populated (SRTP/DTLS + codec)', /SRTP\/DTLS/.test(statsText) && /kbps/.test(statsText), statsText);
 
     const frames = await page.evaluate(async () => {
       const v = document.getElementById('remoteVideo');

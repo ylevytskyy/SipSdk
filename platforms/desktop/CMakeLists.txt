@@ -13,6 +13,9 @@ set(CMAKE_C_VISIBILITY_PRESET hidden)
 set(CMAKE_VISIBILITY_INLINES_HIDDEN ON)
 
 add_compile_definitions(USE_UNIXSOCK=ON)
+add_compile_definitions(USE_TLS=1)
+add_compile_definitions(USE_DTLS=1)
+add_compile_definitions(USE_OPENSSL=1)
 
 # Detect host desktop slice
 if(APPLE)
@@ -102,6 +105,7 @@ if(APPLE)
             "-framework CoreMedia"
             "-framework CoreVideo"
             "-framework VideoToolbox"
+            "-framework Security"
             z
             m
     )

@@ -37,6 +37,9 @@ struct AccountConfig {
     std::string stun_pass;
     std::string media_nat;
     uint32_t reg_interval{0};
+    std::string tls_ca_file;
+    bool verify_tls_cert{true};
+    std::string media_enc;
 };
 
 class Engine {
@@ -68,6 +71,9 @@ public:
     int get_audio_driver(char *src_mod, size_t src_mod_sz, char *play_mod, size_t play_mod_sz) const;
     void destroy_call(sip_call_t *call);
     int request_keyframe(sip_call_t *call);
+    int transfer_call(sip_call_t *call, const char *target_uri);
+    int attended_transfer_call(sip_call_t *call, sip_call_t *consult_call);
+    int accept_transfer(sip_call_t *call, bool accept);
 
     int switch_camera();
     int set_camera(int position);
@@ -109,6 +115,9 @@ public:
     void dispatch_incoming_call(sip_call_t *call);
     void dispatch_call_media(sip_call_t *call, int width, int height, bool on_hold, bool is_muted);
     void dispatch_dtmf_digit(sip_call_t *call, const char *digit);
+    void dispatch_call_stats(sip_call_t *call, const sip_call_stats_t *stats);
+    void dispatch_transfer_status(sip_call_t *call, int code, const char *reason);
+    void dispatch_transfer_request(sip_call_t *call, const char *refer_to_uri, bool has_replaces);
 
     bool prepare_audio_session();
     void release_audio_session_if_idle();

@@ -2,7 +2,10 @@
 #include <android/log.h>
 #include <android/native_window_jni.h>
 #include <cerrno>
+#include <chrono>
+#include <condition_variable>
 #include <cstring>
+#include <memory>
 #include <string>
 #include <mutex>
 #include "sip_abi.h"
@@ -93,6 +96,12 @@ static bool android_capture_is_enabled(void *user_data) {
     return st ? st->enabled.load() : true;
 }
 
+struct DestroyWaiter {
+    std::mutex mutex;
+    std::condition_variable cv;
+    bool done{false};
+};
+
 struct ClientJniContext {
     jobject javaClientGlobalRef = nullptr;
     jobject mainHandlerGlobalRef = nullptr;
@@ -106,6 +115,9 @@ struct ClientJniContext {
     jmethodID onIncomingCallMethodId = nullptr;
     jmethodID onCallMediaMethodId = nullptr;
     jmethodID onDtmfDigitMethodId = nullptr;
+    jmethodID onCallStatsMethodId = nullptr;
+    jmethodID onTransferStatusMethodId = nullptr;
+    jmethodID onTransferRequestMethodId = nullptr;
     jmethodID onMessageReceivedMethodId = nullptr;
     jmethodID onMessageStatusMethodId = nullptr;
     jmethodID prepareAudioSessionMethodId = nullptr;
@@ -113,12 +125,67 @@ struct ClientJniContext {
 
     sip_client_t *coreClient = nullptr;
     AndroidCaptureState captureState;
+    std::atomic<bool> destroyed{false};
     std::mutex mutex;
+    std::shared_ptr<DestroyWaiter> destroyWaiter{std::make_shared<DestroyWaiter>()};
 };
+
+static void jni_cleanup_context_on_main(void *arg) {
+    auto *ctx = static_cast<ClientJniContext *>(arg);
+    if (!ctx) return;
+
+    auto waiter = ctx->destroyWaiter;
+    JNIEnv *env = nullptr;
+    bool attached = false;
+    if (g_jvm) {
+        if (g_jvm->GetEnv((void **)&env, JNI_VERSION_1_6) == JNI_EDETACHED) {
+            JavaVMAttachArgs args{JNI_VERSION_1_6, (char *)"SipSdkCleanup", nullptr};
+            if (g_jvm->AttachCurrentThread(&env, &args) == JNI_OK) {
+                attached = true;
+            } else {
+                env = nullptr;
+            }
+        }
+    }
+
+    if (env) {
+        if (ctx->javaClientGlobalRef) {
+            env->DeleteGlobalRef(ctx->javaClientGlobalRef);
+            ctx->javaClientGlobalRef = nullptr;
+        }
+        if (ctx->mainHandlerGlobalRef) {
+            env->DeleteGlobalRef(ctx->mainHandlerGlobalRef);
+            ctx->mainHandlerGlobalRef = nullptr;
+        }
+        if (ctx->clientClassGlobalRef) {
+            env->DeleteGlobalRef(ctx->clientClassGlobalRef);
+            ctx->clientClassGlobalRef = nullptr;
+        }
+        if (ctx->taskRunnableClassGlobalRef) {
+            env->DeleteGlobalRef(ctx->taskRunnableClassGlobalRef);
+            ctx->taskRunnableClassGlobalRef = nullptr;
+        }
+    }
+
+    if (attached && g_jvm) {
+        g_jvm->DetachCurrentThread();
+    }
+
+    delete ctx;
+
+    if (waiter) {
+        {
+            std::lock_guard<std::mutex> lock(waiter->mutex);
+            waiter->done = true;
+        }
+        waiter->cv.notify_all();
+    }
+}
 
 static void jni_dispatch_to_main(void (*task)(void *arg), void *arg, void *user_data) {
     auto *ctx = static_cast<ClientJniContext *>(user_data);
-    if (!ctx || !ctx->mainHandlerGlobalRef || !ctx->taskRunnableClassGlobalRef || !ctx->postMethodId) {
+    if (!ctx || ctx->destroyed.load()) return;
+    if (!ctx->mainHandlerGlobalRef || !ctx->taskRunnableClassGlobalRef || !ctx->postMethodId) {
         if (task) task(arg);
         return;
     }
@@ -147,7 +214,7 @@ static void jni_dispatch_to_main(void (*task)(void *arg), void *arg, void *user_
 static void jni_on_reg_state(sip_client_t *client, sip_reg_state_t state, int code, const char *reason, void *user_data) {
     (void)client;
     auto *ctx = static_cast<ClientJniContext *>(user_data);
-    if (!ctx || !ctx->javaClientGlobalRef || !ctx->onRegStateMethodId) return;
+    if (!ctx || ctx->destroyed.load() || !ctx->javaClientGlobalRef || !ctx->onRegStateMethodId) return;
 
     JniEnvGuard guard;
     if (!guard.env) return;
@@ -160,7 +227,7 @@ static void jni_on_reg_state(sip_client_t *client, sip_reg_state_t state, int co
 static void jni_on_incoming_call(sip_client_t *client, sip_call_t *call, void *user_data) {
     (void)client;
     auto *ctx = static_cast<ClientJniContext *>(user_data);
-    if (!ctx || !ctx->javaClientGlobalRef || !ctx->onIncomingCallMethodId) return;
+    if (!ctx || ctx->destroyed.load() || !ctx->javaClientGlobalRef || !ctx->onIncomingCallMethodId) return;
 
     JniEnvGuard guard;
     if (!guard.env) return;
@@ -170,7 +237,7 @@ static void jni_on_incoming_call(sip_client_t *client, sip_call_t *call, void *u
 
 static void jni_on_call_state(sip_call_t *call, sip_call_state_t state, int code, const char *reason, void *user_data) {
     auto *ctx = static_cast<ClientJniContext *>(user_data);
-    if (!ctx || !ctx->javaClientGlobalRef || !ctx->onCallStateMethodId) return;
+    if (!ctx || ctx->destroyed.load() || !ctx->javaClientGlobalRef || !ctx->onCallStateMethodId) return;
 
     JniEnvGuard guard;
     if (!guard.env) return;
@@ -182,7 +249,7 @@ static void jni_on_call_state(sip_call_t *call, sip_call_state_t state, int code
 
 static void jni_on_call_media(sip_call_t *call, int width, int height, bool on_hold, bool is_muted, void *user_data) {
     auto *ctx = static_cast<ClientJniContext *>(user_data);
-    if (!ctx || !ctx->javaClientGlobalRef || !ctx->onCallMediaMethodId) return;
+    if (!ctx || ctx->destroyed.load() || !ctx->javaClientGlobalRef || !ctx->onCallMediaMethodId) return;
 
     JniEnvGuard guard;
     if (!guard.env) return;
@@ -200,7 +267,7 @@ static void jni_on_call_media(sip_call_t *call, int width, int height, bool on_h
 
 static void jni_on_dtmf_digit(sip_call_t *call, const char *digit, void *user_data) {
     auto *ctx = static_cast<ClientJniContext *>(user_data);
-    if (!ctx || !ctx->javaClientGlobalRef || !ctx->onDtmfDigitMethodId) return;
+    if (!ctx || ctx->destroyed.load() || !ctx->javaClientGlobalRef || !ctx->onDtmfDigitMethodId) return;
 
     JniEnvGuard guard;
     if (!guard.env) return;
@@ -208,6 +275,70 @@ static void jni_on_dtmf_digit(sip_call_t *call, const char *digit, void *user_da
     jstring jDigit = guard.env->NewStringUTF(digit ? digit : "");
     guard.env->CallVoidMethod(ctx->javaClientGlobalRef, ctx->onDtmfDigitMethodId, reinterpret_cast<jlong>(call), jDigit);
     if (jDigit) guard.env->DeleteLocalRef(jDigit);
+}
+
+static void jni_on_call_stats(sip_call_t *call, const sip_call_stats_t *stats, void *user_data) {
+    auto *ctx = static_cast<ClientJniContext *>(user_data);
+    if (!ctx || ctx->destroyed.load() || !ctx->javaClientGlobalRef || !ctx->onCallStatsMethodId || !stats) return;
+
+    JniEnvGuard guard;
+    if (!guard.env) return;
+
+    jstring jAudioCodec = guard.env->NewStringUTF(stats->audio_codec);
+    jstring jVideoCodec = guard.env->NewStringUTF(stats->video_codec);
+    guard.env->CallVoidMethod(
+        ctx->javaClientGlobalRef,
+        ctx->onCallStatsMethodId,
+        reinterpret_cast<jlong>(call),
+        (jfloat)stats->audio_loss_rate,
+        (jint)stats->audio_jitter_ms,
+        (jint)stats->audio_rtt_ms,
+        (jint)stats->audio_bitrate_kbps,
+        jAudioCodec,
+        (jfloat)stats->video_loss_rate,
+        (jint)stats->video_jitter_ms,
+        (jint)stats->video_bitrate_kbps,
+        (jint)stats->video_fps,
+        jVideoCodec
+    );
+    if (jAudioCodec) guard.env->DeleteLocalRef(jAudioCodec);
+    if (jVideoCodec) guard.env->DeleteLocalRef(jVideoCodec);
+}
+
+static void jni_on_transfer_status(sip_call_t *call, int code, const char *reason, void *user_data) {
+    auto *ctx = static_cast<ClientJniContext *>(user_data);
+    if (!ctx || ctx->destroyed.load() || !ctx->javaClientGlobalRef || !ctx->onTransferStatusMethodId) return;
+
+    JniEnvGuard guard;
+    if (!guard.env) return;
+
+    jstring jReason = guard.env->NewStringUTF(reason ? reason : "");
+    guard.env->CallVoidMethod(
+        ctx->javaClientGlobalRef,
+        ctx->onTransferStatusMethodId,
+        reinterpret_cast<jlong>(call),
+        (jint)code,
+        jReason
+    );
+    if (jReason) guard.env->DeleteLocalRef(jReason);
+}
+
+static void jni_on_transfer_request(sip_call_t *call, const char *target_uri, bool has_replaces, void *user_data) {
+    (void)has_replaces;
+    auto *ctx = static_cast<ClientJniContext *>(user_data);
+    if (!ctx || ctx->destroyed.load() || !ctx->javaClientGlobalRef || !ctx->onTransferRequestMethodId) return;
+
+    JniEnvGuard guard;
+    if (!guard.env) return;
+
+    jstring jTarget = guard.env->NewStringUTF(target_uri ? target_uri : "");
+    guard.env->CallVoidMethod(
+        ctx->javaClientGlobalRef,
+        ctx->onTransferRequestMethodId,
+        reinterpret_cast<jlong>(call),
+        jTarget
+    );
+    if (jTarget) guard.env->DeleteLocalRef(jTarget);
 }
 
 // Network-supplied text goes to Kotlin as bytes: NewStringUTF aborts under CheckJNI
@@ -224,7 +355,7 @@ static void jni_on_message_received(sip_client_t *client, const char *from_uri, 
                                     const uint8_t *body, size_t body_len, void *user_data) {
     (void)client;
     auto *ctx = static_cast<ClientJniContext *>(user_data);
-    if (!ctx || !ctx->javaClientGlobalRef || !ctx->onMessageReceivedMethodId) return;
+    if (!ctx || ctx->destroyed.load() || !ctx->javaClientGlobalRef || !ctx->onMessageReceivedMethodId) return;
 
     JniEnvGuard guard;
     if (!guard.env) return;
@@ -244,7 +375,7 @@ static void jni_on_message_status(sip_client_t *client, uint64_t message_id, sip
                                   int code, const char *reason, void *user_data) {
     (void)client;
     auto *ctx = static_cast<ClientJniContext *>(user_data);
-    if (!ctx || !ctx->javaClientGlobalRef || !ctx->onMessageStatusMethodId) return;
+    if (!ctx || ctx->destroyed.load() || !ctx->javaClientGlobalRef || !ctx->onMessageStatusMethodId) return;
 
     JniEnvGuard guard;
     if (!guard.env) return;
@@ -259,7 +390,7 @@ static void jni_on_message_status(sip_client_t *client, uint64_t message_id, sip
 static bool jni_prepare_audio_session(sip_client_t *client, void *user_data) {
     (void)client;
     auto *ctx = static_cast<ClientJniContext *>(user_data);
-    if (!ctx || !ctx->javaClientGlobalRef || !ctx->prepareAudioSessionMethodId) return true;
+    if (!ctx || ctx->destroyed.load() || !ctx->javaClientGlobalRef || !ctx->prepareAudioSessionMethodId) return true;
 
     JniEnvGuard guard;
     if (!guard.env) return true;
@@ -270,7 +401,7 @@ static bool jni_prepare_audio_session(sip_client_t *client, void *user_data) {
 static void jni_release_audio_session(sip_client_t *client, void *user_data) {
     (void)client;
     auto *ctx = static_cast<ClientJniContext *>(user_data);
-    if (!ctx || !ctx->javaClientGlobalRef || !ctx->releaseAudioSessionMethodId) return;
+    if (!ctx || ctx->destroyed.load() || !ctx->javaClientGlobalRef || !ctx->releaseAudioSessionMethodId) return;
 
     JniEnvGuard guard;
     if (!guard.env) return;
@@ -324,6 +455,9 @@ Java_com_sipsdk_SipClient_nativeCreate(JNIEnv *env, jobject thiz) {
     ctx->onIncomingCallMethodId = env->GetMethodID(clientClass, "onNativeIncomingCall", "(J)V");
     ctx->onCallMediaMethodId = env->GetMethodID(clientClass, "onNativeCallMedia", "(JIIZZ)V");
     ctx->onDtmfDigitMethodId = env->GetMethodID(clientClass, "onNativeDtmfDigit", "(JLjava/lang/String;)V");
+    ctx->onCallStatsMethodId = env->GetMethodID(clientClass, "onNativeCallStats", "(JFIIILjava/lang/String;FIIILjava/lang/String;)V");
+    ctx->onTransferStatusMethodId = env->GetMethodID(clientClass, "onNativeTransferStatus", "(JILjava/lang/String;)V");
+    ctx->onTransferRequestMethodId = env->GetMethodID(clientClass, "onNativeTransferRequest", "(JLjava/lang/String;)V");
     ctx->onMessageReceivedMethodId = env->GetMethodID(clientClass, "onNativeMessageReceived", "([B[B[B)V");
     ctx->onMessageStatusMethodId = env->GetMethodID(clientClass, "onNativeMessageStatus", "(JII[B)V");
     ctx->prepareAudioSessionMethodId = env->GetMethodID(clientClass, "onNativePrepareAudioSession", "()Z");
@@ -358,6 +492,9 @@ Java_com_sipsdk_SipClient_nativeCreate(JNIEnv *env, jobject thiz) {
     callbacks.on_call_state = jni_on_call_state;
     callbacks.on_call_media = jni_on_call_media;
     callbacks.on_dtmf_digit = jni_on_dtmf_digit;
+    callbacks.on_call_stats = jni_on_call_stats;
+    callbacks.on_transfer_status = jni_on_transfer_status;
+    callbacks.on_transfer_request = jni_on_transfer_request;
     callbacks.prepare_audio_session = jni_prepare_audio_session;
     callbacks.release_audio_session = jni_release_audio_session;
 
@@ -419,6 +556,46 @@ Java_com_sipsdk_SipClient_nativeRegister(JNIEnv *env, jobject thiz, jlong handle
     if (domain) env->ReleaseStringUTFChars(domain, d);
     if (pwd) env->ReleaseStringUTFChars(pwd, p);
     if (transport) env->ReleaseStringUTFChars(transport, t);
+    return res;
+}
+
+JNIEXPORT jint JNICALL
+Java_com_sipsdk_SipClient_nativeRegisterAccount(JNIEnv *env, jobject thiz, jlong handle,
+                                               jstring user, jstring domain, jstring pwd,
+                                               jstring displayName, jstring transport, jint port,
+                                               jstring tlsCaFile, jboolean verifyTlsCert, jstring mediaEnc) {
+    (void)thiz;
+    auto *ctx = reinterpret_cast<ClientJniContext *>(handle);
+    if (!ctx || !ctx->coreClient) return -1;
+
+    const char *u = user ? env->GetStringUTFChars(user, nullptr) : "";
+    const char *d = domain ? env->GetStringUTFChars(domain, nullptr) : "";
+    const char *p = pwd ? env->GetStringUTFChars(pwd, nullptr) : "";
+    const char *dn = displayName ? env->GetStringUTFChars(displayName, nullptr) : "";
+    const char *t = transport ? env->GetStringUTFChars(transport, nullptr) : "udp";
+    const char *ca = tlsCaFile ? env->GetStringUTFChars(tlsCaFile, nullptr) : "";
+    const char *me = mediaEnc ? env->GetStringUTFChars(mediaEnc, nullptr) : "";
+
+    sip_account_config_t cfg{};
+    cfg.user = u;
+    cfg.domain = d;
+    cfg.pwd = p;
+    cfg.transport = t;
+    cfg.port = port;
+    cfg.display_name = (dn && dn[0]) ? dn : nullptr;
+    cfg.tls_ca_file = (ca && ca[0]) ? ca : nullptr;
+    cfg.verify_tls_cert = (verifyTlsCert == JNI_TRUE);
+    cfg.media_enc = (me && me[0]) ? me : nullptr;
+
+    int res = sip_client_register_account(ctx->coreClient, &cfg);
+
+    if (user) env->ReleaseStringUTFChars(user, u);
+    if (domain) env->ReleaseStringUTFChars(domain, d);
+    if (pwd) env->ReleaseStringUTFChars(pwd, p);
+    if (displayName) env->ReleaseStringUTFChars(displayName, dn);
+    if (transport) env->ReleaseStringUTFChars(transport, t);
+    if (tlsCaFile) env->ReleaseStringUTFChars(tlsCaFile, ca);
+    if (mediaEnc) env->ReleaseStringUTFChars(mediaEnc, me);
     return res;
 }
 
@@ -499,29 +676,30 @@ Java_com_sipsdk_SipClient_nativeDestroy(JNIEnv *env, jobject thiz, jlong handle)
     auto *ctx = reinterpret_cast<ClientJniContext *>(handle);
     if (!ctx) return;
 
+    ctx->destroyed.store(true);
+
     if (ctx->coreClient) {
         sip_client_destroy(ctx->coreClient);
         ctx->coreClient = nullptr;
     }
 
-    if (ctx->javaClientGlobalRef) {
-        env->DeleteGlobalRef(ctx->javaClientGlobalRef);
-        ctx->javaClientGlobalRef = nullptr;
-    }
-    if (ctx->mainHandlerGlobalRef) {
-        env->DeleteGlobalRef(ctx->mainHandlerGlobalRef);
-        ctx->mainHandlerGlobalRef = nullptr;
-    }
-    if (ctx->clientClassGlobalRef) {
-        env->DeleteGlobalRef(ctx->clientClassGlobalRef);
-        ctx->clientClassGlobalRef = nullptr;
-    }
-    if (ctx->taskRunnableClassGlobalRef) {
-        env->DeleteGlobalRef(ctx->taskRunnableClassGlobalRef);
-        ctx->taskRunnableClassGlobalRef = nullptr;
+    if (ctx->mainHandlerGlobalRef && ctx->taskRunnableClassGlobalRef && ctx->postMethodId && ctx->taskRunnableCtorId) {
+        jobject runnable = env->NewObject(
+            ctx->taskRunnableClassGlobalRef,
+            ctx->taskRunnableCtorId,
+            reinterpret_cast<jlong>(jni_cleanup_context_on_main),
+            reinterpret_cast<jlong>(ctx)
+        );
+        if (runnable) {
+            jboolean posted = env->CallBooleanMethod(ctx->mainHandlerGlobalRef, ctx->postMethodId, runnable);
+            env->DeleteLocalRef(runnable);
+            if (posted == JNI_TRUE) {
+                return;
+            }
+        }
     }
 
-    delete ctx;
+    jni_cleanup_context_on_main(ctx);
 }
 
 JNIEXPORT jstring JNICALL
@@ -657,6 +835,80 @@ Java_com_sipsdk_SipCall_nativeRequestKeyframe(JNIEnv *env, jobject thiz, jlong c
     auto *call = reinterpret_cast<sip_call_t *>(callHandle);
     if (!call) return -1;
     return sip_call_request_keyframe(call);
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_sipsdk_SipCall_nativeIsSecure(JNIEnv *env, jobject thiz, jlong callHandle) {
+    (void)env;
+    (void)thiz;
+    auto *call = reinterpret_cast<sip_call_t *>(callHandle);
+    return (call && sip_call_is_secure(call)) ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jobject JNICALL
+Java_com_sipsdk_SipCall_nativeGetStats(JNIEnv *env, jobject thiz, jlong callHandle) {
+    (void)thiz;
+    auto *call = reinterpret_cast<sip_call_t *>(callHandle);
+    if (!call) return nullptr;
+    sip_call_stats_t stats{};
+    if (sip_call_get_stats(call, &stats) != 0) return nullptr;
+
+    jclass cls = env->FindClass("com/sipsdk/SipCallStats");
+    if (!cls) return nullptr;
+    jmethodID ctor = env->GetMethodID(cls, "<init>", "(FIIILjava/lang/String;FIIILjava/lang/String;)V");
+    if (!ctor) {
+        env->DeleteLocalRef(cls);
+        return nullptr;
+    }
+    jstring jAudioCodec = env->NewStringUTF(stats.audio_codec);
+    jstring jVideoCodec = env->NewStringUTF(stats.video_codec);
+    jobject obj = env->NewObject(
+        cls, ctor,
+        (jfloat)stats.audio_loss_rate,
+        (jint)stats.audio_jitter_ms,
+        (jint)stats.audio_rtt_ms,
+        (jint)stats.audio_bitrate_kbps,
+        jAudioCodec,
+        (jfloat)stats.video_loss_rate,
+        (jint)stats.video_jitter_ms,
+        (jint)stats.video_bitrate_kbps,
+        (jint)stats.video_fps,
+        jVideoCodec
+    );
+    if (jAudioCodec) env->DeleteLocalRef(jAudioCodec);
+    if (jVideoCodec) env->DeleteLocalRef(jVideoCodec);
+    env->DeleteLocalRef(cls);
+    return obj;
+}
+
+JNIEXPORT jint JNICALL
+Java_com_sipsdk_SipCall_nativeTransfer(JNIEnv *env, jobject thiz, jlong callHandle, jstring target) {
+    (void)thiz;
+    auto *call = reinterpret_cast<sip_call_t *>(callHandle);
+    if (!call) return -1;
+    const char *t = target ? env->GetStringUTFChars(target, nullptr) : "";
+    int res = sip_call_transfer(call, t);
+    if (target) env->ReleaseStringUTFChars(target, t);
+    return res;
+}
+
+JNIEXPORT jint JNICALL
+Java_com_sipsdk_SipCall_nativeAttendedTransfer(JNIEnv *env, jobject thiz, jlong callHandle, jlong consultHandle) {
+    (void)env;
+    (void)thiz;
+    auto *call = reinterpret_cast<sip_call_t *>(callHandle);
+    auto *consult = reinterpret_cast<sip_call_t *>(consultHandle);
+    if (!call || !consult) return -1;
+    return sip_call_attended_transfer(call, consult);
+}
+
+JNIEXPORT jint JNICALL
+Java_com_sipsdk_SipCall_nativeAcceptTransfer(JNIEnv *env, jobject thiz, jlong callHandle, jboolean accept) {
+    (void)env;
+    (void)thiz;
+    auto *call = reinterpret_cast<sip_call_t *>(callHandle);
+    if (!call) return -1;
+    return sip_call_accept_transfer(call, accept == JNI_TRUE);
 }
 
 JNIEXPORT jint JNICALL

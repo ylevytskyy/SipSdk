@@ -163,4 +163,55 @@ class SipClientRegistrationTest {
         client.unregister()
         client.destroy()
     }
+
+    @Test
+    fun testTlsRegistrationRejectsInvalidCaAndSucceedsWhenUnverified() {
+        val strictClient = SipClient("1004", TestConfig.host, context).apply {
+            password = "test1004"
+            port = 5061
+            transport = "tls"
+            tlsCaFile = "/nonexistent/ca.pem"
+            verifyTlsCert = true
+            mediaEnc = "srtp-mand"
+        }
+        val failLatch = CountDownLatch(1)
+        var gotFailure = false
+        strictClient.listener = object : SipClientListener {
+            override fun onRegistrationStateChanged(state: SipRegistrationState, code: Int, reason: String) {
+                if (state == SipRegistrationState.FAILED) {
+                    gotFailure = true
+                    failLatch.countDown()
+                }
+            }
+        }
+        assertEquals(0, strictClient.start())
+        assertEquals(0, strictClient.register())
+        assertTrue("Expected TLS registration to fail on untrusted cert when verifyTlsCert=true", failLatch.await(10, TimeUnit.SECONDS))
+        assertTrue(gotFailure)
+        strictClient.destroy()
+
+        val client = SipClient("1004", TestConfig.host, context).apply {
+            password = "test1004"
+            port = 5061
+            transport = "tls"
+            verifyTlsCert = false
+            mediaEnc = "srtp-mand"
+        }
+        val regLatch = CountDownLatch(1)
+        var registered = false
+        client.listener = object : SipClientListener {
+            override fun onRegistrationStateChanged(state: SipRegistrationState, code: Int, reason: String) {
+                if (state == SipRegistrationState.REGISTERED && code == 200) {
+                    registered = true
+                    regLatch.countDown()
+                }
+            }
+        }
+        assertEquals(0, client.start())
+        assertEquals(0, client.register())
+        assertTrue("Timeout waiting for TLS registration", regLatch.await(10, TimeUnit.SECONDS))
+        assertTrue(registered)
+        client.unregister()
+        client.destroy()
+    }
 }

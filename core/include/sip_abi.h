@@ -42,6 +42,22 @@ typedef enum {
     SIP_CALL_STATE_CLOSED
 } sip_call_state_t;
 
+/**
+ * Real-time call quality telemetry metrics.
+ */
+typedef struct sip_call_stats_t {
+    char audio_codec[32];
+    uint32_t audio_bitrate_kbps;
+    float audio_loss_rate;
+    uint32_t audio_jitter_ms;
+    uint32_t audio_rtt_ms;
+    char video_codec[32];
+    uint32_t video_bitrate_kbps;
+    float video_loss_rate;
+    uint32_t video_jitter_ms;
+    uint32_t video_fps;
+} sip_call_stats_t;
+
 typedef struct sip_callbacks_t {
     /** Optional main-thread dispatcher hook for non-Apple platforms or custom event loops. */
     void (*dispatch_to_main)(void (*task)(void *arg), void *arg, void *user_data);
@@ -57,6 +73,15 @@ typedef struct sip_callbacks_t {
 
     /** Optional hook to release audio hardware session when all calls finish. */
     void (*release_audio_session)(sip_client_t *client, void *user_data);
+
+    /** Real-time call quality telemetry metrics (dispatched periodically, e.g. every 2 seconds). */
+    void (*on_call_stats)(sip_call_t *call, const sip_call_stats_t *stats, void *user_data);
+
+    /** Transfer progression status update (e.g. code 200 for success, 4xx/5xx/6xx for failure). */
+    void (*on_transfer_status)(sip_call_t *call, int code, const char *reason, void *user_data);
+
+    /** Incoming transfer request (REFER) from remote peer requiring accept/reject decision. */
+    void (*on_transfer_request)(sip_call_t *call, const char *refer_to_uri, bool has_replaces, void *user_data);
 } sip_callbacks_t;
 
 /**
@@ -88,6 +113,9 @@ typedef struct sip_account_config_t {
     const char *stun_pass;       /* optional STUN/TURN password */
     const char *media_nat;       /* optional media NAT traversal mode: "ice", "stun", "turn", or nullptr */
     uint32_t reg_interval;       /* registration expiration interval in seconds (0 for default) */
+    const char *tls_ca_file;     /* optional custom CA PEM certificate file path */
+    bool verify_tls_cert;        /* verify TLS certificate against CA, defaults to true */
+    const char *media_enc;       /* optional media encryption: "srtp-mand", "dtls_srtp", "none" */
 } sip_account_config_t;
 
 /**
@@ -195,6 +223,34 @@ SIP_ABI_EXPORT int sip_call_set_muted(sip_call_t *call, bool muted);
 SIP_ABI_EXPORT int sip_call_send_dtmf(sip_call_t *call, const char *digits);
 
 /**
+ * Initiates a blind call transfer (RFC 3515 REFER) to the specified destination URI.
+ *
+ * @param call Active call session handle to be transferred.
+ * @param target_uri Destination SIP URI (e.g. "sip:1004@127.0.0.1:5060").
+ * @return 0 if transfer request was queued, or non-zero error code.
+ */
+SIP_ABI_EXPORT int sip_call_transfer(sip_call_t *call, const char *target_uri);
+
+/**
+ * Initiates an attended call transfer (RFC 3515 REFER with Replaces header).
+ * Transfers `call` (typically on hold) to the peer of `consult_call`.
+ *
+ * @param call Primary call session to be transferred.
+ * @param consult_call Active consultation call session whose peer replaces the primary call.
+ * @return 0 if attended transfer request was queued, or non-zero error code.
+ */
+SIP_ABI_EXPORT int sip_call_attended_transfer(sip_call_t *call, sip_call_t *consult_call);
+
+/**
+ * Accepts or rejects an incoming transfer request (REFER).
+ *
+ * @param call Active call session that received on_transfer_request.
+ * @param accept True to accept and dial the transfer target; false to decline (603 Decline).
+ * @return 0 on success, or non-zero error code.
+ */
+SIP_ABI_EXPORT int sip_call_accept_transfer(sip_call_t *call, bool accept);
+
+/**
  * Sets client-wide microphone mute state.
  */
 SIP_ABI_EXPORT int sip_client_set_mic_muted(sip_client_t *client, bool muted);
@@ -243,6 +299,21 @@ SIP_ABI_EXPORT bool sip_call_is_muted(const sip_call_t *call);
  * Returns whether the call has reached the CLOSED state.
  */
 SIP_ABI_EXPORT bool sip_call_is_closed(const sip_call_t *call);
+
+/**
+ * Returns whether the active call media is encrypted (SRTP).
+ */
+SIP_ABI_EXPORT bool sip_call_is_secure(const sip_call_t *call);
+
+/**
+ * Retrieves real-time quality and diagnostic statistics for an active call.
+ * Safe to invoke from any thread.
+ *
+ * @param call Valid call session handle.
+ * @param stats Destination pointer for telemetry snapshot.
+ * @return 0 on success, or EINVAL if arguments are invalid.
+ */
+SIP_ABI_EXPORT int sip_call_get_stats(const sip_call_t *call, sip_call_stats_t *stats);
 
 /**
  * Returns the active call duration in seconds.

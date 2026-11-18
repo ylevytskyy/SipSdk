@@ -40,3 +40,5 @@ platforms/windows/prebuilt/
 
 # Local workspace runtime state and debug logs
 .workspace/
+.logs/
+docker/asterisk/keys/

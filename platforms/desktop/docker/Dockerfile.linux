@@ -10,6 +10,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libasound2-dev \
     libpulse-dev \
     libv4l-dev \
+    libssl-dev \
+    libopus-dev \
     pulseaudio \
     alsa-utils \
     iproute2 \

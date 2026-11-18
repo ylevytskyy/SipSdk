@@ -30,6 +30,9 @@ typedef NS_ENUM(NSInteger, SipMacMessageStatus) {
 - (void)client:(SipMacClient *)client call:(SipMacCall *)call didChangeState:(SipMacCallState)state code:(NSInteger)code reason:(NSString *)reason;
 - (void)client:(SipMacClient *)client call:(SipMacCall *)call didUpdateMediaWidth:(int)width height:(int)height;
 - (void)client:(SipMacClient *)client call:(SipMacCall *)call didReceiveDtmf:(NSString *)digit;
+- (void)client:(SipMacClient *)client call:(SipMacCall *)call didUpdateStatsCodec:(NSString *)codec bitrateKbps:(uint32_t)bitrateKbps lossRate:(float)lossRate jitterMs:(uint32_t)jitterMs rttMs:(uint32_t)rttMs;
+- (void)client:(SipMacClient *)client call:(SipMacCall *)call didChangeTransferStatus:(NSInteger)code reason:(NSString *)reason;
+- (void)client:(SipMacClient *)client call:(SipMacCall *)call didReceiveTransferRequest:(NSString *)referToUri hasReplaces:(BOOL)hasReplaces;
 @end
 
 @interface SipMacClient : NSObject
@@ -58,6 +61,19 @@ typedef NS_ENUM(NSInteger, SipMacMessageStatus) {
                  stunServer:(nullable NSString *)stunServer
                    mediaNat:(nullable NSString *)mediaNat
                 regInterval:(uint32_t)regInterval;
+- (int)registerWithUsername:(NSString *)user
+                     domain:(NSString *)domain
+                   password:(NSString *)password
+                  transport:(NSString *)transport
+                       port:(int)port
+                displayName:(nullable NSString *)displayName
+              outboundProxy:(nullable NSString *)outboundProxy
+                 stunServer:(nullable NSString *)stunServer
+                   mediaNat:(nullable NSString *)mediaNat
+                regInterval:(uint32_t)regInterval
+                  tlsCaFile:(nullable NSString *)tlsCaFile
+              verifyTlsCert:(BOOL)verifyTlsCert
+                   mediaEnc:(nullable NSString *)mediaEnc;
 - (int)unregisterAccount;
 - (int)resetTransports:(BOOL)reRegister;
 

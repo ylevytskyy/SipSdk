@@ -70,6 +70,7 @@ public enum SipCameraPosition: Int, Sendable, Equatable, Hashable {
 public enum SipTransport: String, Sendable, Codable, CaseIterable {
     case udp = "udp"
     case tcp = "tcp"
+    case tls = "tls"
 }
 
 /// SIP account configuration profile.
@@ -86,6 +87,9 @@ public struct SipAccount: Sendable, Codable, Hashable {
     public var stunPassword: String?
     public var mediaNat: String?
     public var regInterval: UInt32
+    public var tlsCaFile: String?
+    public var verifyTlsCert: Bool
+    public var mediaEnc: String?
 
     public init(
         username: String,
@@ -99,7 +103,10 @@ public struct SipAccount: Sendable, Codable, Hashable {
         stunUser: String? = nil,
         stunPassword: String? = nil,
         mediaNat: String? = nil,
-        regInterval: UInt32 = 0
+        regInterval: UInt32 = 0,
+        tlsCaFile: String? = nil,
+        verifyTlsCert: Bool = true,
+        mediaEnc: String? = nil
     ) {
         self.username = username
         self.domain = domain
@@ -113,12 +120,58 @@ public struct SipAccount: Sendable, Codable, Hashable {
         self.stunPassword = stunPassword
         self.mediaNat = mediaNat
         self.regInterval = regInterval
+        self.tlsCaFile = tlsCaFile
+        self.verifyTlsCert = verifyTlsCert
+        self.mediaEnc = mediaEnc
     }
 
     /// Canonical Address of Record (AOR).
     public var aor: String {
-        let tp = transport == .tcp ? ";transport=tcp" : ""
+        let tp: String
+        switch transport {
+        case .tcp: tp = ";transport=tcp"
+        case .tls: tp = ";transport=tls"
+        case .udp: tp = ""
+        }
         return "sip:\(username)@\(domain):\(port)\(tp)"
+    }
+}
+
+/// Real-time call quality telemetry metrics.
+public struct SipCallStats: Sendable, Equatable {
+    public let audioCodec: String
+    public let audioBitrateKbps: UInt32
+    public let audioLossRate: Float
+    public let audioJitterMs: UInt32
+    public let audioRttMs: UInt32
+    public let videoCodec: String
+    public let videoBitrateKbps: UInt32
+    public let videoLossRate: Float
+    public let videoJitterMs: UInt32
+    public let videoFps: UInt32
+
+    public init(
+        audioCodec: String = "",
+        audioBitrateKbps: UInt32 = 0,
+        audioLossRate: Float = 0.0,
+        audioJitterMs: UInt32 = 0,
+        audioRttMs: UInt32 = 0,
+        videoCodec: String = "",
+        videoBitrateKbps: UInt32 = 0,
+        videoLossRate: Float = 0.0,
+        videoJitterMs: UInt32 = 0,
+        videoFps: UInt32 = 0
+    ) {
+        self.audioCodec = audioCodec
+        self.audioBitrateKbps = audioBitrateKbps
+        self.audioLossRate = audioLossRate
+        self.audioJitterMs = audioJitterMs
+        self.audioRttMs = audioRttMs
+        self.videoCodec = videoCodec
+        self.videoBitrateKbps = videoBitrateKbps
+        self.videoLossRate = videoLossRate
+        self.videoJitterMs = videoJitterMs
+        self.videoFps = videoFps
     }
 }
 
@@ -165,6 +218,9 @@ public enum SipEvent: Sendable {
     case callStateChanged(SipCall, SipCallState)
     case mediaUpdated(SipCall, width: Int, height: Int, onHold: Bool, isMuted: Bool)
     case dtmfReceived(SipCall, digit: String)
+    case callStatsUpdated(SipCall, SipCallStats)
+    case transferStatusReceived(SipCall, code: Int, reason: String)
+    case transferRequested(SipCall, referToUri: String, hasReplaces: Bool)
     case messageReceived(SipIncomingMessage)
     case messageStatusChanged(id: UInt64, status: SipMessageStatus, code: Int, reason: String)
 }

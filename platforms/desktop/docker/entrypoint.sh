@@ -21,7 +21,8 @@ case "$ARCH" in
 esac
 LINUX_SLICE="linux-${ARCH}"
 
-if [[ ! -f "$ROOT_DIR/platforms/desktop/prebuilt/$LINUX_SLICE/lib/libbaresip.a" ]]; then
+if [[ ! -f "$ROOT_DIR/platforms/desktop/prebuilt/$LINUX_SLICE/lib/libbaresip.a" ]] || \
+   ! nm -g "$ROOT_DIR/platforms/desktop/prebuilt/$LINUX_SLICE/lib/libbaresip.a" 2>/dev/null | grep -q "exports_opus"; then
   echo "==> Building Baresip desktop prebuilt for Linux ($LINUX_SLICE)..."
   bash "$ROOT_DIR/scripts/build-baresip-desktop.sh" "$ROOT_DIR/platforms/desktop/prebuilt"
 fi

@@ -24,7 +24,7 @@ concurrency:
 jobs:
   build:
     name: Build BaresipCore.xcframework
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 60
 
     steps:
@@ -49,8 +49,12 @@ jobs:
           swift package dump-package
           swift package resolve
 
-      - name: Compile-check Baresip v4 adapter
-        run: bash ./scripts/check-baresip-adapter.sh "$RUNNER_TEMP/baresip-output"
+      - name: Verify SwiftPM SipSdk against built XCFramework
+        run: |
+          mkdir -p .build/baresip-xcframework
+          rm -rf .build/baresip-xcframework/BaresipCore.xcframework
+          cp -R "$RUNNER_TEMP/baresip-output/BaresipCore.xcframework" .build/baresip-xcframework/
+          bash ./scripts/verify-spm-video-sdk.sh
 
       - name: Upload XCFramework and checksum
         uses: actions/upload-artifact@v6

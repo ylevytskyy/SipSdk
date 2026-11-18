@@ -122,6 +122,12 @@ int main()
         "sip_client_is_local_preview_active",
         "sip_client_set_message_callbacks",
         "sip_client_send_message",
+        "sip_client_register_account",
+        "sip_call_is_secure",
+        "sip_call_get_stats",
+        "sip_call_transfer",
+        "sip_call_attended_transfer",
+        "sip_call_accept_transfer",
         nullptr
     };
 

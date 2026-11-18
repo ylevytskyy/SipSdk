@@ -12,6 +12,9 @@ public final class SipAccountStore: ObservableObject {
         static let stunServer = "sipsdk.mac.account.stun_server"
         static let useIce = "sipsdk.mac.account.use_ice"
         static let regInterval = "sipsdk.mac.account.reg_interval"
+        static let tlsCaFile = "sipsdk.mac.account.tls_ca_file"
+        static let verifyTlsCert = "sipsdk.mac.account.verify_tls_cert"
+        static let mediaEnc = "sipsdk.mac.account.media_enc"
     }
 
     @Published public var username: String {
@@ -44,6 +47,15 @@ public final class SipAccountStore: ObservableObject {
     @Published public var regInterval: UInt32 {
         didSet { UserDefaults.standard.set(regInterval, forKey: Keys.regInterval) }
     }
+    @Published public var tlsCaFile: String {
+        didSet { UserDefaults.standard.set(tlsCaFile, forKey: Keys.tlsCaFile) }
+    }
+    @Published public var verifyTlsCert: Bool {
+        didSet { UserDefaults.standard.set(verifyTlsCert, forKey: Keys.verifyTlsCert) }
+    }
+    @Published public var mediaEnc: String {
+        didSet { UserDefaults.standard.set(mediaEnc, forKey: Keys.mediaEnc) }
+    }
 
     public init() {
         let defaults = UserDefaults.standard
@@ -59,6 +71,13 @@ public final class SipAccountStore: ObservableObject {
         self.useIce = defaults.bool(forKey: Keys.useIce)
         let savedInterval = defaults.integer(forKey: Keys.regInterval)
         self.regInterval = savedInterval > 0 ? UInt32(savedInterval) : 3600
+        self.tlsCaFile = defaults.string(forKey: Keys.tlsCaFile) ?? ""
+        if defaults.object(forKey: Keys.verifyTlsCert) != nil {
+            self.verifyTlsCert = defaults.bool(forKey: Keys.verifyTlsCert)
+        } else {
+            self.verifyTlsCert = true
+        }
+        self.mediaEnc = defaults.string(forKey: Keys.mediaEnc) ?? "none"
     }
 
     public func resetToDefaults() {
@@ -72,5 +91,8 @@ public final class SipAccountStore: ObservableObject {
         self.stunServer = ""
         self.useIce = false
         self.regInterval = 3600
+        self.tlsCaFile = ""
+        self.verifyTlsCert = true
+        self.mediaEnc = "none"
     }
 }
