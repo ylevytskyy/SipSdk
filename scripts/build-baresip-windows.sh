@@ -133,7 +133,8 @@ BARESIP_MODULES="g711;account;stun;turn;ice;srtp;dtls_srtp;opus"
 
 if [[ "$IS_MSVC" -eq 1 ]]; then
   OPUS_LIB_FILE="$WORK_ROOT/prefix/lib/opus.lib"
-  RE_LIB_FILE="$WORK_ROOT/prefix/lib/re.lib"
+  RE_LIB_FILE="$WORK_ROOT/prefix/lib/re-static.lib"
+  [[ -f "$RE_LIB_FILE" ]] || RE_LIB_FILE="$WORK_ROOT/prefix/lib/re.lib"
   EXTRA_C_FLAGS="-DUSE_TLS=1 -DUSE_DTLS=1 /I$WORK_ROOT/prefix/include /I$WORK_ROOT/prefix/include/opus"
 else
   OPUS_LIB_FILE="$WORK_ROOT/prefix/lib/libopus.a"
@@ -167,7 +168,8 @@ cmake --build "$WORK_ROOT/baresip-build" --config Release --target baresip --par
 
 echo "==> Packaging static prebuilts..."
 if [[ "$IS_MSVC" -eq 1 ]]; then
-  BARESIP_LIB_FILE="$WORK_ROOT/baresip-build/Release/baresip.lib"
+  BARESIP_LIB_FILE="$WORK_ROOT/baresip-build/Release/libbaresip.lib"
+  [[ -f "$BARESIP_LIB_FILE" ]] || BARESIP_LIB_FILE="$WORK_ROOT/baresip-build/Release/baresip.lib"
   [[ -f "$BARESIP_LIB_FILE" ]] || BARESIP_LIB_FILE="$WORK_ROOT/baresip-build/baresip.lib"
   cp "$RE_LIB_FILE" "$OUTPUT_DIR/lib/libre.lib"
   cp "$OPUS_LIB_FILE" "$OUTPUT_DIR/lib/libopus.lib"
