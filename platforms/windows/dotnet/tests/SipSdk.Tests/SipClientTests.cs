@@ -5,6 +5,7 @@ using Xunit;
 
 namespace SipSdk.Tests
 {
+    [Collection("SipClientSequential")]
     public class SipClientTests
     {
         [Fact]
@@ -132,6 +133,47 @@ namespace SipSdk.Tests
             var json = new MessageReceivedEventArgs("sip:1002@pbx", "application/json", body);
             Assert.Null(json.Text);
             Assert.Equal(body, json.Body);
+        }
+
+        [Fact]
+        public void Client_RegisterWithInvalidTlsCa_ReportsFailedRegistration()
+        {
+            string configDir = Path.Combine(Path.GetTempPath(), "sipsdk-dotnet-tls-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(configDir);
+            File.WriteAllText(Path.Combine(configDir, "config"), "sip_listen 127.0.0.1:0\n");
+            try
+            {
+                using var client = new SipClient();
+                using var regFailed = new ManualResetEventSlim(false);
+                RegistrationStateChangedEventArgs? lastReg = null;
+                client.RegistrationStateChanged += (sender, args) =>
+                {
+                    if (args.State == SipRegistrationState.Failed)
+                    {
+                        lastReg = args;
+                        regFailed.Set();
+                    }
+                };
+
+                Assert.Equal(0, client.Start(configDir));
+                int rc = client.Register(
+                    "1004",
+                    "127.0.0.1",
+                    "test1004",
+                    "tls",
+                    5061,
+                    tlsCaFile: "/nonexistent/ca.pem",
+                    verifyTlsCert: true,
+                    mediaEnc: "srtp-mand");
+                Assert.Equal(0, rc);
+                Assert.True(regFailed.Wait(TimeSpan.FromSeconds(5)), "Expected Failed registration state for missing CA file");
+                Assert.NotNull(lastReg);
+                Assert.Equal(SipRegistrationState.Failed, lastReg!.State);
+            }
+            finally
+            {
+                Directory.Delete(configDir, true);
+            }
         }
 
         private class TrackingSyncContext : SynchronizationContext

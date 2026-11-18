@@ -640,6 +640,52 @@ struct ClientCallbacks {
             }
         });
     }
+
+    static void on_call_stats(sip_call_t *call, const sip_call_stats_t *stats, void *user_data)
+    {
+        auto *self = (__bridge SipMacClient *)user_data;
+        if (!self || !call || !stats) return;
+
+        SipMacCall *macCall = [self getOrCreateCall:call];
+        NSString *codec = stats->audio_codec[0] != '\0' ? [NSString stringWithUTF8String:stats->audio_codec] : @"";
+        uint32_t bitrate = stats->audio_bitrate_kbps;
+        float loss = stats->audio_loss_rate;
+        uint32_t jitter = stats->audio_jitter_ms;
+        uint32_t rtt = stats->audio_rtt_ms;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if ([self.delegate respondsToSelector:@selector(client:call:didUpdateStatsCodec:bitrateKbps:lossRate:jitterMs:rttMs:)]) {
+                [self.delegate client:self call:macCall didUpdateStatsCodec:codec bitrateKbps:bitrate lossRate:loss jitterMs:jitter rttMs:rtt];
+            }
+        });
+    }
+
+    static void on_transfer_status(sip_call_t *call, int code, const char *reason, void *user_data)
+    {
+        auto *self = (__bridge SipMacClient *)user_data;
+        if (!self || !call) return;
+
+        SipMacCall *macCall = [self getOrCreateCall:call];
+        NSString *rStr = reason ? [NSString stringWithUTF8String:reason] : @"";
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if ([self.delegate respondsToSelector:@selector(client:call:didChangeTransferStatus:reason:)]) {
+                [self.delegate client:self call:macCall didChangeTransferStatus:code reason:rStr];
+            }
+        });
+    }
+
+    static void on_transfer_request(sip_call_t *call, const char *refer_to_uri, bool has_replaces, void *user_data)
+    {
+        auto *self = (__bridge SipMacClient *)user_data;
+        if (!self || !call) return;
+
+        SipMacCall *macCall = [self getOrCreateCall:call];
+        NSString *uriStr = refer_to_uri ? [NSString stringWithUTF8String:refer_to_uri] : @"";
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if ([self.delegate respondsToSelector:@selector(client:call:didReceiveTransferRequest:hasReplaces:)]) {
+                [self.delegate client:self call:macCall didReceiveTransferRequest:uriStr hasReplaces:has_replaces];
+            }
+        });
+    }
 };
 
 // MARK: - CoreAudio Device Helpers
@@ -803,6 +849,9 @@ static bool set_default_audio_device_by_name(NSString *targetName, bool is_input
     cb.on_call_state = ClientCallbacks::on_call_state;
     cb.on_call_media = ClientCallbacks::on_call_media;
     cb.on_dtmf_digit = ClientCallbacks::on_dtmf_digit;
+    cb.on_call_stats = ClientCallbacks::on_call_stats;
+    cb.on_transfer_status = ClientCallbacks::on_transfer_status;
+    cb.on_transfer_request = ClientCallbacks::on_transfer_request;
 
     _client = sip_client_create(&cb, (__bridge void *)self);
     if (!_client) return -1;
@@ -908,6 +957,35 @@ static bool set_default_audio_device_by_name(NSString *targetName, bool is_input
                    mediaNat:(nullable NSString *)mediaNat
                 regInterval:(uint32_t)regInterval
 {
+    return [self registerWithUsername:user
+                               domain:domain
+                             password:password
+                            transport:transport
+                                 port:port
+                          displayName:displayName
+                        outboundProxy:outboundProxy
+                           stunServer:stunServer
+                             mediaNat:mediaNat
+                          regInterval:regInterval
+                            tlsCaFile:nil
+                        verifyTlsCert:YES
+                             mediaEnc:nil];
+}
+
+- (int)registerWithUsername:(NSString *)user
+                     domain:(NSString *)domain
+                   password:(NSString *)password
+                  transport:(NSString *)transport
+                       port:(int)port
+                displayName:(nullable NSString *)displayName
+              outboundProxy:(nullable NSString *)outboundProxy
+                 stunServer:(nullable NSString *)stunServer
+                   mediaNat:(nullable NSString *)mediaNat
+                regInterval:(uint32_t)regInterval
+                  tlsCaFile:(nullable NSString *)tlsCaFile
+              verifyTlsCert:(BOOL)verifyTlsCert
+                   mediaEnc:(nullable NSString *)mediaEnc
+{
     std::lock_guard<std::mutex> lock(_mutex);
     if (!_client) return -1;
     _username = [user copy];
@@ -927,6 +1005,9 @@ static bool set_default_audio_device_by_name(NSString *targetName, bool is_input
     cfg.stun_server = stunServer.length > 0 ? [stunServer UTF8String] : nullptr;
     cfg.media_nat = mediaNat.length > 0 ? [mediaNat UTF8String] : nullptr;
     cfg.reg_interval = regInterval;
+    cfg.tls_ca_file = tlsCaFile.length > 0 ? [tlsCaFile UTF8String] : nullptr;
+    cfg.verify_tls_cert = verifyTlsCert;
+    cfg.media_enc = mediaEnc.length > 0 ? [mediaEnc UTF8String] : nullptr;
 
     return sip_client_register_account(_client, &cfg);
 }

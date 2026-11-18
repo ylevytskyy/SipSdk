@@ -402,4 +402,106 @@ final class SipSdkTests: XCTestCase {
             }
         }
     }
+
+    @MainActor
+    func testTlsSrtpOpusTelemetryAndCallTransfer() async throws {
+        // 1. Verify SipAccount TLS & SRTP properties and AOR
+        let tlsAccount = SipAccount(
+            username: "1004",
+            domain: "127.0.0.1",
+            password: "test1004",
+            transport: .tls,
+            port: 5061,
+            tlsCaFile: "/nonexistent/ca.pem",
+            verifyTlsCert: true,
+            mediaEnc: "srtp-mand"
+        )
+        XCTAssertEqual(tlsAccount.aor, "sip:1004@127.0.0.1:5061;transport=tls")
+        XCTAssertEqual(tlsAccount.tlsCaFile, "/nonexistent/ca.pem")
+        XCTAssertTrue(tlsAccount.verifyTlsCert)
+        XCTAssertEqual(tlsAccount.mediaEnc, "srtp-mand")
+
+        // 2. Verify CallStats & Transfer error handling on unattached SipCall
+        let dummyCall = SipCall(
+            coreCall: nil,
+            remoteUri: "sip:1002@127.0.0.1",
+            isOutgoing: true
+        )
+        XCTAssertFalse(dummyCall.isSecure)
+        XCTAssertNil(dummyCall.getStats())
+        XCTAssertThrowsError(try dummyCall.transfer(to: "sip:1003@127.0.0.1"))
+        XCTAssertThrowsError(try dummyCall.attendedTransfer(with: dummyCall))
+        XCTAssertThrowsError(try dummyCall.acceptTransfer(false))
+
+        // 3. Verify TLS certificate validation failure when verifyTlsCert=true and CA file is invalid
+        let client = SipClient()
+        try await client.start()
+        try await client.register(tlsAccount)
+
+        var waitFail = 0
+        while waitFail < 20 {
+            if case .failed = client.registrationState {
+                break
+            }
+            try await Task.sleep(nanoseconds: 100_000_000)
+            waitFail += 1
+        }
+        if case .failed = client.registrationState {
+            // Expected failure for missing CA certificate when verifyTlsCert is true
+        } else {
+            XCTFail("Expected registrationState to fail with missing CA certificate, got \(client.registrationState)")
+        }
+
+        // 4. Live TLS + SRTP + Opus + Telemetry test against local Asterisk (if reachable)
+        let validTlsAccount = SipAccount(
+            username: "1004",
+            domain: "127.0.0.1",
+            password: "test1004",
+            transport: .tls,
+            port: 5061,
+            verifyTlsCert: false,
+            mediaEnc: "srtp-mand"
+        )
+        try await client.register(validTlsAccount)
+
+        var regWait = 0
+        while !client.registrationState.isRegistered && regWait < 30 {
+            try await Task.sleep(nanoseconds: 100_000_000)
+            regWait += 1
+        }
+
+        if client.registrationState.isRegistered {
+            var statsEvents: [SipCallStats] = []
+            let statsTask = Task { @MainActor in
+                for await event in client.events {
+                    if case .callStatsUpdated(_, let st) = event {
+                        statsEvents.append(st)
+                    }
+                }
+            }
+
+            let tlsCall = try await client.makeCall(to: "sip:9001@127.0.0.1:5061;transport=tls", withVideo: false)
+            var callWait = 0
+            while !tlsCall.state.isConnected && !tlsCall.state.isClosed && callWait < 40 {
+                try await Task.sleep(nanoseconds: 100_000_000)
+                callWait += 1
+            }
+
+            if tlsCall.state == .established {
+                XCTAssertTrue(tlsCall.isSecure, "TLS/SRTP call must report isSecure == true")
+                try await Task.sleep(nanoseconds: 2_500_000_000)
+                let pulled = tlsCall.getStats()
+                XCTAssertNotNil(pulled)
+                XCTAssertEqual(pulled?.audioCodec, "opus")
+                XCTAssertGreaterThan(pulled?.audioBitrateKbps ?? 0, 0)
+                XCTAssertFalse(statsEvents.isEmpty, "Expected periodic callStatsUpdated event")
+                await tlsCall.hangup()
+                try await Task.sleep(nanoseconds: 300_000_000)
+            }
+            statsTask.cancel()
+            await client.unregister()
+        }
+
+        await client.stop()
+    }
 }

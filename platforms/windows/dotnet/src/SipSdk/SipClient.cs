@@ -22,6 +22,9 @@ namespace SipSdk
         private readonly NativeCallStateCallback _callStateCallback;
         private readonly NativeCallMediaCallback _callMediaCallback;
         private readonly NativeDtmfDigitCallback _dtmfCallback;
+        private readonly NativeCallStatsCallback _callStatsCallback;
+        private readonly NativeTransferStatusCallback _transferStatusCallback;
+        private readonly NativeTransferRequestCallback _transferRequestCallback;
         private readonly NativeMessageReceivedCallback _messageReceivedCallback;
         private readonly NativeMessageStatusCallback _messageStatusCallback;
 
@@ -47,6 +50,9 @@ namespace SipSdk
             _callStateCallback = HandleNativeCallState;
             _callMediaCallback = HandleNativeCallMedia;
             _dtmfCallback = HandleNativeDtmfDigit;
+            _callStatsCallback = HandleNativeCallStats;
+            _transferStatusCallback = HandleNativeTransferStatus;
+            _transferRequestCallback = HandleNativeTransferRequest;
             _messageReceivedCallback = HandleNativeMessageReceived;
             _messageStatusCallback = HandleNativeMessageStatus;
 
@@ -59,7 +65,10 @@ namespace SipSdk
                 OnIncomingCall = Marshal.GetFunctionPointerForDelegate(_incomingCallCallback),
                 OnCallState = Marshal.GetFunctionPointerForDelegate(_callStateCallback),
                 OnCallMedia = Marshal.GetFunctionPointerForDelegate(_callMediaCallback),
-                OnDtmfDigit = Marshal.GetFunctionPointerForDelegate(_dtmfCallback)
+                OnDtmfDigit = Marshal.GetFunctionPointerForDelegate(_dtmfCallback),
+                OnCallStats = Marshal.GetFunctionPointerForDelegate(_callStatsCallback),
+                OnTransferStatus = Marshal.GetFunctionPointerForDelegate(_transferStatusCallback),
+                OnTransferRequest = Marshal.GetFunctionPointerForDelegate(_transferRequestCallback)
             };
 
             _clientHandle = SipNativeAbi.sip_client_create(ref callbacks, userData);
@@ -91,14 +100,33 @@ namespace SipSdk
             }
         }
 
-        public int Register(string username, string domain, string password, string transport = "udp", int port = 5060)
+        public int Register(
+            string username,
+            string domain,
+            string password,
+            string transport = "udp",
+            int port = 5060,
+            string? tlsCaFile = null,
+            bool verifyTlsCert = true,
+            string? mediaEnc = null)
         {
             ThrowIfDisposed();
             if (string.IsNullOrEmpty(username)) throw new ArgumentException("Username cannot be empty", nameof(username));
             if (string.IsNullOrEmpty(domain)) throw new ArgumentException("Domain cannot be empty", nameof(domain));
 
             _accountAor = $"sip:{username}@{domain}:{port}";
-            return SipNativeAbi.sip_client_register(_clientHandle, username, domain, password, transport, port);
+            var cfg = new SipNativeAbi.SipAccountConfigNative
+            {
+                User = username,
+                Domain = domain,
+                Pwd = password,
+                Transport = transport,
+                Port = port,
+                TlsCaFile = tlsCaFile,
+                VerifyTlsCert = verifyTlsCert,
+                MediaEnc = mediaEnc
+            };
+            return SipNativeAbi.sip_client_register_account(_clientHandle, ref cfg);
         }
 
         public int Unregister()
@@ -264,6 +292,60 @@ namespace SipSdk
             if (_activeCalls.TryGetValue(callHandle, out var call))
             {
                 call.HandleDtmf(digit);
+            }
+        }
+
+        private void HandleNativeCallStats(IntPtr callHandle, IntPtr statsPtr, IntPtr userData)
+        {
+            if (statsPtr == IntPtr.Zero) return;
+            if (_activeCalls.TryGetValue(callHandle, out var call))
+            {
+                var raw = Marshal.PtrToStructure<SipCallbacksStatsMarshal>(statsPtr);
+                var stats = new SipCallStats(
+                    raw.AudioCodec ?? string.Empty,
+                    raw.AudioBitrateKbps,
+                    raw.AudioLossRate,
+                    raw.AudioJitterMs,
+                    raw.AudioRttMs,
+                    raw.VideoCodec ?? string.Empty,
+                    raw.VideoBitrateKbps,
+                    raw.VideoLossRate,
+                    raw.VideoJitterMs,
+                    raw.VideoFps);
+                call.HandleStatsUpdate(stats);
+            }
+        }
+
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Ansi)]
+        private struct SipCallbacksStatsMarshal
+        {
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)]
+            public string AudioCodec;
+            public uint AudioBitrateKbps;
+            public float AudioLossRate;
+            public uint AudioJitterMs;
+            public uint AudioRttMs;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)]
+            public string VideoCodec;
+            public uint VideoBitrateKbps;
+            public float VideoLossRate;
+            public uint VideoJitterMs;
+            public uint VideoFps;
+        }
+
+        private void HandleNativeTransferStatus(IntPtr callHandle, int code, string reason, IntPtr userData)
+        {
+            if (_activeCalls.TryGetValue(callHandle, out var call))
+            {
+                call.HandleTransferStatus(code, reason);
+            }
+        }
+
+        private void HandleNativeTransferRequest(IntPtr callHandle, string referToUri, bool hasReplaces, IntPtr userData)
+        {
+            if (_activeCalls.TryGetValue(callHandle, out var call))
+            {
+                call.HandleTransferRequest(referToUri, hasReplaces);
             }
         }
 

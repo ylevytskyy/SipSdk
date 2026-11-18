@@ -78,10 +78,15 @@
     <h2>In call</h2>
     <p class="status" id="callState" data-state="">—</p>
     <p class="meta"><span id="callPeer"></span> · <span id="callDuration">0:00</span> · last DTMF received: <span id="dtmfReceived">—</span></p>
+    <p class="meta" id="callStats" style="font-family: ui-monospace, Menlo, monospace">Secure: SRTP/DTLS · Waiting for stats...</p>
     <button id="btnHangup" class="danger">Hang up</button>
     <button id="btnMute" class="secondary">Mute</button>
     <button id="btnVideo" class="secondary">Video off</button>
     <button id="btnHold" class="secondary">Hold</button>
+    <div class="row" style="margin-top:8px">
+      <div><input id="transferTarget" type="text" placeholder="Transfer target (e.g. 9001)" autocomplete="off"></div>
+      <div style="flex:0"><button id="btnTransfer" class="secondary">Transfer</button></div>
+    </div>
     <div class="video-stage">
       <video id="remoteVideo" autoplay playsinline></video>
       <video id="localVideo" autoplay muted playsinline></video>

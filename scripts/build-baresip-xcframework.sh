@@ -7,8 +7,12 @@ readonly BARESIP_VERSION="4.12.0"
 readonly BARESIP_COMMIT="9cfab81550acc4bd38d6580d79b45cc6eea65cd6"
 readonly RE_VERSION="4.12.0"
 readonly RE_COMMIT="65555dad439de9d6a81b3ee6092b9c096585249b"
+readonly OPENSSL_IOS_TAG="3.3.2000"
+readonly OPENSSL_IOS_COMMIT="8729614a93e6b20307db3c3359aed81f030facaa"
+readonly OPUS_VERSION="1.5.2"
+readonly OPUS_COMMIT="ddbe48383984d56acd9e1ab6a090c54ca6b735a6"
 readonly IOS_DEPLOYMENT_TARGET="12.1"
-readonly MODULES=(g711 audiounit account stun turn ice srtp)
+readonly MODULES=(g711 audiounit account stun turn ice srtp dtls_srtp opus)
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUTPUT_DIR="${1:-$ROOT_DIR/.build/baresip-xcframework}"
@@ -43,38 +47,25 @@ clone_pinned_tag() {
     "$url tag $tag resolved to $actual_commit, expected pinned commit $expected_commit"
 }
 
-echo "==> Fetching Baresip $BARESIP_VERSION and libre $RE_VERSION"
+echo "==> Fetching Baresip $BARESIP_VERSION, libre $RE_VERSION, OpenSSL $OPENSSL_IOS_TAG, and Opus $OPUS_VERSION"
 clone_pinned_tag \
   "https://github.com/baresip/re.git" "v$RE_VERSION" "$RE_COMMIT" "$SOURCE_DIR/re"
 clone_pinned_tag \
   "https://github.com/baresip/baresip.git" "v$BARESIP_VERSION" "$BARESIP_COMMIT" "$SOURCE_DIR/baresip"
+clone_pinned_tag \
+  "https://github.com/krzyzanowskim/OpenSSL.git" "$OPENSSL_IOS_TAG" "$OPENSSL_IOS_COMMIT" "$SOURCE_DIR/openssl-ios"
+clone_pinned_tag \
+  "https://github.com/xiph/opus.git" "v$OPUS_VERSION" "$OPUS_COMMIT" "$SOURCE_DIR/opus"
 
-# Upstream's Apple CMake branch selects the Apple AES/HMAC implementations
-# but omits tls/stub.c when OpenSSL is disabled. Baresip still references
-# tls_add_certf during UA allocation, so include the no-TLS API stubs explicitly.
-python3 - "$SOURCE_DIR/re/CMakeLists.txt" <<'PATCH_TLS_STUB'
+# Avoid duplicate srtp.c.o archive member name between srtp and dtls_srtp static modules
+if [[ -f "$SOURCE_DIR/baresip/modules/dtls_srtp/srtp.c" ]]; then
+  cp "$SOURCE_DIR/baresip/modules/dtls_srtp/srtp.c" "$SOURCE_DIR/baresip/modules/dtls_srtp/dtls_srtp_stream.c"
+  python3 -c '
 from pathlib import Path
-import sys
-
-path = Path(sys.argv[1])
-source = path.read_text()
-needle = """elseif(APPLE)
-  list(APPEND SRCS
-    src/aes/apple/aes.c
-    src/hmac/apple/hmac.c
-  )
-"""
-replacement = """elseif(APPLE)
-  list(APPEND SRCS
-    src/aes/apple/aes.c
-    src/hmac/apple/hmac.c
-    src/tls/stub.c
-  )
-"""
-if needle not in source:
-    raise SystemExit("Pinned libre CMake Apple branch changed; review TLS stub patch")
-path.write_text(source.replace(needle, replacement, 1))
-PATCH_TLS_STUB
+p = Path("'"$SOURCE_DIR"'/baresip/modules/dtls_srtp/CMakeLists.txt")
+p.write_text(p.read_text().replace("dtls.c srtp.c", "dtls.c dtls_srtp_stream.c"))
+'
+fi
 
 build_slice() {
   local sdk="$1"
@@ -82,13 +73,42 @@ build_slice() {
   local slice="$3"
   local sdk_path
   local prefix="$slice/prefix"
+  local opus_build="$slice/opus-build"
   local re_build="$slice/re-build"
   local baresip_build="$slice/baresip-build"
 
-  mkdir -p "$slice" "$prefix"
+  mkdir -p "$slice" "$prefix/lib" "$prefix/include"
   sdk_path="$(xcrun --sdk "$sdk" --show-sdk-path)"
   echo "==> Building for SDK=$sdk ARCH=$arch"
 
+  # 1. Stage static OpenSSL 3.x slice for $sdk / $arch
+  cp -R "$SOURCE_DIR/openssl-ios/$sdk/include/." "$prefix/include/"
+  for olib in libssl.a libcrypto.a; do
+    local src_lib="$SOURCE_DIR/openssl-ios/$sdk/lib/$olib"
+    if xcrun lipo -info "$src_lib" | grep -q "Non-fat file"; then
+      cp "$src_lib" "$prefix/lib/$olib"
+    else
+      xcrun lipo "$src_lib" -thin "$arch" -output "$prefix/lib/$olib"
+    fi
+  done
+
+  # 2. Build static libopus for $sdk / $arch
+  cmake -S "$SOURCE_DIR/opus" -B "$opus_build" \
+    -DCMAKE_SYSTEM_NAME=iOS \
+    -DCMAKE_OSX_SYSROOT="$sdk_path" \
+    -DCMAKE_OSX_ARCHITECTURES="$arch" \
+    -DCMAKE_OSX_DEPLOYMENT_TARGET="$IOS_DEPLOYMENT_TARGET" \
+    -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_INSTALL_PREFIX="$prefix" \
+    -DOPUS_BUILD_SHARED_LIBRARY=OFF \
+    -DOPUS_BUILD_TESTING=OFF \
+    -DOPUS_BUILD_PROGRAMS=OFF \
+    -DOPUS_ENABLE_FLOAT_API=ON
+  cmake --build "$opus_build" --target opus --parallel
+  cmake --install "$opus_build"
+
+  # 3. Build static libre with OpenSSL 3.x enabled
   cmake -S "$SOURCE_DIR/re" -B "$re_build" \
     -DCMAKE_SYSTEM_NAME=iOS \
     -DCMAKE_OSX_SYSROOT="$sdk_path" \
@@ -97,9 +117,13 @@ build_slice() {
     -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_INSTALL_PREFIX="$prefix" \
-    -DUSE_OPENSSL=OFF \
+    -DCMAKE_PREFIX_PATH="$prefix" \
+    -DUSE_OPENSSL=ON \
+    -DOPENSSL_ROOT_DIR="$prefix" \
+    -DOPENSSL_INCLUDE_DIR="$prefix/include" \
+    -DOPENSSL_CRYPTO_LIBRARY="$prefix/lib/libcrypto.a" \
+    -DOPENSSL_SSL_LIBRARY="$prefix/lib/libssl.a" \
     -DHAVE_RESOLV=OFF \
-    -DCMAKE_DISABLE_FIND_PACKAGE_OpenSSL=TRUE \
     -DUSE_UNIXSOCK=ON \
     -DUSE_TRACE=OFF \
     -DUSE_REM=ON \
@@ -112,6 +136,7 @@ build_slice() {
   cmake --build "$re_build" --target re --parallel
   cmake --install "$re_build"
 
+  # 4. Build static libbaresip with OpenSSL 3.x, srtp, dtls_srtp, and opus
   cmake -S "$SOURCE_DIR/baresip" -B "$baresip_build" \
     -DCMAKE_SYSTEM_NAME=iOS \
     -DCMAKE_OSX_SYSROOT="$sdk_path" \
@@ -120,13 +145,23 @@ build_slice() {
     -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_MACOSX_BUNDLE=OFF \
-    -DCMAKE_DISABLE_FIND_PACKAGE_OpenSSL=TRUE \
     -DCMAKE_PREFIX_PATH="$prefix" \
+    -DUSE_OPENSSL=ON \
+    -DOPENSSL_ROOT_DIR="$prefix" \
+    -DOPENSSL_INCLUDE_DIR="$prefix/include" \
+    -DOPENSSL_CRYPTO_LIBRARY="$prefix/lib/libcrypto.a" \
+    -DOPENSSL_SSL_LIBRARY="$prefix/lib/libssl.a" \
+    -DOPUS_FOUND=TRUE \
+    -DOPUS_INCLUDE_DIR="$prefix/include/opus" \
+    -DOPUS_INCLUDE_DIRS="$prefix/include/opus" \
+    -DOPUS_LIBRARY="$prefix/lib/libopus.a" \
+    -DOPUS_LIBRARIES="$prefix/lib/libopus.a" \
+    -DCMAKE_C_FLAGS="-DUSE_TLS=1 -DUSE_DTLS=1 -I$prefix/include -I$prefix/include/opus" \
     -Dre_DIR="$prefix/lib/cmake/re" \
     -DRE_INCLUDE_DIR="$prefix/include/re" \
     -DRE_LIBRARY="$prefix/lib/libre.a" \
     -DSTATIC=ON \
-    "-DMODULES=g711;audiounit;account;stun;turn;ice;srtp" \
+    "-DMODULES=g711;audiounit;account;stun;turn;ice;srtp;dtls_srtp;opus" \
     -DAPP_MODULES=
   cmake --build "$baresip_build" --target baresip --parallel
 
@@ -161,11 +196,20 @@ build_slice() {
   mkdir -p "$slice/output"
   if [[ "$has_missing_module_objects" -eq 1 ]]; then
     xcrun libtool -static -o "$slice/output/libBaresipCore.a" \
-      "$baresip_build/libbaresip.a" "$prefix/lib/libre.a" "${missing_module_objects[@]}"
+      "$baresip_build/libbaresip.a" \
+      "$prefix/lib/libre.a" \
+      "$prefix/lib/libssl.a" \
+      "$prefix/lib/libcrypto.a" \
+      "$prefix/lib/libopus.a" \
+      "${missing_module_objects[@]}"
   else
     # Bash 3.2 treats expanding an empty array under set -u as an unbound variable.
     xcrun libtool -static -o "$slice/output/libBaresipCore.a" \
-      "$baresip_build/libbaresip.a" "$prefix/lib/libre.a"
+      "$baresip_build/libbaresip.a" \
+      "$prefix/lib/libre.a" \
+      "$prefix/lib/libssl.a" \
+      "$prefix/lib/libcrypto.a" \
+      "$prefix/lib/libopus.a"
   fi
 
   xcrun lipo "$slice/output/libBaresipCore.a" -verify_arch "$arch"
@@ -230,6 +274,9 @@ KEEP_SYMBOL(ua_answer);
 KEEP_SYMBOL(ua_hold_answer);
 KEEP_SYMBOL(bevent_register);
 KEEP_SYMBOL(bevent_unregister);
+KEEP_SYMBOL(tls_alloc);
+KEEP_SYMBOL(tls_add_ca);
+KEEP_SYMBOL(srtp_alloc);
 
 int main(void)
 {
@@ -256,6 +303,7 @@ link_smoke() {
     -framework AudioToolbox \
     -framework SystemConfiguration \
     -framework CoreFoundation \
+    -framework Security \
     -lz -lm \
     -o "$BUILD_DIR/link-smoke-$label"
 }
@@ -276,13 +324,14 @@ Baresip version: $BARESIP_VERSION
 Baresip commit: $BARESIP_COMMIT
 libre version: $RE_VERSION
 libre commit: $RE_COMMIT
+OpenSSL iOS tag: $OPENSSL_IOS_TAG ($OPENSSL_IOS_COMMIT)
+Opus version: $OPUS_VERSION ($OPUS_COMMIT)
 iOS deployment target: $IOS_DEPLOYMENT_TARGET
 Baresip modules: ${MODULES[*]}
 Device architectures: arm64
 Simulator architectures: arm64, x86_64
-libre iOS compatibility: adds src/tls/stub.c when OpenSSL is disabled and disables legacy HAVE_RESOLV symbols.
 Licenses: BSD-style upstream license texts included in the ZIP.
-TLS: disabled (USE_OPENSSL=OFF); SIP UDP/TCP is available, SIP TLS needs a separate Apple-compatible TLS decision.
+TLS: enabled (USE_OPENSSL=ON with static OpenSSL 3.x, SRTP, DTLS-SRTP, and libopus).
 METADATA
 
 mkdir -p "$BUILD_DIR/distribution"
@@ -297,6 +346,14 @@ cp "$OUTPUT_DIR/LICENSE-Baresip.txt" "$OUTPUT_DIR/LICENSE-libRE.txt" "$BUILD_DIR
   cd "$OUTPUT_DIR"
   shasum -a 256 BaresipCore.xcframework.zip > BaresipCore.xcframework.zip.sha256
 )
+
+# Sync into local SwiftPM artifact cache if present so local builds immediately pick up the rebuilt XCFramework
+for art_dir in "$ROOT_DIR/.build/artifacts/sipsdk/BaresipCore" "$ROOT_DIR/.build/artifacts/sipsdk-answer-fix/BaresipCore"; do
+  if [[ -d "$art_dir" ]]; then
+    rm -rf "$art_dir/BaresipCore.xcframework"
+    cp -R "$OUTPUT_DIR/BaresipCore.xcframework" "$art_dir/BaresipCore.xcframework"
+  fi
+done
 
 echo "==> Produced:"
 echo "    $OUTPUT_DIR/BaresipCore.xcframework"

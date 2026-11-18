@@ -107,4 +107,44 @@ class SipSdkUnitTest {
             org.junit.Assert.fail("Expected IllegalStateException when not started")
         } catch (_: IllegalStateException) {}
     }
+
+    @Test
+    fun testTlsSrtpDefaultsAndCallStatsModel() {
+        val client = SipClient("1004", "10.0.2.2")
+        assertTrue(client.verifyTlsCert)
+        assertEquals(null, client.tlsCaFile)
+        assertEquals("", client.mediaEnc)
+
+        client.transport = "tls"
+        client.port = 5061
+        client.verifyTlsCert = false
+        client.mediaEnc = "srtp-mand"
+        assertEquals("tls", client.transport)
+        assertEquals(5061, client.port)
+        assertFalse(client.verifyTlsCert)
+        assertEquals("srtp-mand", client.mediaEnc)
+
+        val stats = SipCallStats(
+            audioLossRate = 0.01f,
+            audioJitterMs = 5,
+            audioRttMs = 22,
+            audioBitrateKbps = 48,
+            audioCodec = "opus",
+            videoLossRate = 0f,
+            videoJitterMs = 8,
+            videoBitrateKbps = 450,
+            videoFps = 30,
+            videoCodec = "H264"
+        )
+        assertEquals("opus", stats.audioCodec)
+        assertEquals(48, stats.audioBitrateKbps)
+        assertEquals("H264", stats.videoCodec)
+
+        val call = SipCall(nativeHandle = 0L, callId = "id", remoteUri = "sip:9001@10.0.2.2")
+        assertFalse(call.isSecure)
+        assertEquals(null, call.getStats())
+        assertEquals(-1, call.transfer("1002"))
+        assertEquals(-1, call.attendedTransfer(call))
+        assertEquals(-1, call.acceptTransfer(true))
+    }
 }

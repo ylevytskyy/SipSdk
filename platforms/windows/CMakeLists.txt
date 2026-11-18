@@ -17,6 +17,9 @@ if(WIN32 OR MINGW)
         WIN32=1
         _WIN32=1
         USE_UNIXSOCK=ON
+        USE_TLS=1
+        USE_DTLS=1
+        USE_OPENSSL=1
         NOMINMAX=1
         WIN32_LEAN_AND_MEAN=1
         _WIN32_WINNT=0x0601
@@ -24,10 +27,17 @@ if(WIN32 OR MINGW)
 else()
     add_compile_definitions(
         USE_UNIXSOCK=ON
+        USE_TLS=1
+        USE_DTLS=1
+        USE_OPENSSL=1
     )
 endif()
 
-set(PREBUILT_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../desktop/prebuilt/include")
+if(WIN32 OR MINGW)
+    set(PREBUILT_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/prebuilt/include")
+else()
+    set(PREBUILT_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../desktop/prebuilt/include")
+endif()
 set(BARESIP_INCLUDE_DIR "${PREBUILT_INCLUDE_DIR};${PREBUILT_INCLUDE_DIR}/re;${PREBUILT_INCLUDE_DIR}/baresip" CACHE PATH "Path to Baresip headers" FORCE)
 
 # Set up core library paths
@@ -40,7 +50,15 @@ set(BARESIP_LIB "")
 set(RE_LIB "")
 
 if(WIN32 OR MINGW)
-    if(NOT EXISTS "${WIN_PREBUILT_DIR}/lib/libbaresip.a" OR NOT EXISTS "${WIN_PREBUILT_DIR}/lib/libre.a")
+    if(MSVC)
+        set(_BARESIP_PREBUILT "${WIN_PREBUILT_DIR}/lib/libbaresip.lib")
+        set(_RE_PREBUILT "${WIN_PREBUILT_DIR}/lib/libre.lib")
+    else()
+        set(_BARESIP_PREBUILT "${WIN_PREBUILT_DIR}/lib/libbaresip.a")
+        set(_RE_PREBUILT "${WIN_PREBUILT_DIR}/lib/libre.a")
+    endif()
+
+    if(NOT EXISTS "${_BARESIP_PREBUILT}" OR NOT EXISTS "${_RE_PREBUILT}")
         message(STATUS "Windows prebuilts not found, executing build-baresip-windows.sh...")
         execute_process(
             COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/../../scripts/build-baresip-windows.sh" "${CMAKE_CURRENT_SOURCE_DIR}/prebuilt"
@@ -48,10 +66,12 @@ if(WIN32 OR MINGW)
         )
     endif()
 
-    if(EXISTS "${WIN_PREBUILT_DIR}/lib/libbaresip.a")
-        set(BARESIP_LIB "${WIN_PREBUILT_DIR}/lib/libbaresip.a")
-        set(RE_LIB "${WIN_PREBUILT_DIR}/lib/libre.a")
+    if(EXISTS "${_BARESIP_PREBUILT}")
+        set(BARESIP_LIB "${_BARESIP_PREBUILT}")
+        set(RE_LIB "${_RE_PREBUILT}")
     endif()
+
+    find_package(OpenSSL REQUIRED)
 endif()
 
 # Build sip_core shared library (libsipcore.dll)
@@ -90,8 +110,12 @@ if(WIN32 OR MINGW)
         PRIVATE
             ${BARESIP_LIB}
             ${RE_LIB}
+            OpenSSL::SSL
+            OpenSSL::Crypto
             ws2_32
             iphlpapi
+            crypt32
+            bcrypt
             mfplat
             mfuuid
             mfreadwrite
@@ -125,6 +149,7 @@ elseif(APPLE)
             "-framework CoreMedia"
             "-framework CoreVideo"
             "-framework VideoToolbox"
+            "-framework Security"
             z
             m
             pthread

@@ -13,6 +13,9 @@ set(CMAKE_C_VISIBILITY_PRESET hidden)
 set(CMAKE_VISIBILITY_INLINES_HIDDEN ON)
 
 add_compile_definitions(USE_UNIXSOCK=ON)
+add_compile_definitions(USE_TLS=1)
+add_compile_definitions(USE_DTLS=1)
+add_compile_definitions(USE_OPENSSL=1)
 
 # Baresip dependencies
 if(NOT BARESIP_INCLUDE_DIR)
@@ -94,6 +97,7 @@ elseif(APPLE)
                 "-framework CoreMedia"
                 "-framework CoreVideo"
                 "-framework VideoToolbox"
+                "-framework Security"
                 z
                 m
         )
@@ -110,6 +114,11 @@ else()
                 dl
                 m
                 z
+        )
+        target_link_options(sip_core_shared
+            PRIVATE
+                "-Wl,--exclude-libs,ALL"
+                "-Wl,-Bsymbolic"
         )
     endif()
 endif()
@@ -192,6 +201,7 @@ if(BARESIP_LIBRARY)
                 "-framework CoreMedia"
                 "-framework CoreVideo"
                 "-framework VideoToolbox"
+                "-framework Security"
                 z
                 m
         )
@@ -208,6 +218,7 @@ if(BARESIP_LIBRARY)
                 "-framework CoreMedia"
                 "-framework CoreVideo"
                 "-framework VideoToolbox"
+                "-framework Security"
                 z
                 m
         )
@@ -224,6 +235,7 @@ if(BARESIP_LIBRARY)
                 "-framework CoreMedia"
                 "-framework CoreVideo"
                 "-framework VideoToolbox"
+                "-framework Security"
                 z
                 m
         )
@@ -240,6 +252,7 @@ if(BARESIP_LIBRARY)
                 "-framework CoreMedia"
                 "-framework CoreVideo"
                 "-framework VideoToolbox"
+                "-framework Security"
                 z
                 m
         )

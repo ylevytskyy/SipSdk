@@ -9,6 +9,7 @@
 #include <string>
 
 struct call;
+struct tmr;
 
 namespace sip_core {
 class Engine;
@@ -31,7 +32,9 @@ public:
     bool is_on_hold() const;
     bool is_muted() const;
     bool is_closed() const;
+    bool is_secure() const;
     uint32_t get_duration() const;
+    int get_stats(sip_call_stats_t *stats) const;
 
     void *get_user_data() const;
     void set_user_data(void *data);
@@ -40,6 +43,8 @@ public:
     void set_muted(bool muted);
     void set_established();
     void set_closed(uint32_t dur);
+    void start_stats_timer();
+    void stop_stats_timer();
     void attach_raw_call(struct call *c);
     void detach_raw_call();
 
@@ -52,6 +57,15 @@ public:
     int set_call_muted(bool muted);
     int send_dtmf(const char *digits);
     int request_keyframe();
+    int transfer(const char *target_uri);
+    int attended_transfer(sip_call_t *consult_call);
+    int accept_transfer(bool accept);
+
+    std::string pending_transfer_uri() const;
+    void set_pending_transfer_uri(const std::string &uri);
+
+    void set_consult_call(sip_call_t *consult_call);
+    sip_call_t *take_consult_call();
 
     struct call *raw_call() const { return m_raw_call; }
     sip_client_t *owner() const { return m_owner; }
@@ -78,6 +92,13 @@ private:
     std::chrono::steady_clock::time_point m_established_at{};
     bool m_is_established{false};
     void *m_user_data{nullptr};
+    std::string m_pending_transfer_uri;
+    sip_call_t *m_consult_call{nullptr};
+
+    static void stats_timer_handler(void *arg);
+    struct tmr *m_stats_tmr{nullptr};
+    bool m_stats_timer_running{false};
+    sip_call_stats_t m_last_stats{};
 };
 
 #endif // SIP_CORE_CALL_SESSION_H

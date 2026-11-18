@@ -1,0 +1,584 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SipSdk — Cross-Platform Sample Showcase</title>
+<style>
+  :root {
+    --bg: #f5f6f8;
+    --surface: #ffffff;
+    --surface-muted: #eef1f5;
+    --border: #dfe4ec;
+    --text: #111827;
+    --muted: #5b6472;
+    --accent: #0b6ef3;
+    --accent-soft: #e8f1fe;
+    --ok: #137333;
+    --ok-bg: #e6f4ea;
+    --warn: #8a5300;
+    --warn-bg: #fef7e0;
+    --radius: 14px;
+    --shadow: 0 2px 10px rgba(17, 24, 39, 0.06);
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.5;
+  }
+  header {
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    position: sticky;
+    top: 0;
+    z-index: 20;
+  }
+  .header-inner {
+    max-width: 1220px;
+    margin: 0 auto;
+    padding: 18px 24px;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+  }
+  .brand h1 {
+    margin: 0;
+    font-size: 20px;
+    letter-spacing: -0.02em;
+  }
+  .brand p {
+    margin: 2px 0 0;
+    font-size: 13px;
+    color: var(--muted);
+  }
+  nav.pills {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  nav.pills button {
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--text);
+    padding: 6px 12px;
+    border-radius: 999px;
+    font: inherit;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background .15s, border-color .15s, color .15s;
+  }
+  nav.pills button:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+  nav.pills button.active {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+  }
+  main {
+    max-width: 1220px;
+    margin: 0 auto;
+    padding: 28px 24px 64px;
+  }
+  .summary-strip {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+    gap: 12px;
+    margin-bottom: 30px;
+  }
+  .summary-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 14px 16px;
+    box-shadow: var(--shadow);
+  }
+  .summary-card .k {
+    font-size: 12px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: .04em;
+  }
+  .summary-card .v {
+    margin-top: 4px;
+    font-size: 15px;
+    font-weight: 600;
+  }
+  section.platform {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 22px;
+    margin-bottom: 24px;
+    box-shadow: var(--shadow);
+  }
+  section.platform[hidden] { display: none; }
+  .platform-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 16px;
+    padding-bottom: 14px;
+    border-bottom: 1px solid var(--surface-muted);
+  }
+  .platform-title {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+  .platform-title h2 {
+    margin: 0;
+    font-size: 19px;
+    letter-spacing: -0.01em;
+  }
+  .badge {
+    display: inline-block;
+    padding: 2px 9px;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 600;
+  }
+  .badge.ok { background: var(--ok-bg); color: var(--ok); }
+  .badge.info { background: var(--accent-soft); color: var(--accent); }
+  .badge.warn { background: var(--warn-bg); color: var(--warn); }
+  .platform-meta {
+    font-size: 13px;
+    color: var(--muted);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  .platform-desc {
+    margin: 0 0 18px;
+    color: var(--muted);
+    font-size: 14px;
+  }
+  .gallery {
+    display: grid;
+    gap: 16px;
+  }
+  .gallery.phones {
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  }
+  .gallery.wide {
+    grid-template-columns: repeat(auto-fit, minmax(310px, 1fr));
+  }
+  .gallery.single {
+    grid-template-columns: minmax(280px, 820px);
+  }
+  figure.shot {
+    margin: 0;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    cursor: zoom-in;
+    transition: transform .15s, box-shadow .15s;
+  }
+  figure.shot:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 22px rgba(17, 24, 39, 0.10);
+  }
+  .shot-frame {
+    background: #0f172a;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 10px;
+    flex: 1;
+  }
+  .phones .shot-frame {
+    background: #e9edf3;
+    padding: 12px;
+  }
+  .shot-frame img {
+    display: block;
+    max-width: 100%;
+    height: auto;
+    border-radius: 8px;
+  }
+  .phones .shot-frame img {
+    max-height: 460px;
+    width: auto;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.14);
+  }
+  figcaption {
+    padding: 10px 14px 12px;
+    background: var(--surface);
+    border-top: 1px solid var(--border);
+  }
+  figcaption strong {
+    display: block;
+    font-size: 14px;
+    margin-bottom: 2px;
+  }
+  figcaption span {
+    display: block;
+    font-size: 12.5px;
+    color: var(--muted);
+  }
+  .windows-spec {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 12px;
+  }
+  .spec-box {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px 14px;
+  }
+  .spec-box strong {
+    display: block;
+    font-size: 13.5px;
+    margin-bottom: 4px;
+  }
+  .spec-box p {
+    margin: 0;
+    font-size: 12.5px;
+    color: var(--muted);
+  }
+  dialog#lightbox {
+    border: 0;
+    padding: 0;
+    background: transparent;
+    max-width: 94vw;
+    max-height: 94vh;
+    margin: auto;
+  }
+  dialog#lightbox::backdrop {
+    background: rgba(10, 14, 24, 0.78);
+    backdrop-filter: blur(4px);
+  }
+  .lb-wrap {
+    background: var(--surface);
+    border-radius: 14px;
+    padding: 14px;
+    max-width: 92vw;
+    max-height: 92vh;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
+  }
+  .lb-wrap img {
+    max-width: 88vw;
+    max-height: 78vh;
+    object-fit: contain;
+    border-radius: 8px;
+    background: #0f172a;
+  }
+  .lb-bar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+  }
+  .lb-bar button {
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--text);
+    padding: 5px 12px;
+    border-radius: 8px;
+    font: inherit;
+    font-size: 13px;
+    cursor: pointer;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="header-inner">
+    <div class="brand">
+      <h1>SipSdk — Sample Apps Showcase</h1>
+      <p>Live sample apps across iOS, Android, macOS, Web, Desktop CLI, and Windows</p>
+    </div>
+    <nav class="pills" aria-label="Platform filter">
+      <button class="active" data-filter="all">All Platforms</button>
+      <button data-filter="ios">iOS</button>
+      <button data-filter="android">Android</button>
+      <button data-filter="macos">macOS</button>
+      <button data-filter="web">Web</button>
+      <button data-filter="desktop">Desktop CLI</button>
+      <button data-filter="windows">Windows WPF</button>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <div class="summary-strip">
+    <div class="summary-card">
+      <div class="k">Core Engine</div>
+      <div class="v">Baresip v4.12.0 + libre v4.12.0</div>
+    </div>
+    <div class="summary-card">
+      <div class="k">Audio &amp; Video</div>
+      <div class="v">Opus 48 kHz · G.722 · PCMU/A · H.264</div>
+    </div>
+    <div class="summary-card">
+      <div class="k">Security &amp; Control</div>
+      <div class="v">SIP/TLS · SRTP · DTLS-SRTP · REFER</div>
+    </div>
+    <div class="summary-card">
+      <div class="k">Local Test PBX</div>
+      <div class="v">Asterisk 22 (1001–1005, Echo 9001)</div>
+    </div>
+  </div>
+
+  <!-- iOS -->
+  <section class="platform" data-platform="ios" id="ios">
+    <div class="platform-head">
+      <div class="platform-title">
+        <h2>iOS Sample (SipPhone)</h2>
+        <span class="badge ok">SwiftUI · iPhone 16 Pro Simulator</span>
+      </div>
+      <span class="platform-meta">platforms/ios/sample/SipPhone.xcodeproj</span>
+    </div>
+    <p class="platform-desc">
+      Native SwiftUI app powered by the <code>SipSdk</code> SwiftPM target, VideoToolbox hardware H.264, AVAudioSession + CallKit, live call stats HUD, and blind/attended transfer controls.
+    </p>
+    <div class="gallery phones">
+      <figure class="shot">
+        <div class="shot-frame"><img src="screenshots/ios-home.png" alt="iOS sample Keypad and Home screen"></div>
+        <figcaption>
+          <strong>Keypad &amp; Registration Status</strong>
+          <span>Shows registered SIP AOR, quick call actions, and recent call list.</span>
+        </figcaption>
+      </figure>
+      <figure class="shot">
+        <div class="shot-frame"><img src="screenshots/ios-settings.png" alt="iOS sample Settings screen"></div>
+        <figcaption>
+          <strong>Account &amp; Security Settings</strong>
+          <span>Configures credentials, UDP/TCP/TLS transport, SRTP/DTLS-SRTP, and NAT options.</span>
+        </figcaption>
+      </figure>
+      <figure class="shot">
+        <div class="shot-frame"><img src="screenshots/ios-incall.png" alt="iOS sample In-Call video screen with Opus telemetry"></div>
+        <figcaption>
+          <strong>In-Call Video &amp; Live Telemetry</strong>
+          <span>Active call to 9001 showing Opus 98 kbps HUD, Hold, Transfer, Keypad, and Hangup.</span>
+        </figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <!-- Android -->
+  <section class="platform" data-platform="android" id="android">
+    <div class="platform-head">
+      <div class="platform-title">
+        <h2>Android Sample (SipSdk Phone)</h2>
+        <span class="badge ok">Jetpack Compose · Android 16 Emulator</span>
+      </div>
+      <span class="platform-meta">platforms/android/sample</span>
+    </div>
+    <p class="platform-desc">
+      Material 3 Jetpack Compose phone backed by JNI <code>libsipcore.so</code>, OpenSL ES audio, Camera2 capture, MediaCodec H.264, and bundled static OpenSSL + Opus.
+    </p>
+    <div class="gallery phones">
+      <figure class="shot">
+        <div class="shot-frame"><img src="screenshots/android-home.png" alt="Android sample Keypad and Home screen"></div>
+        <figcaption>
+          <strong>Keypad &amp; Registered Card</strong>
+          <span>Connected to Asterisk over emulator loopback (10.0.2.2) with Video &amp; Audio actions.</span>
+        </figcaption>
+      </figure>
+      <figure class="shot">
+        <div class="shot-frame"><img src="screenshots/android-settings.png" alt="Android sample Settings screen"></div>
+        <figcaption>
+          <strong>Account &amp; Transport Settings</strong>
+          <span>Displays live account registration badge, credentials, and network settings.</span>
+        </figcaption>
+      </figure>
+      <figure class="shot">
+        <div class="shot-frame"><img src="screenshots/android-incall.png" alt="Android sample In-Call video screen"></div>
+        <figcaption>
+          <strong>In-Call Video &amp; Local Camera PiP</strong>
+          <span>Connected call showing synthetic emulator camera preview Picture-in-Picture and call bar.</span>
+        </figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <!-- macOS -->
+  <section class="platform" data-platform="macos" id="macos">
+    <div class="platform-head">
+      <div class="platform-title">
+        <h2>macOS Sample (SipSdkMac)</h2>
+        <span class="badge ok">SwiftUI + Objective-C++ · macOS Native</span>
+      </div>
+      <span class="platform-meta">platforms/macos/sample/SipSdkMac.xcodeproj</span>
+    </div>
+    <p class="platform-desc">
+      Native macOS desktop client bridging <code>SipCore</code> via Objective-C++ with CoreAudio input/output switching, AVCaptureSession cameras, and TLS/SRTP configuration.
+    </p>
+    <div class="gallery wide">
+      <figure class="shot">
+        <div class="shot-frame"><img src="screenshots/macos-dialer.png" alt="macOS SipSdkMac Dialer window"></div>
+        <figcaption>
+          <strong>Dialer Workspace</strong>
+          <span>Sidebar navigation, live registration pill, DTMF keypad, Audio and Video call buttons.</span>
+        </figcaption>
+      </figure>
+      <figure class="shot">
+        <div class="shot-frame"><img src="screenshots/macos-settings.png" alt="macOS SipSdkMac Settings window"></div>
+        <figcaption>
+          <strong>Settings &amp; Media Security</strong>
+          <span>Credentials, UDP/TCP/TLS selector, Media Encryption mode, and device routing.</span>
+        </figcaption>
+      </figure>
+      <figure class="shot">
+        <div class="shot-frame"><img src="screenshots/macos-incall.png" alt="macOS SipSdkMac active call window"></div>
+        <figcaption>
+          <strong>Active Call &amp; Opus Stats</strong>
+          <span>Connected to 9001 with live OPUS 93 kbps telemetry, device picker, Transfer, and Hold.</span>
+        </figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <!-- Web -->
+  <section class="platform" data-platform="web" id="web">
+    <div class="platform-head">
+      <div class="platform-title">
+        <h2>Web SDK Sample &amp; Test Client</h2>
+        <span class="badge ok">JsSIP 3.x + WebRTC · Headless Chrome</span>
+      </div>
+      <span class="platform-meta">platforms/web/sample &amp; web/index.html</span>
+    </div>
+    <p class="platform-desc">
+      Browser ES module wrapper over SIP-over-WebSocket and WebRTC DTLS-SRTP with live <code>RTCPeerConnection.getStats()</code> telemetry, DTMF INFO, hold, and REFER call transfer.
+    </p>
+    <div class="gallery wide">
+      <figure class="shot">
+        <div class="shot-frame"><img src="screenshots/web-sample-ready.png" alt="Web SDK sample registered ready view"></div>
+        <figcaption>
+          <strong>Account &amp; Dial Card</strong>
+          <span>Registered over ws://127.0.0.1:8088/ws as extension 1002 and ready to dial 9001.</span>
+        </figcaption>
+      </figure>
+      <figure class="shot">
+        <div class="shot-frame"><img src="screenshots/web-sample-incall.png" alt="Web SDK sample live video echo call"></div>
+        <figcaption>
+          <strong>Live Echo Video &amp; SRTP/DTLS Stats</strong>
+          <span>Two-way WebRTC echo with Asterisk showing decoded video, RTT/jitter, Transfer, and DTMF.</span>
+        </figcaption>
+      </figure>
+      <figure class="shot">
+        <div class="shot-frame"><img src="screenshots/web-testpage-incall.png" alt="Companion web test page live video call"></div>
+        <figcaption>
+          <strong>Companion Web Test Page</strong>
+          <span>Preset quick-dial page (web/index.html) connected to 9001 with live WebRTC video.</span>
+        </figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <!-- Desktop C++ CLI -->
+  <section class="platform" data-platform="desktop" id="desktop">
+    <div class="platform-head">
+      <div class="platform-title">
+        <h2>Desktop C++20 SDK &amp; CLI</h2>
+        <span class="badge info">C++20 · macOS &amp; Linux</span>
+      </div>
+      <span class="platform-meta">platforms/desktop/sample &amp; platforms/desktop/tools/sip_cli.cpp</span>
+    </div>
+    <p class="platform-desc">
+      Portable C++20 SDK (<code>libsipdesktop</code>) verified on macOS and headless Linux containers, used alongside the <code>sip_cli</code> test runner for automated signaling and media checks.
+    </p>
+    <div class="gallery single">
+      <figure class="shot">
+        <div class="shot-frame"><img src="screenshots/desktop-cli-call.png" alt="sip_cli live call output to Asterisk"></div>
+        <figcaption>
+          <strong>sip_cli Live Video Echo Run (Verbatim Output)</strong>
+          <span>Registers extension 1003 over TCP, connects 640x480 H.264 + Opus 48 kHz call to 9001, and tears down cleanly.</span>
+        </figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <!-- Windows -->
+  <section class="platform" data-platform="windows" id="windows">
+    <div class="platform-head">
+      <div class="platform-title">
+        <h2>Windows Desktop Sample (SipSdk.WpfSample)</h2>
+        <span class="badge warn">WPF .NET 8 · Windows Host Required for Live UI Capture</span>
+      </div>
+      <span class="platform-meta">platforms/windows/sample/SipSdk.WpfSample/MainWindow.xaml</span>
+    </div>
+    <p class="platform-desc">
+      Native Windows desktop phone binding <code>sip_abi.h</code> via P/Invoke (.NET 8) with a dark split-pane WPF UI. The Windows `.NET` SDK unit suite and C ABI checks pass locally, while launching the WPF executable requires a Windows host.
+    </p>
+    <div class="windows-spec">
+      <div class="spec-box">
+        <strong>Left Column — Account &amp; Security</strong>
+        <p>Username, Domain/Host, Password, Port, Transport (UDP/TCP/TLS), Register &amp; Unregister actions, and live registration status.</p>
+      </div>
+      <div class="spec-box">
+        <strong>Left Column — Dialer &amp; Active Call</strong>
+        <p>Destination URI, Audio Call / Video Call buttons, active call state + duration, Hold, Mute, Hangup, and 3x4 DTMF keypad.</p>
+      </div>
+      <div class="spec-box">
+        <strong>Right Column — Dual Video Viewport</strong>
+        <p>Full-bleed <code>SipVideoPanel</code> remote renderer with bottom-right Picture-in-Picture local camera preview.</p>
+      </div>
+    </div>
+  </section>
+</main>
+
+<dialog id="lightbox">
+  <div class="lb-wrap">
+    <img id="lbImg" src="" alt="">
+    <div class="lb-bar">
+      <span id="lbCaption" style="font-size:13px;color:var(--muted)"></span>
+      <button id="lbClose" type="button">Close</button>
+    </div>
+  </div>
+</dialog>
+
+<script>
+  const buttons = document.querySelectorAll('nav.pills button');
+  const sections = document.querySelectorAll('section.platform');
+  buttons.forEach((btn) => {
+    btn.addEventListener('click', () => {
+      buttons.forEach((b) => b.classList.remove('active'));
+      btn.classList.add('active');
+      const target = btn.dataset.filter;
+      sections.forEach((sec) => {
+        sec.hidden = target !== 'all' && sec.dataset.platform !== target;
+      });
+    });
+  });
+
+  const dialog = document.getElementById('lightbox');
+  const lbImg = document.getElementById('lbImg');
+  const lbCaption = document.getElementById('lbCaption');
+  document.querySelectorAll('figure.shot').forEach((fig) => {
+    fig.addEventListener('click', () => {
+      const img = fig.querySelector('img');
+      const title = fig.querySelector('figcaption strong')?.textContent || '';
+      const sub = fig.querySelector('figcaption span')?.textContent || '';
+      lbImg.src = img.src;
+      lbImg.alt = img.alt;
+      lbCaption.textContent = title ? `${title} — ${sub}` : sub;
+      dialog.showModal();
+    });
+  });
+  document.getElementById('lbClose').addEventListener('click', () => dialog.close());
+  dialog.addEventListener('click', (e) => {
+    if (e.target === dialog) dialog.close();
+  });
+</script>
+</body>
+</html>

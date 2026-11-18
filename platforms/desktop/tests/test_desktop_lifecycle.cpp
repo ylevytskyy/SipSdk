@@ -212,6 +212,45 @@ int main(int argc, char **argv) {
         client->stop();
         TEST_ASSERT(!client->is_started(), "Client should be stopped");
         std::printf("PASS: Clean unregister and stop verified\n");
+
+        // Test 8: TLS + SRTP & CallStats via C++ Desktop SDK
+        std::printf("--- Test 8: TLS + SRTP & CallStats ---\n");
+        auto tls_listener = std::make_shared<TestListener>();
+        auto tls_client = std::make_shared<sip::Client>("1004", asterisk_host);
+        tls_client->set_password("test1004");
+        tls_client->set_port(5061);
+        tls_client->set_transport("tls");
+        const char *ca_path = "docker/asterisk/keys/asterisk.crt";
+        for (const char *cand : {"docker/asterisk/keys/asterisk.crt",
+                                 "../../docker/asterisk/keys/asterisk.crt",
+                                 "/workspace/docker/asterisk/keys/asterisk.crt"}) {
+            if (FILE *f = std::fopen(cand, "r")) {
+                std::fclose(f);
+                ca_path = cand;
+                break;
+            }
+        }
+        tls_client->set_tls_ca_file(ca_path);
+        tls_client->set_verify_tls_cert(true);
+        tls_client->set_media_enc("srtp-mand");
+        tls_client->set_listener(tls_listener);
+        TEST_ASSERT(tls_client->start(config_dir ? config_dir : "") == 0, "tls_client->start() failed");
+        TEST_ASSERT(tls_client->register_account() == 0, "tls_client->register_account() failed");
+        TEST_ASSERT(tls_listener->wait_for_reg_state(sip::RegistrationState::Registered, 5),
+                    "TLS registration did not succeed");
+        std::string tls_echo = std::string("sip:9001@") + asterisk_host + ":5061;transport=tls";
+        auto tls_call = tls_client->make_call(tls_echo, false);
+        TEST_ASSERT(tls_call != nullptr, "tls_client->make_call returned null");
+        std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+        TEST_ASSERT(tls_call->is_secure(), "TLS/SRTP call must report is_secure() == true");
+        sip::CallStats stats = tls_call->get_stats();
+        TEST_ASSERT(stats.audio_codec == "opus", "Expected opus audio codec in CallStats");
+        TEST_ASSERT(tls_call->transfer("") != 0, "transfer must reject empty URI");
+        tls_call->hangup();
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        tls_client->unregister_account();
+        tls_client->stop();
+        std::printf("PASS: TLS + SRTP & CallStats verified via Desktop C++ SDK\n");
     }
 
     std::printf("=================================================================\n");

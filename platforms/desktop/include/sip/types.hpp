@@ -37,6 +37,19 @@ struct CallMediaInfo {
     bool is_muted{false};
 };
 
+struct CallStats {
+    float audio_loss_rate{0.0f};
+    uint32_t audio_jitter_ms{0};
+    uint32_t audio_rtt_ms{0};
+    uint32_t audio_bitrate_kbps{0};
+    std::string audio_codec;
+    float video_loss_rate{0.0f};
+    uint32_t video_jitter_ms{0};
+    uint32_t video_bitrate_kbps{0};
+    uint32_t video_fps{0};
+    std::string video_codec;
+};
+
 /** Status of a sent SIP MESSAGE; values match sip_message_status_t. */
 enum class MessageStatus {
     Sent = 0,

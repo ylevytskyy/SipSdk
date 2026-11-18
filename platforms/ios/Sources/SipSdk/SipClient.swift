@@ -165,6 +165,43 @@ public final class SipClient {
             IosAudioManager.shared.releaseCallAudioSessionIfIdle()
         }
 
+        callbacks.on_call_stats = { call, statsPtr, userData in
+            guard let userData = userData, let call = call, let statsPtr = statsPtr else { return }
+            let sdk = Unmanaged<SipClient>.fromOpaque(userData).takeUnretainedValue()
+            let coreStats = statsPtr.pointee
+            let stats = SipCallStats(
+                audioCodec: withUnsafeBytes(of: coreStats.audio_codec) { p in
+                    p.baseAddress != nil ? String(cString: p.baseAddress!.assumingMemoryBound(to: CChar.self)) : ""
+                },
+                audioBitrateKbps: coreStats.audio_bitrate_kbps,
+                audioLossRate: coreStats.audio_loss_rate,
+                audioJitterMs: coreStats.audio_jitter_ms,
+                audioRttMs: coreStats.audio_rtt_ms,
+                videoCodec: withUnsafeBytes(of: coreStats.video_codec) { p in
+                    p.baseAddress != nil ? String(cString: p.baseAddress!.assumingMemoryBound(to: CChar.self)) : ""
+                },
+                videoBitrateKbps: coreStats.video_bitrate_kbps,
+                videoLossRate: coreStats.video_loss_rate,
+                videoJitterMs: coreStats.video_jitter_ms,
+                videoFps: coreStats.video_fps
+            )
+            sdk.handleCallStats(callHandle: call, stats: stats)
+        }
+
+        callbacks.on_transfer_status = { call, code, reason, userData in
+            guard let userData = userData, let call = call else { return }
+            let sdk = Unmanaged<SipClient>.fromOpaque(userData).takeUnretainedValue()
+            let reasonStr = reason != nil ? String(cString: reason!) : ""
+            sdk.handleTransferStatus(callHandle: call, code: Int(code), reason: reasonStr)
+        }
+
+        callbacks.on_transfer_request = { call, referTo, hasReplaces, userData in
+            guard let userData = userData, let call = call else { return }
+            let sdk = Unmanaged<SipClient>.fromOpaque(userData).takeUnretainedValue()
+            let referToStr = referTo != nil ? String(cString: referTo!) : ""
+            sdk.handleTransferRequest(callHandle: call, referToUri: referToStr, hasReplaces: hasReplaces)
+        }
+
         let context = Unmanaged.passUnretained(self).toOpaque()
         guard let client = sip_client_create(&callbacks, context) else {
             throw SipError.coreError(-1, "sip_client_create returned null")
@@ -230,6 +267,9 @@ public final class SipClient {
             self.coreClient = nil
         }
 
+        // Let any already-queued main-queue dispatch blocks drain while self is still alive
+        try? await Task.sleep(nanoseconds: 50_000_000)
+
         IosAudioManager.shared.releaseCallAudioSessionIfIdle()
         registrationState = .unregistered
         isStarted = false
@@ -258,6 +298,7 @@ public final class SipClient {
                         cConfig.transport = tpPtr
                         cConfig.port = Int32(account.port)
                         cConfig.reg_interval = account.regInterval
+                        cConfig.verify_tls_cert = account.verifyTlsCert
 
                         // Optional strings
                         let dname = account.displayName?.cString(using: .utf8)
@@ -266,6 +307,8 @@ public final class SipClient {
                         let stunUser = account.stunUser?.cString(using: .utf8)
                         let stunPass = account.stunPassword?.cString(using: .utf8)
                         let nat = account.mediaNat?.cString(using: .utf8)
+                        let tlsCa = account.tlsCaFile?.cString(using: .utf8)
+                        let menc = account.mediaEnc?.cString(using: .utf8)
 
                         dname?.withUnsafeBufferPointer { cConfig.display_name = $0.baseAddress }
                         ob?.withUnsafeBufferPointer { cConfig.outbound_proxy = $0.baseAddress }
@@ -273,6 +316,8 @@ public final class SipClient {
                         stunUser?.withUnsafeBufferPointer { cConfig.stun_user = $0.baseAddress }
                         stunPass?.withUnsafeBufferPointer { cConfig.stun_pass = $0.baseAddress }
                         nat?.withUnsafeBufferPointer { cConfig.media_nat = $0.baseAddress }
+                        tlsCa?.withUnsafeBufferPointer { cConfig.tls_ca_file = $0.baseAddress }
+                        menc?.withUnsafeBufferPointer { cConfig.media_enc = $0.baseAddress }
 
                         _ = sip_client_register_account(client, &cConfig)
                     }
@@ -491,6 +536,25 @@ public final class SipClient {
     private func handleDtmf(callHandle: OpaquePointer, digit: String) {
         let sipCall = findOrCreateCall(for: callHandle)
         eventContinuation.yield(.dtmfReceived(sipCall, digit: digit))
+    }
+
+    private func handleCallStats(callHandle: OpaquePointer, stats: SipCallStats) {
+        if let sipCall = calls.first(where: { $0.coreCall == callHandle }) {
+            sipCall.updateStats(stats)
+            eventContinuation.yield(.callStatsUpdated(sipCall, stats))
+        }
+    }
+
+    private func handleTransferStatus(callHandle: OpaquePointer, code: Int, reason: String) {
+        if let call = calls.first(where: { $0.coreCall == callHandle }) {
+            eventContinuation.yield(.transferStatusReceived(call, code: code, reason: reason))
+        }
+    }
+
+    private func handleTransferRequest(callHandle: OpaquePointer, referToUri: String, hasReplaces: Bool) {
+        if let call = calls.first(where: { $0.coreCall == callHandle }) {
+            eventContinuation.yield(.transferRequested(call, referToUri: referToUri, hasReplaces: hasReplaces))
+        }
     }
 
     private func handleMessageReceived(_ message: SipIncomingMessage) {

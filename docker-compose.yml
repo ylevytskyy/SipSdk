@@ -11,9 +11,12 @@ services:
     ports:
       - "5060:5060/udp"
       - "5060:5060/tcp"
+      - "5061:5061/tcp"
       - "8088:8088/tcp"
       - "8089:8089/tcp"
       - "10000-10099:10000-10099/udp"
+    volumes:
+      - ./docker/asterisk/keys:/etc/asterisk/keys
     healthcheck:
       test: ["CMD", "asterisk", "-rx", "core show version"]
       interval: 5s
