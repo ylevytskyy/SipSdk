@@ -504,4 +504,185 @@ final class SipSdkTests: XCTestCase {
 
         await client.stop()
     }
+
+    @MainActor
+    func testMultiCallConfigurationCallKitAndPushParsing() {
+        let defaultAccount = SipAccount(username: "1001", domain: "127.0.0.1")
+        XCTAssertEqual(defaultAccount.maxCalls, 4)
+
+        let cappedAccount = SipAccount(username: "1001", domain: "127.0.0.1", maxCalls: 2)
+        XCTAssertEqual(cappedAccount.maxCalls, 2)
+
+        let coordinator = SipCallKitCoordinator(localizedName: "SipSdkTest", client: nil, maxCalls: 3)
+        XCTAssertEqual(coordinator.provider.configuration.maximumCallGroups, 3)
+        XCTAssertEqual(coordinator.provider.configuration.maximumCallsPerCallGroup, 1)
+
+        let unified = SipIncomingPushPayload(dictionary: [
+            "sip_call_id": "abc-123@pbx",
+            "from_uri": "sip:alice@pbx.local",
+            "display_name": "Alice",
+            "has_video": true
+        ])
+        XCTAssertEqual(unified.sipCallId, "abc-123@pbx")
+        XCTAssertEqual(unified.callerUri, "sip:alice@pbx.local")
+        XCTAssertEqual(unified.callerName, "Alice")
+        XCTAssertTrue(unified.hasVideo)
+
+        let legacyUuid = "550e8400-e29b-41d4-a716-446655440000"
+        let alias = SipIncomingPushPayload(dictionary: [
+            "call_id": legacyUuid,
+            "caller_uri": "sip:bob@pbx.local",
+            "caller_name": "Bob",
+            "video": false
+        ])
+        XCTAssertEqual(alias.sipCallId, legacyUuid)
+        XCTAssertEqual(alias.uuid.uuidString.lowercased(), legacyUuid)
+        XCTAssertEqual(alias.callerUri, "sip:bob@pbx.local")
+        XCTAssertEqual(alias.callerName, "Bob")
+        XCTAssertFalse(alias.hasVideo)
+    }
+
+    @MainActor
+    func testMultiCallLiveSwapAndBusyCap() async throws {
+        let client = SipClient()
+        try await client.start()
+
+        let multiAccount = SipAccount(
+            username: "1001",
+            domain: "127.0.0.1",
+            password: "test1001",
+            transport: .udp,
+            port: 5060,
+            maxCalls: 4
+        )
+        try await client.register(multiAccount)
+
+        var regWait = 0
+        while !client.registrationState.isRegistered && regWait < 30 {
+            try await Task.sleep(nanoseconds: 100_000_000)
+            regWait += 1
+        }
+        guard client.registrationState.isRegistered else {
+            await client.stop()
+            throw XCTSkip("Asterisk PBX not reachable on 127.0.0.1:5060")
+        }
+
+        // 1. Two concurrent calls + swap
+        let call1 = try await client.makeCall(to: "9001", withVideo: false)
+        var w1 = 0
+        while call1.state != .established && !call1.state.isClosed && w1 < 50 {
+            try await Task.sleep(nanoseconds: 100_000_000)
+            w1 += 1
+        }
+        XCTAssertEqual(call1.state, .established)
+
+        let call2 = try await client.makeCall(to: "9001", withVideo: false)
+        var w2 = 0
+        while (call2.state != .established || !call1.isOnHold) && w2 < 50 {
+            try await Task.sleep(nanoseconds: 100_000_000)
+            w2 += 1
+        }
+        XCTAssertTrue(call1.isOnHold, "call1 must auto-hold when dialing call2")
+        XCTAssertEqual(call2.state, .established)
+        XCTAssertFalse(call2.isOnHold)
+
+        try await call1.setHold(false)
+        var wSwap = 0
+        while (call1.isOnHold || !call2.isOnHold) && wSwap < 40 {
+            try await Task.sleep(nanoseconds: 100_000_000)
+            wSwap += 1
+        }
+        XCTAssertFalse(call1.isOnHold, "call1 should resume on swap")
+        XCTAssertTrue(call2.isOnHold, "call2 should auto-hold on swap")
+
+        await call1.hangup()
+        await call2.hangup()
+        try await Task.sleep(nanoseconds: 400_000_000)
+        await client.stop()
+
+        // 2. Enforce maxCalls = 1 on a fresh SipClient:
+        //    outgoing throws SipError.busy, incoming (Asterisk 9003 callback) rejects 486 + onCallRejectedBusy.
+        let capClient = SipClient()
+        try await capClient.start()
+        let capAccount = SipAccount(
+            username: "1001",
+            domain: "127.0.0.1",
+            password: "test1001",
+            transport: .udp,
+            port: 5060,
+            maxCalls: 1
+        )
+        try await capClient.register(capAccount)
+        var capRegWait = 0
+        while !capClient.registrationState.isRegistered && capRegWait < 30 {
+            try await Task.sleep(nanoseconds: 100_000_000)
+            capRegWait += 1
+        }
+        XCTAssertTrue(capClient.registrationState.isRegistered)
+
+        var busyCallerUri: String?
+        capClient.onCallRejectedBusy = { uri in
+            busyCallerUri = uri
+        }
+
+        // First dial 9001 (warms up Simulator CoreAudio) and verify outgoing SipError.busy at maxCalls=1.
+        let warmCall = try await capClient.makeCall(to: "9001", withVideo: false)
+        var wWarm = 0
+        while warmCall.state != .established && !warmCall.state.isClosed && wWarm < 50 {
+            try await Task.sleep(nanoseconds: 100_000_000)
+            wWarm += 1
+        }
+        XCTAssertEqual(warmCall.state, .established)
+
+        do {
+            _ = try await capClient.makeCall(to: "9001", withVideo: false)
+            XCTFail("Expected SipError.busy when exceeding maxCalls=1")
+        } catch SipError.busy {
+            // Expected
+        }
+
+        await warmCall.hangup()
+        var wWarmClose = 0
+        while !warmCall.state.isClosed && wWarmClose < 30 {
+            try await Task.sleep(nanoseconds: 50_000_000)
+            wWarmClose += 1
+        }
+        XCTAssertTrue(warmCall.state.isClosed)
+
+        // Now trigger delayed 9003 callback; hangup trigger as soon as established,
+        // then immediately dial 9001 so activeCall is open before Asterisk originates at ~2s.
+        let cbTrigger = try await capClient.makeCall(to: "9003", withVideo: false)
+        var cbWait = 0
+        while cbTrigger.state != .established && !cbTrigger.state.isClosed && cbWait < 40 {
+            try await Task.sleep(nanoseconds: 50_000_000)
+            cbWait += 1
+        }
+        await cbTrigger.hangup()
+        var cbCloseWait = 0
+        while !cbTrigger.state.isClosed && cbCloseWait < 30 {
+            try await Task.sleep(nanoseconds: 50_000_000)
+            cbCloseWait += 1
+        }
+        XCTAssertTrue(cbTrigger.state.isClosed, "9003 trigger should close cleanly")
+
+        let activeCall = try await capClient.makeCall(to: "9001", withVideo: false)
+        var wActive = 0
+        while activeCall.state != .established && !activeCall.state.isClosed && wActive < 50 {
+            try await Task.sleep(nanoseconds: 50_000_000)
+            wActive += 1
+        }
+        XCTAssertEqual(activeCall.state, .established)
+
+        var wBusy = 0
+        while busyCallerUri == nil && wBusy < 80 {
+            try await Task.sleep(nanoseconds: 100_000_000)
+            wBusy += 1
+        }
+        XCTAssertNotNil(busyCallerUri, "Expected onCallRejectedBusy when 9003 callback arrives at maxCalls=1")
+        XCTAssertFalse(activeCall.state.isClosed, "Existing active call must remain connected after 486 rejection")
+
+        await activeCall.hangup()
+        try await Task.sleep(nanoseconds: 300_000_000)
+        await capClient.stop()
+    }
 }

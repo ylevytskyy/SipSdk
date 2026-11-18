@@ -18,8 +18,12 @@ public final class SipClient {
     public private(set) var calls: [SipCall] = []
 
     public var activeCall: SipCall? {
-        calls.first(where: { !$0.state.isClosed })
+        calls.first(where: { !$0.state.isClosed && !$0.isOnHold })
+            ?? calls.first(where: { !$0.state.isClosed })
     }
+
+    /// Invoked on the main actor when an incoming INVITE is rejected with 486 Busy Here due to `maxCalls`.
+    public var onCallRejectedBusy: ((String) -> Void)?
 
     public var isMicrophoneMuted: Bool = false {
         didSet {
@@ -85,6 +89,13 @@ public final class SipClient {
     /// Internal opaque handle to C ABI client.
     @ObservationIgnored nonisolated(unsafe) internal var coreClient: OpaquePointer?
 
+    /// Weak-client box retained across in-flight main-queue dispatches during teardown.
+    private final class CallbackBox: @unchecked Sendable {
+        weak var client: SipClient?
+        init(_ client: SipClient) { self.client = client }
+    }
+    @ObservationIgnored nonisolated(unsafe) private var retainedCallbackBox: Unmanaged<CallbackBox>?
+
     public init() {
         var continuation: AsyncStream<SipEvent>.Continuation!
         self.events = AsyncStream<SipEvent> { cont in
@@ -98,9 +109,21 @@ public final class SipClient {
 
     deinit {
         eventContinuation.finish()
+        if let boxRef = retainedCallbackBox {
+            boxRef.takeUnretainedValue().client = nil
+            retainedCallbackBox = nil
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                boxRef.release()
+            }
+        }
         if let client = coreClient {
             sip_client_destroy(client)
         }
+    }
+
+    private static func unwrapClient(_ userData: UnsafeMutableRawPointer?) -> SipClient? {
+        guard let userData = userData else { return nil }
+        return Unmanaged<CallbackBox>.fromOpaque(userData).takeUnretainedValue().client
     }
 
     // MARK: - Engine Lifecycle
@@ -117,57 +140,51 @@ public final class SipClient {
         }
 
         var callbacks = sip_callbacks_t()
-        callbacks.dispatch_to_main = { task, arg, userData in
+        callbacks.dispatch_to_main = { task, arg, _ in
             guard let task = task else { return }
             DispatchQueue.main.async {
                 task(arg)
             }
         }
 
-        callbacks.on_reg_state = { client, state, code, reason, userData in
-            guard let userData = userData else { return }
-            let sdk = Unmanaged<SipClient>.fromOpaque(userData).takeUnretainedValue()
+        callbacks.on_reg_state = { _, state, code, reason, userData in
+            guard let sdk = SipClient.unwrapClient(userData) else { return }
             let reasonStr = reason != nil ? String(cString: reason!) : ""
             sdk.handleRegState(state: state, code: Int(code), reason: reasonStr)
         }
 
-        callbacks.on_incoming_call = { client, call, userData in
-            guard let userData = userData, let call = call else { return }
-            let sdk = Unmanaged<SipClient>.fromOpaque(userData).takeUnretainedValue()
+        callbacks.on_incoming_call = { _, call, userData in
+            guard let sdk = SipClient.unwrapClient(userData), let call = call else { return }
             sdk.handleIncomingCall(callHandle: call)
         }
 
         callbacks.on_call_state = { call, state, code, reason, userData in
-            guard let userData = userData, let call = call else { return }
-            let sdk = Unmanaged<SipClient>.fromOpaque(userData).takeUnretainedValue()
+            guard let sdk = SipClient.unwrapClient(userData), let call = call else { return }
             let reasonStr = reason != nil ? String(cString: reason!) : ""
             sdk.handleCallState(callHandle: call, state: state, code: Int(code), reason: reasonStr)
         }
 
         callbacks.on_call_media = { call, width, height, onHold, isMuted, userData in
-            guard let userData = userData, let call = call else { return }
-            let sdk = Unmanaged<SipClient>.fromOpaque(userData).takeUnretainedValue()
+            guard let sdk = SipClient.unwrapClient(userData), let call = call else { return }
             sdk.handleCallMedia(callHandle: call, width: Int(width), height: Int(height), onHold: onHold, isMuted: isMuted)
         }
 
         callbacks.on_dtmf_digit = { call, digit, userData in
-            guard let userData = userData, let call = call else { return }
-            let sdk = Unmanaged<SipClient>.fromOpaque(userData).takeUnretainedValue()
+            guard let sdk = SipClient.unwrapClient(userData), let call = call else { return }
             let digitStr = digit != nil ? String(cString: digit!) : ""
             sdk.handleDtmf(callHandle: call, digit: digitStr)
         }
 
-        callbacks.prepare_audio_session = { client, userData in
+        callbacks.prepare_audio_session = { _, _ in
             return IosAudioManager.shared.prepareCallAudioSession()
         }
 
-        callbacks.release_audio_session = { client, userData in
+        callbacks.release_audio_session = { _, _ in
             IosAudioManager.shared.releaseCallAudioSessionIfIdle()
         }
 
         callbacks.on_call_stats = { call, statsPtr, userData in
-            guard let userData = userData, let call = call, let statsPtr = statsPtr else { return }
-            let sdk = Unmanaged<SipClient>.fromOpaque(userData).takeUnretainedValue()
+            guard let sdk = SipClient.unwrapClient(userData), let call = call, let statsPtr = statsPtr else { return }
             let coreStats = statsPtr.pointee
             let stats = SipCallStats(
                 audioCodec: withUnsafeBytes(of: coreStats.audio_codec) { p in
@@ -189,37 +206,43 @@ public final class SipClient {
         }
 
         callbacks.on_transfer_status = { call, code, reason, userData in
-            guard let userData = userData, let call = call else { return }
-            let sdk = Unmanaged<SipClient>.fromOpaque(userData).takeUnretainedValue()
+            guard let sdk = SipClient.unwrapClient(userData), let call = call else { return }
             let reasonStr = reason != nil ? String(cString: reason!) : ""
             sdk.handleTransferStatus(callHandle: call, code: Int(code), reason: reasonStr)
         }
 
         callbacks.on_transfer_request = { call, referTo, hasReplaces, userData in
-            guard let userData = userData, let call = call else { return }
-            let sdk = Unmanaged<SipClient>.fromOpaque(userData).takeUnretainedValue()
+            guard let sdk = SipClient.unwrapClient(userData), let call = call else { return }
             let referToStr = referTo != nil ? String(cString: referTo!) : ""
             sdk.handleTransferRequest(callHandle: call, referToUri: referToStr, hasReplaces: hasReplaces)
         }
 
-        let context = Unmanaged.passUnretained(self).toOpaque()
+        callbacks.on_call_rejected_busy = { _, callerUri, userData in
+            guard let sdk = SipClient.unwrapClient(userData) else { return }
+            let callerStr = callerUri != nil ? String(cString: callerUri!) : "Unknown"
+            sdk.handleCallRejectedBusy(callerUri: callerStr)
+        }
+
+        let boxRef = Unmanaged.passRetained(CallbackBox(self))
+        self.retainedCallbackBox = boxRef
+        let context = boxRef.toOpaque()
         guard let client = sip_client_create(&callbacks, context) else {
+            boxRef.release()
+            self.retainedCallbackBox = nil
             throw SipError.coreError(-1, "sip_client_create returned null")
         }
         self.coreClient = client
 
         var messageCallbacks = sip_message_callbacks_t()
         messageCallbacks.on_message_received = { _, fromUri, contentType, body, bodyLen, userData in
-            guard let userData = userData else { return }
-            let sdk = Unmanaged<SipClient>.fromOpaque(userData).takeUnretainedValue()
+            guard let sdk = SipClient.unwrapClient(userData) else { return }
             let from = fromUri != nil ? String(cString: fromUri!) : ""
             let ctype = contentType != nil ? String(cString: contentType!) : "text/plain"
             let data = (body != nil && bodyLen > 0) ? Data(bytes: body!, count: bodyLen) : Data()
             sdk.handleMessageReceived(SipIncomingMessage(from: from, contentType: ctype, body: data))
         }
         messageCallbacks.on_message_status = { _, messageId, status, code, reason, userData in
-            guard let userData = userData else { return }
-            let sdk = Unmanaged<SipClient>.fromOpaque(userData).takeUnretainedValue()
+            guard let sdk = SipClient.unwrapClient(userData) else { return }
             let reasonStr = reason != nil ? String(cString: reason!) : ""
             sdk.handleMessageStatus(id: messageId, status: status, code: Int(code), reason: reasonStr)
         }
@@ -240,8 +263,13 @@ public final class SipClient {
 
         let initRc = sip_client_init(client, resolvedConfigPath)
         guard initRc == 0 else {
+            boxRef.takeUnretainedValue().client = nil
+            self.retainedCallbackBox = nil
             sip_client_destroy(client)
             self.coreClient = nil
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                boxRef.release()
+            }
             throw SipError.coreError(Int(initRc), "sip_client_init failed")
         }
 
@@ -251,6 +279,11 @@ public final class SipClient {
     /// Stops SIP engine, ends active calls, and frees all resources.
     public func stop() async {
         guard isStarted else { return }
+
+        // Detach weak ref immediately so any in-flight main-queue dispatches become no-ops.
+        let boxRef = retainedCallbackBox
+        boxRef?.takeUnretainedValue().client = nil
+        retainedCallbackBox = nil
 
         // Hangup any calls
         for call in calls {
@@ -267,8 +300,13 @@ public final class SipClient {
             self.coreClient = nil
         }
 
-        // Let any already-queued main-queue dispatch blocks drain while self is still alive
+        // Let any already-queued main-queue dispatch blocks drain before releasing the box
         try? await Task.sleep(nanoseconds: 50_000_000)
+        if let boxRef = boxRef {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                boxRef.release()
+            }
+        }
 
         IosAudioManager.shared.releaseCallAudioSessionIfIdle()
         registrationState = .unregistered
@@ -285,6 +323,7 @@ public final class SipClient {
 
         self.currentAccount = account
         self.registrationState = .registering
+        callKit.updateConfiguration(maxCalls: account.maxCalls)
         eventContinuation.yield(.registrationChanged(.registering))
 
         var cConfig = sip_account_config_t()
@@ -299,6 +338,7 @@ public final class SipClient {
                         cConfig.port = Int32(account.port)
                         cConfig.reg_interval = account.regInterval
                         cConfig.verify_tls_cert = account.verifyTlsCert
+                        cConfig.max_calls = Int32(account.maxCalls)
 
                         // Optional strings
                         let dname = account.displayName?.cString(using: .utf8)
@@ -353,9 +393,15 @@ public final class SipClient {
 
         _ = IosAudioManager.shared.prepareCallAudioSession()
 
-        guard let cCall = sip_call_make(client, dialUri, withVideo) else {
+        var coreCallHandle: OpaquePointer?
+        let rc = sip_call_dial(client, dialUri, withVideo, &coreCallHandle)
+        if rc == EBUSY {
             IosAudioManager.shared.releaseCallAudioSessionIfIdle()
-            throw SipError.callCreationFailed("sip_call_make returned null for URI: \(dialUri)")
+            throw SipError.busy
+        }
+        guard rc == 0, let cCall = coreCallHandle else {
+            IosAudioManager.shared.releaseCallAudioSessionIfIdle()
+            throw SipError.callCreationFailed("sip_call_dial failed (\(rc)) for URI: \(dialUri)")
         }
 
         let sipCall = SipCall(
@@ -555,6 +601,11 @@ public final class SipClient {
         if let call = calls.first(where: { $0.coreCall == callHandle }) {
             eventContinuation.yield(.transferRequested(call, referToUri: referToUri, hasReplaces: hasReplaces))
         }
+    }
+
+    private func handleCallRejectedBusy(callerUri: String) {
+        onCallRejectedBusy?(callerUri)
+        eventContinuation.yield(.callRejectedBusy(callerUri))
     }
 
     private func handleMessageReceived(_ message: SipIncomingMessage) {

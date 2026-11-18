@@ -14,19 +14,31 @@ public final class SipCallKitCoordinator: NSObject, CXProviderDelegate {
     public let callController: CXCallController
     public weak var client: SipClient?
 
-    public init(localizedName: String = "SipSdk", client: SipClient? = nil) {
+    public init(localizedName: String = "SipSdk", client: SipClient? = nil, maxCalls: Int = 4) {
+        _ = localizedName
         self.client = client
         self.callController = CXCallController()
 
-        let config = CXProviderConfiguration()
-        config.supportsVideo = true
-        config.maximumCallsPerCallGroup = 1
-        config.supportedHandleTypes = [.generic]
-        config.includesCallsInRecents = true
-
+        let config = Self.makeConfiguration(maxCalls: maxCalls)
         self.provider = CXProvider(configuration: config)
         super.init()
         self.provider.setDelegate(self, queue: nil)
+    }
+
+    /// Updates CallKit multi-call capacity to match account `maxCalls`.
+    public func updateConfiguration(maxCalls: Int) {
+        provider.configuration = Self.makeConfiguration(maxCalls: maxCalls)
+    }
+
+    private static func makeConfiguration(maxCalls: Int) -> CXProviderConfiguration {
+        let clamped = max(1, min(8, maxCalls))
+        let config = CXProviderConfiguration()
+        config.supportsVideo = true
+        config.maximumCallGroups = clamped
+        config.maximumCallsPerCallGroup = 1
+        config.supportedHandleTypes = [.generic]
+        config.includesCallsInRecents = true
+        return config
     }
 
     deinit {

@@ -7,7 +7,7 @@ case "$target" in
   *) exit 0 ;;
 esac
 
-sleep 2
+sleep 3
 for uri in $(asterisk -rx "pjsip show aor ${target}" | awk '/^ *contact *:/ {print $3}'); do
   asterisk -rx "channel originate PJSIP/${target}/${uri} application Echo" >/dev/null 2>&1 &
 done
