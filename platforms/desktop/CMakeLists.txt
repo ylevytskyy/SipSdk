@@ -201,3 +201,8 @@ target_include_directories(test_video_capture
 )
 
 add_test(NAME desktop_video_capture COMMAND test_video_capture)
+
+# Frames are counted where they leave the decoder (needs no PBX).
+if(TARGET sip_core_display_frames_test)
+    add_test(NAME core_display_frames COMMAND sip_core_display_frames_test)
+endif()

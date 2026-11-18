@@ -1456,6 +1456,7 @@ void MediaDriverManager::unregister_baresip_plugins()
 void MediaDriverManager::handle_display_frame(const struct vidframe *frame, uint64_t timestamp)
 {
     if (!frame) return;
+    m_frames_decoded.fetch_add(1, std::memory_order_relaxed);
     auto renderer = remote_renderer();
     if (!renderer) return;
 

@@ -83,6 +83,8 @@ public:
     void unregister_baresip_plugins();
 
     void handle_display_frame(const struct vidframe *frame, uint64_t timestamp);
+    /** Frames that left the decoder since this manager was made, shown or not. */
+    uint64_t frames_decoded() const { return m_frames_decoded.load(std::memory_order_relaxed); }
     void handle_stream_resized(int width, int height);
     void handle_display_hide();
 
@@ -119,6 +121,7 @@ private:
     std::atomic<int> m_camera_position{0};
     std::atomic<bool> m_local_video_enabled{true};
     std::atomic<int> m_active_vidsrc_count{0};
+    std::atomic<uint64_t> m_frames_decoded{0};
 };
 
 } // namespace sip_core
