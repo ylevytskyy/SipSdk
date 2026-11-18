@@ -220,6 +220,22 @@ struct Client::Callbacks {
         }
     }
 
+    static void on_call_rejected_busy(sip_client_t *client, const char *caller_uri, void *user_data)
+    {
+        (void)client;
+        auto *self = static_cast<Client *>(user_data);
+        if (!self) return;
+
+        std::shared_ptr<IClientListener> listener;
+        {
+            std::lock_guard<std::mutex> lock(self->m_mutex);
+            listener = self->m_listener;
+        }
+        if (listener) {
+            listener->on_call_rejected_busy(caller_uri ? caller_uri : "");
+        }
+    }
+
     static void on_message_received(sip_client_t *client, const char *from_uri, const char *content_type,
                                     const uint8_t *body, size_t body_len, void *user_data)
     {
@@ -313,6 +329,7 @@ int Client::start(const std::string &config_path)
     cb.on_call_stats = Callbacks::on_call_stats;
     cb.on_transfer_status = Callbacks::on_transfer_status;
     cb.on_transfer_request = Callbacks::on_transfer_request;
+    cb.on_call_rejected_busy = Callbacks::on_call_rejected_busy;
 
     m_client = sip_client_create(&cb, this);
     if (!m_client) {
@@ -380,6 +397,7 @@ int Client::register_account()
     cfg.tls_ca_file = m_tls_ca_file.empty() ? nullptr : m_tls_ca_file.c_str();
     cfg.verify_tls_cert = m_verify_tls_cert;
     cfg.media_enc = m_media_enc.empty() ? nullptr : m_media_enc.c_str();
+    cfg.max_calls = m_max_calls;
     return sip_client_register_account(m_client, &cfg);
 }
 
@@ -399,17 +417,27 @@ bool Client::is_registered() const
 
 std::shared_ptr<Call> Client::make_call(const std::string &target_uri, bool with_video)
 {
+    std::shared_ptr<Call> out_call;
+    (void)dial(target_uri, with_video, out_call);
+    return out_call;
+}
+
+int Client::dial(const std::string &target_uri, bool with_video, std::shared_ptr<Call> &out_call)
+{
+    out_call.reset();
     sip_client_t *cli = nullptr;
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         cli = m_client;
     }
-    if (!cli) return nullptr;
+    if (!cli) return EINVAL;
 
-    sip_call_t *handle = sip_call_make(cli, target_uri.c_str(), with_video);
-    if (!handle) return nullptr;
+    sip_call_t *handle = nullptr;
+    int rc = sip_call_dial(cli, target_uri.c_str(), with_video, &handle);
+    if (rc != 0 || !handle) return rc != 0 ? rc : EIO;
 
-    return get_or_create_call(handle);
+    out_call = get_or_create_call(handle);
+    return 0;
 }
 
 int Client::send_message(const std::string &target_uri,

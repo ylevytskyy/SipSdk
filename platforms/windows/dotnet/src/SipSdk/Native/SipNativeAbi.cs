@@ -31,6 +31,7 @@ namespace SipSdk.Native
         public IntPtr OnCallStats;
         public IntPtr OnTransferStatus;
         public IntPtr OnTransferRequest;
+        public IntPtr OnCallRejectedBusy;
     }
 
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Ansi)]
@@ -58,6 +59,9 @@ namespace SipSdk.Native
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     public delegate void NativeTransferRequestCallback(IntPtr call, [MarshalAs(UnmanagedType.LPStr)] string referToUri, [MarshalAs(UnmanagedType.I1)] bool hasReplaces, IntPtr userData);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    public delegate void NativeCallRejectedBusyCallback(IntPtr client, [MarshalAs(UnmanagedType.LPStr)] string callerUri, IntPtr userData);
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     public delegate void NativeRegStateCallback(IntPtr client, int state, int code, [MarshalAs(UnmanagedType.LPStr)] string reason, IntPtr userData);
@@ -120,6 +124,7 @@ namespace SipSdk.Native
             [MarshalAs(UnmanagedType.LPStr)] public string? TlsCaFile;
             [MarshalAs(UnmanagedType.I1)] public bool VerifyTlsCert;
             [MarshalAs(UnmanagedType.LPStr)] public string? MediaEnc;
+            public int MaxCalls;
         }
 
         [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
@@ -149,6 +154,13 @@ namespace SipSdk.Native
             IntPtr client,
             [MarshalAs(UnmanagedType.LPStr)] string targetUri,
             [MarshalAs(UnmanagedType.I1)] bool withVideo);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int sip_call_dial(
+            IntPtr client,
+            [MarshalAs(UnmanagedType.LPStr)] string targetUri,
+            [MarshalAs(UnmanagedType.I1)] bool withVideo,
+            out IntPtr outCall);
 
         [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
         public static extern int sip_call_answer(IntPtr call, [MarshalAs(UnmanagedType.I1)] bool withVideo);

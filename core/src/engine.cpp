@@ -1381,14 +1381,14 @@ sip_call_t *Engine::find_or_create_call_session(struct call *c, const char *remo
         }
         if (is_outgoing) {
             for (auto *sess : m_all_calls) {
-                if (sess && sess->raw_call() == nullptr && sess->is_outgoing() &&
+                if (sess && !sess->is_closed() && sess->raw_call() == nullptr && sess->is_outgoing() &&
                     remote_uri && std::strcmp(sess->get_remote_uri(), remote_uri) == 0) {
                     sess->attach_raw_call(c);
                     return sess;
                 }
             }
             for (auto *sess : m_all_calls) {
-                if (sess && sess->raw_call() == nullptr && sess->is_outgoing()) {
+                if (sess && !sess->is_closed() && sess->raw_call() == nullptr && sess->is_outgoing()) {
                     sess->attach_raw_call(c);
                     return sess;
                 }
