@@ -114,6 +114,7 @@ if(WIN32 OR MINGW)
             OpenSSL::Crypto
             ws2_32
             iphlpapi
+            qwave
             crypt32
             bcrypt
             mfplat
@@ -214,6 +215,9 @@ target_include_directories(test_mf_drivers
 target_link_libraries(test_mf_drivers
     PRIVATE
         sip_core_dll
-        pthread
 )
+
+if(NOT WIN32 AND NOT MINGW)
+    target_link_libraries(test_mf_drivers PRIVATE pthread)
+endif()
 
