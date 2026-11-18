@@ -1273,6 +1273,115 @@ static void core_vidisp_hide(struct vidisp_st *st)
 }
 
 // ============================================================================
+// Headless audio: the "nil" audio source and player (what AudioBackend::Dummy selects)
+// A silent source and a player that drops what it is given, each paced by a timer
+// on the baresip thread every ptime, so that a call with no sound hardware sends
+// and receives RTP at the normal rate.
+// ============================================================================
+
+namespace {
+
+struct dummy_audio_st {
+    void *handler{nullptr};
+    void *arg{nullptr};
+    struct auframe_prm {
+        uint32_t srate{8000};
+        uint8_t ch{1};
+        uint32_t ptime{20};
+    } prm;
+    struct tmr tmr{};
+    std::vector<int16_t> sampv;
+    uint64_t start_ms{0};
+    uint64_t ticks{0};
+};
+
+// Next tick on a fixed grid from the start, so the pace does not drift.
+void dummy_audio_schedule(dummy_audio_st *st, tmr_h *th)
+{
+    st->ticks++;
+    uint64_t due = st->start_ms + st->ticks * st->prm.ptime;
+    uint64_t now = tmr_jiffies();
+    tmr_start(&st->tmr, due > now ? due - now : 1, th, st);
+}
+
+void dummy_audio_init(dummy_audio_st *st, uint32_t srate, uint8_t ch, uint32_t ptime)
+{
+    st->prm.srate = srate ? srate : 8000;
+    st->prm.ch = ch ? ch : 1;
+    st->prm.ptime = ptime ? ptime : 20;
+    size_t sampc = static_cast<size_t>(st->prm.srate) * st->prm.ch * st->prm.ptime / 1000;
+    st->sampv.assign(sampc ? sampc : 160, 0);
+    tmr_init(&st->tmr);
+    st->start_ms = tmr_jiffies();
+}
+
+void dummy_audio_destructor(void *data)
+{
+    auto *st = static_cast<dummy_audio_st *>(data);
+    tmr_cancel(&st->tmr);
+    st->~dummy_audio_st();
+}
+
+void dummy_ausrc_tick(void *arg)
+{
+    auto *st = static_cast<dummy_audio_st *>(arg);
+    dummy_audio_schedule(st, dummy_ausrc_tick);
+    struct auframe af;
+    auframe_init(&af, AUFMT_S16LE, st->sampv.data(), st->sampv.size(), st->prm.srate, st->prm.ch);
+    af.timestamp = st->ticks * st->prm.ptime * 1000ULL;
+    reinterpret_cast<ausrc_read_h *>(st->handler)(&af, st->arg);
+}
+
+void dummy_auplay_tick(void *arg)
+{
+    auto *st = static_cast<dummy_audio_st *>(arg);
+    dummy_audio_schedule(st, dummy_auplay_tick);
+    struct auframe af;
+    auframe_init(&af, AUFMT_S16LE, st->sampv.data(), st->sampv.size(), st->prm.srate, st->prm.ch);
+    af.timestamp = st->ticks * st->prm.ptime * 1000ULL;
+    reinterpret_cast<auplay_write_h *>(st->handler)(&af, st->arg);
+}
+
+int dummy_ausrc_alloc(struct ausrc_st **stp, const struct ausrc *as, struct ausrc_prm *prm,
+                      const char *device, ausrc_read_h *rh, ausrc_error_h *errh, void *arg)
+{
+    (void)as; (void)device; (void)errh;
+    if (!stp || !prm || !rh) return EINVAL;
+    void *raw = mem_zalloc(sizeof(dummy_audio_st), dummy_audio_destructor);
+    if (!raw) return ENOMEM;
+    auto *st = new (raw) dummy_audio_st();
+    st->handler = reinterpret_cast<void *>(rh);
+    st->arg = arg;
+    dummy_audio_init(st, prm->srate, prm->ch, prm->ptime);
+    prm->fmt = AUFMT_S16LE;
+    dummy_audio_schedule(st, dummy_ausrc_tick);
+    *stp = reinterpret_cast<struct ausrc_st *>(st);
+    return 0;
+}
+
+int dummy_auplay_alloc(struct auplay_st **stp, const struct auplay *ap, struct auplay_prm *prm,
+                       const char *device, auplay_write_h *wh, void *arg)
+{
+    (void)ap; (void)device;
+    if (!stp || !prm || !wh) return EINVAL;
+    void *raw = mem_zalloc(sizeof(dummy_audio_st), dummy_audio_destructor);
+    if (!raw) return ENOMEM;
+    auto *st = new (raw) dummy_audio_st();
+    st->handler = reinterpret_cast<void *>(wh);
+    st->arg = arg;
+    dummy_audio_init(st, prm->srate, prm->ch, prm->ptime);
+    prm->fmt = AUFMT_S16LE;
+    dummy_audio_schedule(st, dummy_auplay_tick);
+    *stp = reinterpret_cast<struct auplay_st *>(st);
+    return 0;
+}
+
+struct ausrc *s_dummy_ausrc = nullptr;
+struct auplay *s_dummy_auplay = nullptr;
+
+} // namespace
+
+// ============================================================================
 // MediaDriverManager Implementation
 // ============================================================================
 
@@ -1423,6 +1532,13 @@ int MediaDriverManager::register_baresip_plugins()
         return rc;
     }
 
+    if (!s_dummy_ausrc && ausrc_find(baresip_ausrcl(), "nil") == nullptr) {
+        (void)ausrc_register(&s_dummy_ausrc, baresip_ausrcl(), "nil", dummy_ausrc_alloc);
+    }
+    if (!s_dummy_auplay && auplay_find(baresip_auplayl(), "nil") == nullptr) {
+        (void)auplay_register(&s_dummy_auplay, baresip_auplayl(), "nil", dummy_auplay_alloc);
+    }
+
     m_plugins_registered = true;
     return 0;
 }
@@ -1444,6 +1560,12 @@ void MediaDriverManager::unregister_baresip_plugins()
     }
     if (m_vidisp) {
         m_vidisp = static_cast<struct vidisp *>(mem_deref(m_vidisp));
+    }
+    if (s_dummy_ausrc) {
+        s_dummy_ausrc = static_cast<struct ausrc *>(mem_deref(s_dummy_ausrc));
+    }
+    if (s_dummy_auplay) {
+        s_dummy_auplay = static_cast<struct auplay *>(mem_deref(s_dummy_auplay));
     }
 
     if (s_active_manager == this) {
