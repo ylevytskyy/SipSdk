@@ -9,7 +9,9 @@ public final class SipAppModel: NSObject, ObservableObject, SipMacClientDelegate
     @Published public var registrationReason: String = ""
 
     @Published public var activeCall: SipMacCall?
+    @Published public var calls: [SipMacCall] = []
     @Published public var incomingCall: SipMacCall?
+    @Published public var busyBannerMessage: String?
     @Published public var callState: SipMacCallState = .closed
     @Published public var callStateCode: Int = 0
     @Published public var callStateReason: String = ""
@@ -133,8 +135,32 @@ public final class SipAppModel: NSObject, ObservableObject, SipMacClientDelegate
         _ = client.unregisterAccount()
     }
 
+    public func showBusyBanner(_ message: String) {
+        self.busyBannerMessage = message
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4.0) { [weak self] in
+            if self?.busyBannerMessage == message {
+                self?.busyBannerMessage = nil
+            }
+        }
+    }
+
+    public func swapToCall(_ target: SipMacCall) {
+        if target.isOnHold {
+            _ = target.setHold(false)
+        }
+        self.activeCall = target
+        self.isOnHold = target.isOnHold
+        self.isMuted = target.isMuted
+        self.hasRemoteVideo = target.hasVideo
+        self.callState = target.isOnHold ? .hold : .established
+    }
+
     public func makeCall(targetUri: String, withVideo: Bool) {
-        guard let client = client, activeCall == nil else { return }
+        guard let client = client else { return }
+        if calls.count >= Int(client.maxCalls) {
+            showBusyBanner("Maximum concurrent calls reached (Busy)")
+            return
+        }
         NSApp.keyWindow?.makeFirstResponder(nil)
         self.isHangingUp = false
         var uri = targetUri.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -143,6 +169,9 @@ public final class SipAppModel: NSObject, ObservableObject, SipMacClientDelegate
         }
 
         if let call = client.makeCall(toUri: uri, withVideo: withVideo) {
+            if !calls.contains(where: { $0 === call }) {
+                calls.append(call)
+            }
             self.activeCall = call
             self.hasRemoteVideo = withVideo
             self.callState = .connecting
@@ -150,6 +179,8 @@ public final class SipAppModel: NSObject, ObservableObject, SipMacClientDelegate
             self.isOnHold = false
             self.callDurationSeconds = 0
             self.callDurationFormatted = "00:00"
+        } else {
+            showBusyBanner("Maximum concurrent calls reached (Busy)")
         }
     }
 
@@ -169,16 +200,21 @@ public final class SipAppModel: NSObject, ObservableObject, SipMacClientDelegate
     public func answerIncomingCall(withVideo: Bool) {
         guard let call = incomingCall else { return }
         _ = call.answer(withVideo: withVideo)
+        if !calls.contains(where: { $0 === call }) {
+            calls.append(call)
+        }
         self.activeCall = call
         self.incomingCall = nil
         self.hasRemoteVideo = withVideo || call.hasVideo
         self.callState = .connecting
+        self.isOnHold = false
         self.isHangingUp = false
     }
 
     public func declineIncomingCall() {
         guard let call = incomingCall else { return }
         _ = call.hangup(withCode: 603, reason: "Decline")
+        calls.removeAll(where: { $0 === call })
         historyStore.addRecord(remoteUri: call.remoteUri,
                                direction: "incoming",
                                hasVideo: call.hasVideo,
@@ -330,22 +366,34 @@ public final class SipAppModel: NSObject, ObservableObject, SipMacClientDelegate
     public func client(_ client: SipMacClient, didReceiveIncomingCall call: SipMacCall) {
         DispatchQueue.main.async {
             print("[SipAppModel] Incoming call from \(call.remoteUri)")
-            if self.activeCall == nil {
-                self.incomingCall = call
-            } else {
-                _ = call.hangup(withCode: 486, reason: "Busy Here")
+            if !self.calls.contains(where: { $0 === call }) {
+                self.calls.append(call)
             }
+            self.incomingCall = call
+        }
+    }
+
+    public func client(_ client: SipMacClient, didRejectIncomingCallBusyFrom callerUri: String) {
+        DispatchQueue.main.async {
+            self.showBusyBanner("Line busy — rejected call from \(callerUri)")
         }
     }
 
     public func client(_ client: SipMacClient, call: SipMacCall, didChange state: SipMacCallState, code: Int, reason: String) {
         DispatchQueue.main.async {
-            self.callState = state
-            self.callStateCode = code
-            self.callStateReason = reason
+            if call === self.activeCall || self.activeCall == nil {
+                self.callState = state
+                self.callStateCode = code
+                self.callStateReason = reason
+            }
 
             switch state {
             case .established:
+                if !self.calls.contains(where: { $0 === call }) {
+                    self.calls.append(call)
+                }
+                self.activeCall = call
+                self.isOnHold = false
                 print("[SipAppModel] Call established with \(call.remoteUri)")
                 if self.durationTimer == nil {
                     self.startDurationTimer()
@@ -376,9 +424,13 @@ public final class SipAppModel: NSObject, ObservableObject, SipMacClientDelegate
                         }
                     }
                 }
+            case .hold:
+                if call === self.activeCall {
+                    self.isOnHold = true
+                }
             case .closed:
                 print("[SipAppModel] Call closed (\(code) \(reason))")
-                self.stopDurationTimer()
+                self.calls.removeAll(where: { $0 === call })
                 self.isHangingUp = false
                 let dur = self.callDurationSeconds
                 let dir = call.isOutgoing ? "outgoing" : "incoming"
@@ -388,18 +440,27 @@ public final class SipAppModel: NSObject, ObservableObject, SipMacClientDelegate
                                             hasVideo: call.hasVideo,
                                             durationSeconds: dur,
                                             status: status)
-                if self.activeCall === call {
-                    self.activeCall = nil
-                    self.hasRemoteVideo = false
-                    self.isMuted = false
-                    self.isOnHold = false
-                    self.isCallSecure = false
-                    self.callStatsSummary = ""
-                    self.transferStatusMessage = nil
-                    self.pendingTransferUri = nil
-                }
                 if self.incomingCall === call {
                     self.incomingCall = nil
+                }
+                if self.activeCall === call {
+                    if let nextCall = self.calls.first(where: { !$0.isClosed }) {
+                        self.activeCall = nextCall
+                        self.isOnHold = nextCall.isOnHold
+                        self.callState = nextCall.isOnHold ? .hold : .established
+                    } else {
+                        self.stopDurationTimer()
+                        self.activeCall = nil
+                        self.hasRemoteVideo = false
+                        self.isMuted = false
+                        self.isOnHold = false
+                        self.isCallSecure = false
+                        self.callStatsSummary = ""
+                        self.transferStatusMessage = nil
+                        self.pendingTransferUri = nil
+                    }
+                } else if self.calls.isEmpty {
+                    self.stopDurationTimer()
                 }
                 if self.isAutomatedTest && self.autoExitOnTestComplete {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {

@@ -3,6 +3,7 @@ package com.sipsdk.sample.viewmodels
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.sipsdk.SipBusyException
 import com.sipsdk.SipCall
 import com.sipsdk.SipCallState
 import com.sipsdk.SipCameraPosition
@@ -48,6 +49,12 @@ class SipAppViewModel(application: Application) : AndroidViewModel(application),
 
     private val _activeCall = MutableStateFlow<SipCall?>(null)
     val activeCall: StateFlow<SipCall?> = _activeCall.asStateFlow()
+
+    private val _openCalls = MutableStateFlow<List<SipCall>>(emptyList())
+    val openCalls: StateFlow<List<SipCall>> = _openCalls.asStateFlow()
+
+    private val _busyBannerMessage = MutableStateFlow<String?>(null)
+    val busyBannerMessage: StateFlow<String?> = _busyBannerMessage.asStateFlow()
 
     private val _activeCallState = MutableStateFlow(SipCallState.CLOSED)
     val activeCallState: StateFlow<SipCallState> = _activeCallState.asStateFlow()
@@ -181,13 +188,19 @@ class SipAppViewModel(application: Application) : AndroidViewModel(application),
             "sip:$trimmed@${accountStore.account.domain}:${accountStore.account.port}"
         }
 
-        val call = client.makeCall(target, withVideo = withVideo)
+        val call = try {
+            client.makeCall(target, withVideo = withVideo)
+        } catch (busy: SipBusyException) {
+            showBusyBanner(busy.message ?: "Maximum concurrent calls reached (Busy)")
+            return
+        }
         if (call != null) {
             _activeCall.value = call
             _activeCallState.value = SipCallState.CONNECTING
             _callDurationSeconds.value = 0L
             _callIsOnHold.value = false
             _isShowingInCallView.value = true
+            refreshOpenCalls()
             if (withVideo) {
                 _isSpeakerEnabled.value = true
                 client.isSpeakerEnabled = true
@@ -204,6 +217,8 @@ class SipAppViewModel(application: Application) : AndroidViewModel(application),
             )
             addHistoryItem(item)
             startDurationTimer()
+        } else {
+            showBusyBanner("Failed to place call")
         }
     }
 
@@ -214,25 +229,64 @@ class SipAppViewModel(application: Application) : AndroidViewModel(application),
         _activeCall.value = call
         _activeCallState.value = SipCallState.CONNECTING
         _callDurationSeconds.value = 0L
+        _callIsOnHold.value = false
         _isShowingInCallView.value = true
+        refreshOpenCalls()
         startDurationTimer()
+    }
+
+    fun swapToCall(target: SipCall) {
+        if (target.isClosed) return
+        if (target.isOnHold) {
+            target.setHold(false)
+        }
+        _activeCall.value = target
+        _callIsOnHold.value = target.isOnHold
+        _activeCallState.value = if (target.isOnHold) SipCallState.HOLD else SipCallState.ESTABLISHED
+        refreshOpenCalls()
+    }
+
+    private fun refreshOpenCalls() {
+        _openCalls.value = sipClient?.activeCalls ?: emptyList()
+    }
+
+    private fun showBusyBanner(message: String) {
+        _busyBannerMessage.value = message
+        viewModelScope.launch {
+            delay(4000)
+            if (_busyBannerMessage.value == message) {
+                _busyBannerMessage.value = null
+            }
+        }
     }
 
     fun declineIncomingCall() {
         val call = _incomingCall.value ?: return
         _incomingCall.value = null
         call.hangup(statusCode = 603, reason = "Decline")
-        _activeCall.value = null
-        _isShowingInCallView.value = false
-        stopDurationTimer()
+        refreshOpenCalls()
+        if (_openCalls.value.isEmpty()) {
+            _activeCall.value = null
+            _isShowingInCallView.value = false
+            stopDurationTimer()
+        }
     }
 
     fun hangupActiveCall() {
         _activeCall.value?.hangup()
-        _activeCall.value = null
-        _activeCallState.value = SipCallState.CLOSED
-        _isShowingInCallView.value = false
-        stopDurationTimer()
+        refreshOpenCalls()
+        val remaining = _openCalls.value
+        if (remaining.isNotEmpty()) {
+            val next = remaining.first()
+            _activeCall.value = next
+            _callIsOnHold.value = next.isOnHold
+            _activeCallState.value = if (next.isOnHold) SipCallState.HOLD else SipCallState.ESTABLISHED
+        } else {
+            _activeCall.value = null
+            _activeCallState.value = SipCallState.CLOSED
+            _isShowingInCallView.value = false
+            stopDurationTimer()
+        }
     }
 
     fun toggleMute() {
@@ -336,6 +390,7 @@ class SipAppViewModel(application: Application) : AndroidViewModel(application),
     override fun onIncomingCall(call: SipCall) {
         viewModelScope.launch {
             _incomingCall.value = call
+            refreshOpenCalls()
             val item = CallHistoryItem(
                 remoteUri = call.remoteUri,
                 displayName = call.peerDisplayName,
@@ -348,23 +403,49 @@ class SipAppViewModel(application: Application) : AndroidViewModel(application),
         }
     }
 
+    override fun onCallRejectedBusy(callerUri: String) {
+        viewModelScope.launch {
+            showBusyBanner("Line busy — rejected call from $callerUri")
+        }
+    }
+
     override fun onCallStateChanged(call: SipCall, state: SipCallState, code: Int, reason: String) {
         viewModelScope.launch {
-            _activeCallState.value = state
+            refreshOpenCalls()
+            if (_activeCall.value?.callId == call.callId || _activeCall.value == null) {
+                _activeCallState.value = state
+            }
             if (state == SipCallState.ESTABLISHED) {
                 _activeCall.value = call
+                _callIsOnHold.value = false
+                _activeCallState.value = state
                 _isShowingInCallView.value = true
                 startDurationTimer()
+            } else if (state == SipCallState.HOLD) {
+                if (_activeCall.value?.callId == call.callId) {
+                    _callIsOnHold.value = true
+                }
             } else if (state == SipCallState.CLOSED) {
-                stopDurationTimer()
                 if (_incomingCall.value?.callId == call.callId) {
                     _incomingCall.value = null
                 }
-                _activeCall.value = null
-                _isShowingInCallView.value = false
-                if (_isSpeakerEnabled.value) {
-                    _isSpeakerEnabled.value = false
-                    sipClient?.isSpeakerEnabled = false
+                val remaining = sipClient?.activeCalls ?: emptyList()
+                _openCalls.value = remaining
+                if (remaining.isNotEmpty()) {
+                    if (_activeCall.value?.callId == call.callId) {
+                        val next = remaining.firstOrNull { !it.isOnHold } ?: remaining.first()
+                        _activeCall.value = next
+                        _callIsOnHold.value = next.isOnHold
+                        _activeCallState.value = if (next.isOnHold) SipCallState.HOLD else SipCallState.ESTABLISHED
+                    }
+                } else {
+                    stopDurationTimer()
+                    _activeCall.value = null
+                    _isShowingInCallView.value = false
+                    if (_isSpeakerEnabled.value) {
+                        _isSpeakerEnabled.value = false
+                        sipClient?.isSpeakerEnabled = false
+                    }
                 }
                 // Update duration in history
                 val finalDuration = call.durationSeconds
@@ -382,9 +463,12 @@ class SipAppViewModel(application: Application) : AndroidViewModel(application),
 
     override fun onCallMediaChanged(call: SipCall, width: Int, height: Int, onHold: Boolean, isMuted: Boolean) {
         viewModelScope.launch {
-            _callIsOnHold.value = onHold
-            _isMicrophoneMuted.value = isMuted
-            if (width > 0 && height > 0) {
+            refreshOpenCalls()
+            if (_activeCall.value?.callId == call.callId || _activeCall.value == null) {
+                _callIsOnHold.value = onHold
+                _isMicrophoneMuted.value = isMuted
+            }
+            if (width > 0 && height > 0 && !onHold) {
                 _activeCall.value = call
             }
         }

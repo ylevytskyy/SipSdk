@@ -175,6 +175,7 @@ export class SipCall extends Emitter {
   answer({ video = true } = {}) {
     this.#assertOpen();
     if (this.isOutgoing) throw new Error('SipSdk: answer() is only valid for incoming calls');
+    this.#client._autoHoldOthers(this);
     const withVideo = video && this.#hasVideo;
     this.#hasVideo = withVideo;
     this.#session.answer({
@@ -197,8 +198,25 @@ export class SipCall extends Emitter {
 
   setHold(hold) {
     this.#assertOpen();
-    if (hold) this.#session.hold();
-    else this.#session.unhold();
+    if (hold) {
+      let ok = false;
+      try {
+        ok = this.#session.hold() !== false;
+      } catch {
+        ok = false;
+      }
+      if (!ok) {
+        if (this.#localStream) {
+          for (const track of this.#localStream.getAudioTracks()) track.enabled = false;
+        }
+        this.#onHold = true;
+        this.#setState(SipCallState.Hold);
+        this.#emitMedia();
+      }
+    } else {
+      this.#client._autoHoldOthers(this);
+      this.#session.unhold();
+    }
   }
 
   setMuted(muted) {
@@ -532,6 +550,9 @@ export class SipClient extends Emitter {
     this.pcConfig = { iceServers: [] };
   }
 
+  #maxCalls = 4;
+  get maxCalls() { return this.#maxCalls; }
+  set maxCalls(value) { this.#maxCalls = Math.max(1, Math.min(8, Number(value) || 4)); }
   get isRegistered() { return this.#registered; }
   get isStarted() { return this.#started; }
   get calls() { return [...this.#calls]; }
@@ -556,15 +577,16 @@ export class SipClient extends Emitter {
   /**
    * Registers a SIP account over a SIP WebSocket (ws:// or wss://).
    * @param {{username: string, domain: string, password?: string, wsUri: string,
-   *          displayName?: string, iceServers?: RTCIceServer[]}} account
+   *          displayName?: string, iceServers?: RTCIceServer[], maxCalls?: number}} account
    */
-  register({ username, domain, password = '', wsUri, displayName = '', iceServers = [] }) {
+  register({ username, domain, password = '', wsUri, displayName = '', iceServers = [], maxCalls = 4 }) {
     if (!this.#started) throw new Error('SipSdk: call start() before register()');
     if (!username) throw new Error('SipSdk: username is required');
     if (!domain) throw new Error('SipSdk: domain is required');
     if (!wsUri) throw new Error('SipSdk: wsUri is required');
     if (this.#ua) this.#ua.stop();
 
+    this.maxCalls = maxCalls;
     this.#registered = false;
     this.#domain = domain;
     this.accountAor = `sip:${username}@${domain}`;
@@ -592,6 +614,14 @@ export class SipClient extends Emitter {
     ua.on('registrationFailed', (e) => report(SipRegistrationState.Failed, e));
     ua.on('newRTCSession', (e) => {
       if (this.#ua !== ua || e.originator !== 'remote') return;
+      if (this.#openCalls().length >= this.#maxCalls) {
+        try {
+          e.session.terminate({ status_code: 486, reason_phrase: 'Busy Here' });
+        } catch { /* ignore */ }
+        const callerUri = e.session?.remote_identity?.uri?.toString() || '';
+        this.emit('callRejectedBusy', { callerUri });
+        return;
+      }
       const call = new SipCall(this, e.session, { outgoing: false, video: offerHasVideo(e.request?.body) });
       this.#calls.add(call);
       this.emit('incomingCall', { call });
@@ -624,6 +654,13 @@ export class SipClient extends Emitter {
     if (!this.#started) throw new Error('SipSdk: call start() before makeCall()');
     if (!this.#ua || !this.#registered) throw new Error('SipSdk: register an account before makeCall()');
     if (!target) throw new Error('SipSdk: target is required');
+    if (this.#openCalls().length >= this.#maxCalls) {
+      const err = new Error('SipSdk: maximum concurrent calls reached (Busy)');
+      err.code = 'EBUSY';
+      err.statusCode = 486;
+      throw err;
+    }
+    this._autoHoldOthers(null);
     const session = this.#ua.call(toSipUri(target, this.#domain), {
       mediaConstraints: { audio: true, video: video ? VIDEO_CONSTRAINTS : false },
       pcConfig: this.pcConfig,
@@ -631,6 +668,19 @@ export class SipClient extends Emitter {
     const call = new SipCall(this, session, { outgoing: true, video: !!video });
     this.#calls.add(call);
     return call;
+  }
+
+  #openCalls() {
+    return [...this.#calls].filter((c) => !c.isClosed);
+  }
+
+  /** @internal */
+  _autoHoldOthers(exceptCall) {
+    for (const call of this.#calls) {
+      if (call !== exceptCall && !call.isClosed && !call.isOnHold) {
+        call.setHold(true);
+      }
+    }
   }
 
   /**

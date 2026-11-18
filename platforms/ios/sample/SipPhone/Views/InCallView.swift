@@ -40,9 +40,15 @@ struct InCallView: View {
                 }
             }
 
-            // Top Header: Remote party & duration
-            VStack {
+            // Top Header: Remote party, multi-line switcher, & call waiting
+            VStack(spacing: 8) {
                 topHeader
+                if model.openCalls.count > 1 {
+                    lineSwitcherBar
+                }
+                if let waiting = model.incomingCall, waiting.id != call.id {
+                    callWaitingBanner(waiting)
+                }
                 Spacer()
             }
             .padding(.top, 16)
@@ -148,6 +154,65 @@ struct InCallView: View {
         }
     }
 
+    private var lineSwitcherBar: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(model.openCalls) { line in
+                    Button {
+                        Task { await model.swapToCall(line) }
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: line.isOnHold ? "pause.circle.fill" : "phone.fill")
+                                .font(.caption2)
+                            Text(line.peerDisplayName ?? line.remoteUri)
+                                .font(.caption.weight(.semibold))
+                                .lineLimit(1)
+                            Text(line.isOnHold ? "Hold" : "Active")
+                                .font(.caption2)
+                                .foregroundColor(.white.opacity(0.8))
+                        }
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(line.id == call.id ? Color.blue : Color.black.opacity(0.5))
+                        .clipShape(Capsule())
+                    }
+                }
+            }
+            .padding(.horizontal, 16)
+        }
+    }
+
+    private func callWaitingBanner(_ waiting: SipCall) -> some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Call Waiting")
+                    .font(.caption.weight(.bold))
+                    .foregroundColor(.green)
+                Text(waiting.peerDisplayName ?? waiting.remoteUri)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundColor(.white)
+                    .lineLimit(1)
+            }
+            Spacer()
+            Button("Decline") {
+                Task { await model.declineIncomingCall() }
+            }
+            .buttonStyle(.bordered)
+            .tint(.red)
+            Button("Hold & Answer") {
+                Task { await model.answerIncomingCall(withVideo: waiting.hasVideo) }
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(.green)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(Color.black.opacity(0.82))
+        .cornerRadius(14)
+        .padding(.horizontal, 16)
+    }
+
     private var pipLocalPreview: some View {
         ZStack(alignment: .topTrailing) {
             SipVideoView(videoUIView: localVideoUIView)
@@ -225,6 +290,19 @@ struct InCallView: View {
                 }
             }
 
+            // Swap Lines Button (shown when multiple calls are open)
+            if let other = model.openCalls.first(where: { $0.id != call.id }) {
+                controlButton(
+                    icon: "arrow.left.arrow.right",
+                    label: "Swap",
+                    isActive: false
+                ) {
+                    Task {
+                        await model.swapToCall(other)
+                    }
+                }
+            }
+
             // Transfer Button
             controlButton(
                 icon: "arrowshape.turn.up.right.fill",
@@ -237,8 +315,11 @@ struct InCallView: View {
             // Hangup Button
             Button {
                 Task {
+                    let hadOnlyOneCall = model.openCalls.count <= 1
                     await call.hangup()
-                    model.isShowingInCallView = false
+                    if hadOnlyOneCall {
+                        model.isShowingInCallView = false
+                    }
                 }
             } label: {
                 Image(systemName: "phone.down.fill")
