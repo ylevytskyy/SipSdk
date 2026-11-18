@@ -135,7 +135,7 @@ if [[ "$IS_MSVC" -eq 1 ]]; then
   OPUS_LIB_FILE="$WORK_ROOT/prefix/lib/opus.lib"
   RE_LIB_FILE="$WORK_ROOT/prefix/lib/re-static.lib"
   [[ -f "$RE_LIB_FILE" ]] || RE_LIB_FILE="$WORK_ROOT/prefix/lib/re.lib"
-  EXTRA_C_FLAGS="-DUSE_TLS=1 -DUSE_DTLS=1 /I$WORK_ROOT/prefix/include /I$WORK_ROOT/prefix/include/opus"
+  EXTRA_C_FLAGS="-DUSE_TLS=1 -DUSE_DTLS=1 -I$WORK_ROOT/prefix/include -I$WORK_ROOT/prefix/include/opus"
 else
   OPUS_LIB_FILE="$WORK_ROOT/prefix/lib/libopus.a"
   RE_LIB_FILE="$WORK_ROOT/prefix/lib/libre.a"
@@ -173,7 +173,7 @@ if [[ "$IS_MSVC" -eq 1 ]]; then
   [[ -f "$BARESIP_LIB_FILE" ]] || BARESIP_LIB_FILE="$WORK_ROOT/baresip-build/baresip.lib"
   cp "$RE_LIB_FILE" "$OUTPUT_DIR/lib/libre.lib"
   cp "$OPUS_LIB_FILE" "$OUTPUT_DIR/lib/libopus.lib"
-  lib.exe /NOLOGO /OUT:"$OUTPUT_DIR/lib/libbaresip.lib" "$BARESIP_LIB_FILE" "$RE_LIB_FILE" "$OPUS_LIB_FILE"
+  MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL="*" lib.exe /NOLOGO "/OUT:$OUTPUT_DIR/lib/libbaresip.lib" "$BARESIP_LIB_FILE" "$RE_LIB_FILE" "$OPUS_LIB_FILE"
 else
   cp "$RE_LIB_FILE" "$OUTPUT_DIR/lib/"
 
