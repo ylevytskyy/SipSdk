@@ -94,6 +94,8 @@ jobs:
           dotnet build platforms/windows/dotnet/SipSdk.sln -c Release
 
       - name: Run .NET Unit Tests
+        env:
+          SIP_CORE_LIB_DIR: ${{ github.workspace }}\build_win\Release
         run: |
           dotnet test platforms/windows/dotnet/tests/SipSdk.Tests/SipSdk.Tests.csproj -c Release --verbosity normal
 

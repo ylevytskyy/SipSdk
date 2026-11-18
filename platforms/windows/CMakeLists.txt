@@ -217,7 +217,17 @@ target_link_libraries(test_mf_drivers
         sip_core_dll
 )
 
-if(NOT WIN32 AND NOT MINGW)
+if(WIN32 OR MINGW)
+    target_link_libraries(test_mf_drivers
+        PRIVATE
+            mfplat
+            mf
+            mfuuid
+            mfreadwrite
+            wmcodecdspuuid
+            ole32
+    )
+else()
     target_link_libraries(test_mf_drivers PRIVATE pthread)
 endif()
 
