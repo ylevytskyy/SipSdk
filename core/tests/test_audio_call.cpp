@@ -219,6 +219,41 @@ static void clear_call_events()
     g_call_events.clear();
 }
 
+static std::mutex g_busy_mutex;
+static std::condition_variable g_busy_cv;
+static std::vector<std::string> g_busy_rejected_uris;
+
+static void test_on_call_rejected_busy(sip_client_t *client, const char *caller_uri, void *user_data)
+{
+    (void)client;
+    (void)user_data;
+    {
+        std::lock_guard<std::mutex> lock(g_busy_mutex);
+        g_busy_rejected_uris.push_back(caller_uri ? caller_uri : "");
+    }
+    g_busy_cv.notify_all();
+}
+
+static bool wait_for_busy_rejected(int timeout_sec, std::string &matched_uri)
+{
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(timeout_sec);
+    std::unique_lock<std::mutex> lock(g_busy_mutex);
+    while (std::chrono::steady_clock::now() < deadline) {
+        if (!g_busy_rejected_uris.empty()) {
+            matched_uri = g_busy_rejected_uris.back();
+            return true;
+        }
+        g_busy_cv.wait_for(lock, std::chrono::milliseconds(50));
+    }
+    return false;
+}
+
+static void clear_busy_events()
+{
+    std::lock_guard<std::mutex> lock(g_busy_mutex);
+    g_busy_rejected_uris.clear();
+}
+
 static void test_on_incoming_call(sip_client_t *client, sip_call_t *call, void *user_data)
 {
     (void)user_data;
@@ -1047,6 +1082,7 @@ static int run_test_10(const sip_callbacks_t &callbacks, const char *config_dir,
 }
 
 static int run_test_8b(const sip_callbacks_t &callbacks, const char *config_dir, const char *asterisk_host, int asterisk_port);
+static int run_test_11_cap(const sip_callbacks_t &callbacks, const char *config_dir, const char *asterisk_host, int asterisk_port);
 
 int main(int argc, char *argv[])
 {
@@ -1066,6 +1102,7 @@ int main(int argc, char *argv[])
     callbacks.on_call_stats = test_on_call_stats;
     callbacks.on_transfer_status = test_on_transfer_status;
     callbacks.on_transfer_request = test_on_transfer_request;
+    callbacks.on_call_rejected_busy = test_on_call_rejected_busy;
 
     if (argc > 4 && std::string(argv[4]) == "--only-dtls") {
         return run_test_8b(callbacks, config_dir, asterisk_host, asterisk_port);
@@ -1075,6 +1112,9 @@ int main(int argc, char *argv[])
     }
     if (argc > 4 && std::string(argv[4]) == "--only-transfer") {
         return run_test_10(callbacks, config_dir, asterisk_host, asterisk_port);
+    }
+    if (argc > 4 && std::string(argv[4]) == "--only-cap") {
+        return run_test_11_cap(callbacks, config_dir, asterisk_host, asterisk_port);
     }
 
     // --- Test 1: Client initialization & account registration ---
@@ -1429,6 +1469,9 @@ int main(int argc, char *argv[])
     // --- Test 10: Blind & attended call transfer (RFC 3515 REFER) ---
     run_test_10(callbacks, config_dir, asterisk_host, asterisk_port);
 
+    // --- Test 11: max_calls cap (EBUSY on dial & 486 Busy Here on incoming) ---
+    run_test_11_cap(callbacks, config_dir, asterisk_host, asterisk_port);
+
     std::printf("ALL_AUDIO_CALL_TESTS_PASSED\n");
     return 0;
 }
@@ -1516,5 +1559,125 @@ static int run_test_8b(const sip_callbacks_t &callbacks, const char *config_dir,
         sip_call_destroy(dtls_call);
         sip_client_destroy(dtls_client);
     }
+    return 0;
+}
+
+static int run_test_11_cap(const sip_callbacks_t &callbacks, const char *config_dir, const char *asterisk_host, int asterisk_port)
+{
+    std::printf("--- Test 11: max_calls cap (EBUSY on dial & 486 Busy Here on incoming) ---\n");
+    clear_call_events();
+    clear_incoming_events();
+    clear_busy_events();
+
+    sip_client_t *client = sip_client_create(&callbacks, nullptr);
+    TEST_ASSERT(client != nullptr, "cap client creation failed");
+    TEST_ASSERT(sip_client_init(client, config_dir) == 0, "sip_client_init failed");
+
+    sip_account_config_t cfg{};
+    cfg.user = "1001";
+    cfg.domain = asterisk_host;
+    cfg.pwd = "test1001";
+    cfg.transport = "udp";
+    cfg.port = asterisk_port;
+    cfg.max_calls = 1;
+    TEST_ASSERT(sip_client_register_account(client, &cfg) == 0, "sip_client_register_account failed");
+    std::this_thread::sleep_for(std::chrono::milliseconds(600));
+
+    // 1. Fill max_calls=1 with an active call to 9001, then assert second dial returns EBUSY.
+    std::string echo_uri = "sip:9001@" + std::string(asterisk_host) + ":" + std::to_string(asterisk_port);
+    sip_call_t *call1 = nullptr;
+    int rc = sip_call_dial(client, echo_uri.c_str(), false, &call1);
+    TEST_ASSERT(rc == 0 && call1 != nullptr, "First sip_call_dial to 9001 should succeed");
+
+    CallEvent estab1;
+    TEST_ASSERT(wait_for_call_state(call1, SIP_CALL_STATE_ESTABLISHED, 10, estab1),
+                "First call did not establish");
+
+    std::string music_uri = "sip:9002@" + std::string(asterisk_host) + ":" + std::to_string(asterisk_port);
+    sip_call_t *call2 = nullptr;
+    int rc_busy = sip_call_dial(client, music_uri.c_str(), false, &call2);
+    TEST_ASSERT(rc_busy == EBUSY && call2 == nullptr,
+                "Second sip_call_dial over max_calls=1 must return EBUSY and null out_call");
+
+    errno = 0;
+    sip_call_t *make_busy = sip_call_make(client, music_uri.c_str(), false);
+    TEST_ASSERT(make_busy == nullptr && errno == EBUSY,
+                "sip_call_make over max_calls=1 must return nullptr with errno == EBUSY");
+
+    TEST_ASSERT(sip_call_hangup(call1, 0, "Hangup") == 0, "hangup call1 failed");
+    CallEvent close1;
+    TEST_ASSERT(wait_for_call_state(call1, SIP_CALL_STATE_CLOSED, 5, close1), "call1 did not close");
+    sip_call_destroy(call1);
+
+    // 2. After call1 closes, dialing 9003 (delayed callback) succeeds, then filling cap triggers 486 + on_call_rejected_busy.
+    clear_incoming_events();
+    clear_busy_events();
+    std::string cb_uri = "sip:9003@" + std::string(asterisk_host) + ":" + std::to_string(asterisk_port);
+    sip_call_t *cb_call = nullptr;
+    TEST_ASSERT(sip_call_dial(client, cb_uri.c_str(), false, &cb_call) == 0 && cb_call != nullptr,
+                "sip_call_dial to 9003 after call1 closed should succeed");
+    CallEvent cb_estab;
+    TEST_ASSERT(wait_for_call_state(cb_call, SIP_CALL_STATE_ESTABLISHED, 8, cb_estab),
+                "9003 callback trigger call did not establish");
+    TEST_ASSERT(sip_call_hangup(cb_call, 0, "Hangup") == 0, "hangup 9003 trigger call failed");
+    CallEvent cb_closed;
+    TEST_ASSERT(wait_for_call_state(cb_call, SIP_CALL_STATE_CLOSED, 8, cb_closed),
+                "9003 callback trigger call did not close");
+    sip_call_destroy(cb_call);
+
+    sip_call_t *hold_cap_call = nullptr;
+    TEST_ASSERT(sip_call_dial(client, echo_uri.c_str(), false, &hold_cap_call) == 0 && hold_cap_call != nullptr,
+                "sip_call_dial to 9001 to fill cap failed");
+    CallEvent estab_cap;
+    TEST_ASSERT(wait_for_call_state(hold_cap_call, SIP_CALL_STATE_ESTABLISHED, 10, estab_cap),
+                "9001 cap-holding call did not establish");
+
+    std::string busy_caller_uri;
+    TEST_ASSERT(wait_for_busy_rejected(8, busy_caller_uri),
+                "Expected on_call_rejected_busy when Asterisk 9003 callback arrived over max_calls=1");
+    TEST_ASSERT(!busy_caller_uri.empty(), "Expected non-empty caller_uri in on_call_rejected_busy");
+    {
+        std::lock_guard<std::mutex> lock(g_incoming_mutex);
+        TEST_ASSERT(g_incoming_events.empty(), "on_incoming_call must not fire when max_calls cap is reached");
+    }
+    std::printf("PASS: Asterisk 9003 callback rejected at max_calls=1 (busy_caller_uri='%s')\n",
+                busy_caller_uri.c_str());
+
+    TEST_ASSERT(sip_call_hangup(hold_cap_call, 0, "Hangup") == 0, "hangup hold_cap_call failed");
+    CallEvent close_cap;
+    TEST_ASSERT(wait_for_call_state(hold_cap_call, SIP_CALL_STATE_CLOSED, 5, close_cap), "hold_cap_call did not close");
+    sip_call_destroy(hold_cap_call);
+
+    // 3. Assert 486 Busy Here on the wire via LoopbackCaller when max_calls=1 is occupied.
+    clear_incoming_events();
+    clear_busy_events();
+    LoopbackCaller busy_peer(15099);
+    busy_peer.start();
+    cfg.domain = "127.0.0.1";
+    cfg.port = 15099;
+    TEST_ASSERT(sip_client_register_account(client, &cfg) == 0, "register against LoopbackCaller failed");
+    TEST_ASSERT(busy_peer.wait_for_registration(5), "LoopbackCaller did not receive registration");
+
+    sip_call_t *active_lb = nullptr;
+    TEST_ASSERT(sip_call_dial(client, "sip:echo@127.0.0.1:15099", false, &active_lb) == 0 && active_lb != nullptr,
+                "dial to LoopbackCaller failed");
+    std::string unused_sdp;
+    TEST_ASSERT(busy_peer.wait_for_client_invite(5, unused_sdp), "LoopbackCaller did not receive INVITE");
+
+    busy_peer.send_invite("call-id-over-cap-486", 77, "Over Cap Caller", false);
+    int wire_resp = busy_peer.wait_for_response(5);
+    TEST_ASSERT(wire_resp == 486, "Expected 486 Busy Here on wire when max_calls=1 is full");
+    std::string wire_busy_uri;
+    TEST_ASSERT(wait_for_busy_rejected(5, wire_busy_uri), "Expected on_call_rejected_busy for LoopbackCaller INVITE");
+    TEST_ASSERT(wire_busy_uri.find("bob") != std::string::npos, "Expected caller URI in on_call_rejected_busy");
+
+    sip_call_hangup(active_lb, 0, "Hangup");
+    CallEvent close_lb;
+    wait_for_call_state(active_lb, SIP_CALL_STATE_CLOSED, 5, close_lb);
+    sip_call_destroy(active_lb);
+    busy_peer.stop();
+
+    sip_client_destroy(client);
+    std::printf("PASS: max_calls cap (EBUSY & 486 Busy Here) verified\n");
     return 0;
 }

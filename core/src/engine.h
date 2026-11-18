@@ -40,6 +40,7 @@ struct AccountConfig {
     std::string tls_ca_file;
     bool verify_tls_cert{true};
     std::string media_enc;
+    int max_calls{4};
 };
 
 class Engine {
@@ -60,6 +61,7 @@ public:
     int reset_transports(bool re_register);
 
     sip_call_t *make_call(const char *target_uri, bool with_video);
+    int dial_call(const char *target_uri, bool with_video, sip_call_t **out_call);
     int answer_call(sip_call_t *call, bool with_video);
     int hangup_call(sip_call_t *call, int code, const char *reason);
     int hold_call(sip_call_t *call, bool hold);
@@ -118,6 +120,7 @@ public:
     void dispatch_call_stats(sip_call_t *call, const sip_call_stats_t *stats);
     void dispatch_transfer_status(sip_call_t *call, int code, const char *reason);
     void dispatch_transfer_request(sip_call_t *call, const char *refer_to_uri, bool has_replaces);
+    void dispatch_call_rejected_busy(const char *caller_uri);
 
     bool prepare_audio_session();
     void release_audio_session_if_idle();
@@ -149,6 +152,7 @@ private:
     std::atomic<bool> m_mic_muted{false};
     std::atomic<bool> m_audio_session_active{false};
     std::atomic<bool> m_is_registered{false};
+    std::atomic<int> m_max_calls{4};
 
     struct mqueue *m_mq{nullptr};
     struct ua *m_ua{nullptr};

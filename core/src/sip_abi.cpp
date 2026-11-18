@@ -52,6 +52,7 @@ SIP_ABI_EXPORT int sip_client_register_account(sip_client_t *client, const sip_a
     cfg.tls_ca_file = config->tls_ca_file ? config->tls_ca_file : "";
     cfg.verify_tls_cert = config->verify_tls_cert;
     cfg.media_enc = config->media_enc ? config->media_enc : "";
+    cfg.max_calls = config->max_calls;
     return client->engine->register_account(cfg);
 }
 
@@ -107,9 +108,27 @@ SIP_ABI_EXPORT void sip_client_destroy(sip_client_t *client)
 SIP_ABI_EXPORT sip_call_t *sip_call_make(sip_client_t *client, const char *target_uri, bool with_video)
 {
     if (!client || !client->engine) {
+        errno = EINVAL;
         return nullptr;
     }
-    return client->engine->make_call(target_uri, with_video);
+    sip_call_t *call = nullptr;
+    int rc = client->engine->dial_call(target_uri, with_video, &call);
+    if (rc != 0) {
+        errno = rc;
+        return nullptr;
+    }
+    return call;
+}
+
+SIP_ABI_EXPORT int sip_call_dial(sip_client_t *client, const char *target_uri, bool with_video, sip_call_t **out_call)
+{
+    if (out_call) {
+        *out_call = nullptr;
+    }
+    if (!client || !client->engine || !out_call) {
+        return EINVAL;
+    }
+    return client->engine->dial_call(target_uri, with_video, out_call);
 }
 
 SIP_ABI_EXPORT int sip_call_answer(sip_call_t *call, bool with_video)

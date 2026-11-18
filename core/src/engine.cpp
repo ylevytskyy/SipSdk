@@ -362,7 +362,18 @@ int Engine::register_account(const AccountConfig &config)
         return EINVAL;
     }
 
-    bool posted = post_task([this, cfg = config]() {
+    int effective_max_calls = config.max_calls == 0 ? 4 : config.max_calls;
+    if (effective_max_calls < 1) effective_max_calls = 1;
+    if (effective_max_calls > 8) effective_max_calls = 8;
+    m_max_calls.store(effective_max_calls);
+
+    bool posted = post_task([this, cfg = config, effective_max_calls]() {
+        struct config *bcfg = conf_config();
+        if (bcfg != nullptr) {
+            /* Keep Baresip's internal cap one above m_max_calls so the (cap+1)-th INVITE
+               reaches BEVENT_SIPSESS_CONN where Engine replies 486 and fires on_call_rejected_busy. */
+            bcfg->call.max_calls = static_cast<uint32_t>(effective_max_calls + 1);
+        }
         if (m_ua != nullptr) {
             ua_destroy(m_ua);
             m_ua = nullptr;
@@ -749,6 +760,24 @@ void Engine::handle_ua_event(int ev, struct bevent *event)
                 bua = m_ua;
             }
             if (bua && msg) {
+                int open_calls = 0;
+                {
+                    std::lock_guard<std::mutex> lock(m_calls_mutex);
+                    for (auto *sess : m_all_calls) {
+                        if (sess && !sess->is_closed()) {
+                            open_calls++;
+                        }
+                    }
+                }
+                if (open_calls >= m_max_calls.load()) {
+                    std::string caller_uri;
+                    if (msg->from.auri.p && msg->from.auri.l > 0) {
+                        caller_uri.assign(msg->from.auri.p, msg->from.auri.l);
+                    }
+                    (void)sip_treply(nullptr, uag_sip(), msg, 486, "Busy Here");
+                    dispatch_call_rejected_busy(caller_uri.c_str());
+                    break;
+                }
                 (void)ua_accept(bua, msg);
             }
             break;
@@ -807,17 +836,48 @@ void Engine::dispatch_reg_state(sip_reg_state_t state, int code, const char *rea
 
 sip_call_t *Engine::make_call(const char *target_uri, bool with_video)
 {
-    if (!target_uri || std::strlen(target_uri) == 0 || !m_started.load()) {
+    sip_call_t *call = nullptr;
+    int rc = dial_call(target_uri, with_video, &call);
+    if (rc != 0) {
+        errno = rc;
         return nullptr;
+    }
+    return call;
+}
+
+int Engine::dial_call(const char *target_uri, bool with_video, sip_call_t **out_call)
+{
+    if (out_call) {
+        *out_call = nullptr;
+    }
+    if (!target_uri || std::strlen(target_uri) == 0 || !out_call) {
+        return EINVAL;
+    }
+    if (!m_started.load()) {
+        return EIO;
     }
 
     std::string uri_str = target_uri;
-    auto *call_session = find_or_create_call_session(nullptr, uri_str.c_str(), true, with_video);
+    sip_call_t *call_session = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(m_calls_mutex);
+        int open_calls = 0;
+        for (auto *sess : m_all_calls) {
+            if (sess && !sess->is_closed()) {
+                open_calls++;
+            }
+        }
+        if (open_calls >= m_max_calls.load()) {
+            return EBUSY;
+        }
+        call_session = new sip_call_t(m_owner, this, nullptr, uri_str.c_str(), true, with_video);
+        m_all_calls.push_back(call_session);
+    }
 
     prepare_audio_session();
 
     call_session->retain();
-    post_task([this, call_session, uri_str, with_video]() {
+    bool posted = post_task([this, call_session, uri_str, with_video]() {
         if (!m_ua) {
             call_session->set_closed(0);
             dispatch_call_state(call_session, SIP_CALL_STATE_CLOSED, EINVAL, "No UA available");
@@ -842,7 +902,15 @@ sip_call_t *Engine::make_call(const char *target_uri, bool with_video)
         call_session->release();
     });
 
-    return call_session;
+    if (!posted) {
+        call_session->set_closed(0);
+        destroy_call(call_session);
+        release_audio_session_if_idle();
+        return EIO;
+    }
+
+    *out_call = call_session;
+    return 0;
 }
 
 int Engine::answer_call(sip_call_t *call, bool with_video)
@@ -1346,6 +1414,47 @@ void Engine::dispatch_incoming_call(sip_call_t *call)
     dispatch_async_f(dispatch_get_main_queue(), args, run_incoming_call_task);
 #else
     run_incoming_call_task(args);
+#endif
+}
+
+struct CallRejectedBusyTaskArgs {
+    sip_client_t *client{nullptr};
+    std::string caller_uri;
+    void (*on_call_rejected_busy)(sip_client_t *, const char *, void *){nullptr};
+    void *user_data{nullptr};
+};
+
+static void run_call_rejected_busy_task(void *arg)
+{
+    auto *args = static_cast<CallRejectedBusyTaskArgs *>(arg);
+    if (args) {
+        if (args->on_call_rejected_busy) {
+            args->on_call_rejected_busy(args->client, args->caller_uri.c_str(), args->user_data);
+        }
+        delete args;
+    }
+}
+
+void Engine::dispatch_call_rejected_busy(const char *caller_uri)
+{
+    if (!m_callbacks.on_call_rejected_busy) return;
+
+    auto *args = new CallRejectedBusyTaskArgs{
+        m_owner,
+        caller_uri ? caller_uri : "",
+        m_callbacks.on_call_rejected_busy,
+        m_user_data
+    };
+
+    if (m_callbacks.dispatch_to_main) {
+        m_callbacks.dispatch_to_main(run_call_rejected_busy_task, args, m_user_data);
+        return;
+    }
+
+#if defined(__APPLE__)
+    dispatch_async_f(dispatch_get_main_queue(), args, run_call_rejected_busy_task);
+#else
+    run_call_rejected_busy_task(args);
 #endif
 }
 

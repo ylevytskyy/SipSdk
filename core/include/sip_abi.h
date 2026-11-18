@@ -82,6 +82,9 @@ typedef struct sip_callbacks_t {
 
     /** Incoming transfer request (REFER) from remote peer requiring accept/reject decision. */
     void (*on_transfer_request)(sip_call_t *call, const char *refer_to_uri, bool has_replaces, void *user_data);
+
+    /** Incoming INVITE rejected with 486 Busy Here because max_calls cap was reached. */
+    void (*on_call_rejected_busy)(sip_client_t *client, const char *caller_uri, void *user_data);
 } sip_callbacks_t;
 
 /**
@@ -116,6 +119,7 @@ typedef struct sip_account_config_t {
     const char *tls_ca_file;     /* optional custom CA PEM certificate file path */
     bool verify_tls_cert;        /* verify TLS certificate against CA, defaults to true */
     const char *media_enc;       /* optional media encryption: "srtp-mand", "dtls_srtp", "none" */
+    int max_calls;               /* max concurrent open calls (1..8, 0 defaults to 4) */
 } sip_account_config_t;
 
 /**
@@ -172,9 +176,20 @@ SIP_ABI_EXPORT void sip_client_destroy(sip_client_t *client);
  * @param client Valid client instance returned from sip_client_create.
  * @param target_uri Destination SIP URI (e.g. "sip:1002@127.0.0.1:5060").
  * @param with_video True to offer video (VIDMODE_ON); false for audio-only (VIDMODE_OFF).
- * @return Opaque handle to the created sip_call_t session, or nullptr on failure.
+ * @return Opaque handle to the created sip_call_t session, or nullptr on failure (sets errno, e.g. EBUSY at max_calls).
  */
 SIP_ABI_EXPORT sip_call_t *sip_call_make(sip_client_t *client, const char *target_uri, bool with_video);
+
+/**
+ * Initiates an outgoing call to the specified target SIP URI with explicit error code.
+ *
+ * @param client Valid client instance returned from sip_client_create.
+ * @param target_uri Destination SIP URI (e.g. "sip:1002@127.0.0.1:5060").
+ * @param with_video True to offer video (VIDMODE_ON); false for audio-only (VIDMODE_OFF).
+ * @param out_call Output pointer populated with created call handle on success (nullptr on failure).
+ * @return 0 on success, EBUSY when max_calls cap is reached, EINVAL on bad args, EIO if not started.
+ */
+SIP_ABI_EXPORT int sip_call_dial(sip_client_t *client, const char *target_uri, bool with_video, sip_call_t **out_call);
 
 /**
  * Answers an incoming call.

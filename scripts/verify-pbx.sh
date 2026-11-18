@@ -18,6 +18,8 @@ docker exec sipsdk-asterisk asterisk -rx "pjsip show transports" | grep -E "tran
 echo "    PASS: PJSIP transport-tls active on port 5061"
 docker exec sipsdk-asterisk asterisk -rx "pjsip show endpoint 1004" | grep -E "media_encryption\s*:\s*sdes"
 echo "    PASS: Endpoint 1004 configured with media_encryption=sdes"
+docker exec sipsdk-asterisk asterisk -rx "dialplan show 9003@default" | grep -E "pbx-callback\.sh"
+echo "    PASS: Dialplan extension 9003 callback loaded"
 
 echo "==> 3. Verifying SIP UDP registration for Mobile App (Extension 1001)..."
 python3 -c '
