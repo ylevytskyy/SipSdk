@@ -15,6 +15,9 @@ sip_call_t::sip_call_t(sip_client_t *owner, sip_core::Engine *engine, struct cal
     , m_is_outgoing(is_outgoing)
     , m_has_video(with_video)
 {
+    if (engine != nullptr) {
+        m_frames_at_start = engine->media_driver_manager().frames_decoded();
+    }
     if (call != nullptr) {
         const char *cid = call_id(call);
         if (cid) {
@@ -142,6 +145,37 @@ void sip_call_t::set_closed(uint32_t dur)
     } else {
         m_duration.store(get_duration());
     }
+}
+
+void sip_call_t::latch_media_stats()
+{
+    struct call *c = m_raw_call;
+    uint64_t audio_rx = 0;
+    uint64_t video_rx = 0;
+    if (c != nullptr) {
+        struct audio *au = call_audio(c);
+        struct stream *as = au ? audio_strm(au) : nullptr;
+        if (as) audio_rx = stream_metric_get_rx_n_packets(as);
+        struct video *vi = call_video(c);
+        struct stream *vs = vi ? video_strm(vi) : nullptr;
+        if (vs) video_rx = stream_metric_get_rx_n_packets(vs);
+    }
+    uint64_t frames = 0;
+    if (m_engine != nullptr) {
+        uint64_t total = m_engine->media_driver_manager().frames_decoded();
+        frames = total > m_frames_at_start ? total - m_frames_at_start : 0;
+    }
+
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (audio_rx > m_media_stats.audio_rtp_received) m_media_stats.audio_rtp_received = audio_rx;
+    if (video_rx > m_media_stats.video_rtp_received) m_media_stats.video_rtp_received = video_rx;
+    if (frames > m_media_stats.video_frames_decoded) m_media_stats.video_frames_decoded = frames;
+}
+
+sip_call_media_stats_t sip_call_t::get_media_stats() const
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_media_stats;
 }
 
 void sip_call_t::attach_raw_call(struct call *c)

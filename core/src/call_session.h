@@ -5,6 +5,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <mutex>
 #include <string>
 
@@ -13,6 +14,13 @@ struct call;
 namespace sip_core {
 class Engine;
 }
+
+/** What a call received, kept once it has been read from the media streams. */
+struct sip_call_media_stats_t {
+    uint64_t video_frames_decoded{0};
+    uint64_t video_rtp_received{0};
+    uint64_t audio_rtp_received{0};
+};
 
 struct sip_call_t {
 public:
@@ -40,6 +48,14 @@ public:
     void set_muted(bool muted);
     void set_established();
     void set_closed(uint32_t dur);
+    /**
+     * Reads the received-packet counts from the call's streams and the decoded-frame count
+     * from the media driver, and keeps them. Call on the baresip thread while the streams
+     * exist (before a hangup, at the close event); a later call never lowers a count.
+     */
+    void latch_media_stats();
+    /** The counts kept by latch_media_stats(); complete once the call is closed. */
+    sip_call_media_stats_t get_media_stats() const;
     void attach_raw_call(struct call *c);
     void detach_raw_call();
 
@@ -78,6 +94,9 @@ private:
     std::chrono::steady_clock::time_point m_established_at{};
     bool m_is_established{false};
     void *m_user_data{nullptr};
+
+    sip_call_media_stats_t m_media_stats{};
+    uint64_t m_frames_at_start{0};
 };
 
 #endif // SIP_CORE_CALL_SESSION_H

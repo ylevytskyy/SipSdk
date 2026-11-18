@@ -1,6 +1,8 @@
 #include <sip/call.hpp>
 #include <sip_abi.h>
 
+#include "call_session.h"
+
 namespace sip {
 
 Call::Call(sip_call_t *handle)
@@ -91,6 +93,17 @@ bool Call::is_closed() const
 uint32_t Call::get_duration() const
 {
     return m_handle ? sip_call_get_duration(m_handle) : 0;
+}
+
+CallMediaStats Call::get_media_stats() const
+{
+    CallMediaStats out;
+    if (!m_handle) return out;
+    sip_call_media_stats_t s = m_handle->get_media_stats();
+    out.video_frames_decoded = s.video_frames_decoded;
+    out.video_rtp_received = s.video_rtp_received;
+    out.audio_rtp_received = s.audio_rtp_received;
+    return out;
 }
 
 int Call::answer(bool with_video)

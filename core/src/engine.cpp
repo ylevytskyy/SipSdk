@@ -606,6 +606,7 @@ void Engine::handle_ua_event(int ev, struct bevent *event)
                 sip_call_t *sess = find_call_session(bcall);
                 if (sess) {
                     uint32_t dur = call_duration(bcall);
+                    sess->latch_media_stats();
                     sess->set_closed(dur);
                     int scode = (msg && msg->scode > 0) ? static_cast<int>(msg->scode) : static_cast<int>(call_scode(bcall));
                     dispatch_call_state(sess, SIP_CALL_STATE_CLOSED, scode, extract_reason("Call Closed").c_str());
@@ -781,6 +782,7 @@ int Engine::hangup_call(sip_call_t *call, int code, const char *reason)
     post_task([this, call, scode, reason_str]() {
         struct call *c = call->raw_call();
         if (m_ua != nullptr && c != nullptr) {
+            call->latch_media_stats();
             ua_hangup(m_ua, c, scode, reason_str.empty() ? nullptr : reason_str.c_str());
         } else {
             call->set_closed(0);
