@@ -42,6 +42,7 @@ class SipClient(
     var telecomCoordinator: SipTelecomManagerCoordinator? = null
 
     private val activeCallsMap = ConcurrentHashMap<Long, SipCall>()
+    private val pendingPushHandles = ConcurrentHashMap<String, SipPushCallHandle>()
     val activeCalls: List<SipCall>
         get() = activeCallsMap.values.filter { !it.isClosed }
 
@@ -330,16 +331,20 @@ class SipClient(
         val callHandle = nativeDialCall(nativeHandle, uri, withVideo, statusOut)
         lastDialErrorCode = statusOut[0]
         if (callHandle == 0L) return null
+        activeCallsMap.values.filter { !it.isClosed && !it.isOnHold }.forEach { existing ->
+            telecomCoordinator?.setInactive(existing.callId)
+        }
         audioManager?.prepareAudioSession()
-        val call = SipCall(
-            nativeHandle = callHandle,
-            callId = nativeCallGetId(callHandle),
-            remoteUri = nativeCallGetRemoteUri(callHandle),
-            peerDisplayName = nativeCallGetPeerDisplayName(callHandle),
-            hasVideo = withVideo,
-            isOutgoing = true
-        )
-        activeCallsMap[callHandle] = call
+        val call = activeCallsMap.getOrPut(callHandle) {
+            SipCall(
+                nativeHandle = callHandle,
+                callId = nativeCallGetId(callHandle),
+                remoteUri = nativeCallGetRemoteUri(callHandle),
+                peerDisplayName = nativeCallGetPeerDisplayName(callHandle),
+                hasVideo = withVideo,
+                isOutgoing = true
+            )
+        }
         telecomCoordinator?.addCall(
             callId = call.callId,
             displayName = call.peerDisplayName ?: uri,
@@ -361,11 +366,15 @@ class SipClient(
         }
 
         override fun onSetActive() {
-            call.setHold(false)
+            if (call.isOnHold && !call.isClosed) {
+                call.setHold(false)
+            }
         }
 
         override fun onSetInactive() {
-            call.setHold(true)
+            if (!call.isOnHold && !call.isClosed) {
+                call.setHold(true)
+            }
         }
 
         override fun onMuteChanged(isMuted: Boolean) {
@@ -467,6 +476,23 @@ class SipClient(
         listener?.onCallStateChanged(call, callState, code, reason)
     }
 
+    internal fun registerPendingPushHandle(callId: String, handle: SipPushCallHandle) {
+        pendingPushHandles[callId] = handle
+    }
+
+    internal fun removePendingPushHandle(callId: String) {
+        pendingPushHandles.remove(callId)
+    }
+
+    internal fun notifyPushCallMissed(callId: String, callerUri: String) {
+        listener?.onPushCallMissed(callId, callerUri)
+    }
+
+    fun attachPendingPushCall(sipCallId: String, call: SipCall): Boolean {
+        val handle = pendingPushHandles.remove(sipCallId) ?: return false
+        return handle.onMatchingInviteArrived(call)
+    }
+
     @JvmSynthetic
     fun onNativeIncomingCall(callHandle: Long) {
         val call = activeCallsMap.getOrPut(callHandle) {
@@ -479,14 +505,17 @@ class SipClient(
                 isOutgoing = false
             )
         }
-        telecomCoordinator?.addCall(
-            callId = call.callId,
-            displayName = call.peerDisplayName ?: call.remoteUri,
-            address = call.remoteUri,
-            isOutgoing = false,
-            isVideo = call.hasVideo,
-            callbacks = createTelecomCallbacks(call)
-        )
+        val attachedToPush = attachPendingPushCall(call.callId, call)
+        if (!attachedToPush) {
+            telecomCoordinator?.addCall(
+                callId = call.callId,
+                displayName = call.peerDisplayName ?: call.remoteUri,
+                address = call.remoteUri,
+                isOutgoing = false,
+                isVideo = call.hasVideo,
+                callbacks = createTelecomCallbacks(call)
+            )
+        }
         listener?.onIncomingCall(call)
     }
 

@@ -401,7 +401,7 @@ void sip_call_t::attach_raw_call(struct call *c)
     m_raw_call = c;
     if (c != nullptr) {
         const char *cid = call_id(c);
-        if (cid && std::strlen(cid) > 0) {
+        if (m_id.empty() && cid && std::strlen(cid) > 0) {
             m_id = cid;
         }
         const char *peer_name = call_peername(c);

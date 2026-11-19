@@ -101,6 +101,8 @@ class CoreTelecomCoordinator(
     private val trackedCalls = ConcurrentHashMap<String, TrackedCall>()
     @Volatile
     private var appRegistered = false
+    @Volatile
+    private var lastInactiveJob: kotlinx.coroutines.Job? = null
 
     override fun registerApp(supportsVideo: Boolean) {
         if (appRegistered) return
@@ -146,6 +148,7 @@ class CoreTelecomCoordinator(
         )
 
         scope.launch {
+            runCatching { lastInactiveJob?.join() }
             try {
                 callsManager.addCall(
                     callAttributes = attributes,
@@ -203,7 +206,9 @@ class CoreTelecomCoordinator(
         scope.launch {
             runCatching {
                 val ctrl = tracked.scopeReady.await()
-                ctrl.setActive()
+                if (tracked.state == SipTelecomCallState.ACTIVE && trackedCalls[callId] === tracked) {
+                    ctrl.setActive()
+                }
             }
         }
     }
@@ -211,10 +216,12 @@ class CoreTelecomCoordinator(
     override fun setInactive(callId: String) {
         val tracked = trackedCalls[callId] ?: return
         tracked.state = SipTelecomCallState.HELD
-        scope.launch {
+        lastInactiveJob = scope.launch {
             runCatching {
                 val ctrl = tracked.scopeReady.await()
-                ctrl.setInactive()
+                if (tracked.state == SipTelecomCallState.HELD && trackedCalls[callId] === tracked) {
+                    ctrl.setInactive()
+                }
             }
         }
     }

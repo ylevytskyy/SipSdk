@@ -6,6 +6,10 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ANDROID_DIR="$ROOT_DIR/platforms/android"
 PREBUILT_DIR="$ANDROID_DIR/sipsdk/prebuilt"
 TARGET_SLICE="${1:-all}"
+SLICE_ARG="${2:-}"
+if [[ "$TARGET_SLICE" == "--slice" && -n "$SLICE_ARG" ]]; then
+  TARGET_SLICE="$SLICE_ARG"
+fi
 
 echo "==> Running Android Platform SDK Verification (Target: $TARGET_SLICE)"
 
@@ -44,6 +48,72 @@ ensure_pbx_running() {
   fi
 }
 
+STARTED_EMU_SERIAL=""
+VERIFY_DIR=""
+
+cleanup() {
+  if [[ -n "$VERIFY_DIR" ]]; then
+    rm -rf "$VERIFY_DIR"
+  fi
+  if [[ -n "$STARTED_EMU_SERIAL" ]]; then
+    adb -s "$STARTED_EMU_SERIAL" emu kill >/dev/null 2>&1 || true
+  fi
+}
+trap cleanup EXIT
+
+start_avd_and_wait() {
+  local avd_name="$1"
+  local existing
+  existing="$(adb devices | grep -E 'emulator-[0-9]+[[:space:]]+device' | awk '{print $1}' | tr '\n' ' ' || true)"
+  echo "==> Starting Android emulator ($avd_name)..."
+  "$ANDROID_HOME/emulator/emulator" -avd "$avd_name" -no-window -no-boot-anim -gpu swiftshader_indirect -no-snapshot-save </dev/null >/dev/null 2>&1 &
+  EMU_PID=$!
+  local serial=""
+  for _ in $(seq 1 90); do
+    local candidates
+    candidates="$(adb devices | grep -E 'emulator-[0-9]+[[:space:]]+device' | awk '{print $1}' || true)"
+    for candidate in $candidates; do
+      if [[ " $existing " != *" $candidate "* ]]; then
+        serial="$candidate"
+        break
+      fi
+    done
+    if [[ -n "$serial" ]]; then
+      break
+    fi
+    sleep 1
+  done
+  if [[ -z "$serial" ]]; then
+    echo "ERROR: Emulator $avd_name failed to appear in adb devices" >&2
+    exit 1
+  fi
+  export ANDROID_SERIAL="$serial"
+  STARTED_EMU_SERIAL="$serial"
+  adb -s "$ANDROID_SERIAL" wait-for-device shell 'for i in $(seq 1 90); do [[ "$(getprop sys.boot_completed)" == "1" ]] && exit 0; sleep 1; done; exit 1'
+  # Wait for PackageManager & network stack to settle after sys.boot_completed=1
+  adb -s "$ANDROID_SERIAL" shell 'for i in $(seq 1 30); do pm path android >/dev/null 2>&1 && exit 0; sleep 1; done; exit 0'
+  sleep 4
+  # Dismiss keyguard / unlock screen cleanly for headless instrumentation UI/Telecom tests
+  adb -s "$ANDROID_SERIAL" shell wm dismiss-keyguard >/dev/null 2>&1 || true
+  export SIP_HOST="10.0.2.2"
+  echo "PASS: Emulator $avd_name ready ($ANDROID_SERIAL, SIP_HOST=$SIP_HOST)"
+}
+
+stop_emulator() {
+  local serial="$1"
+  [[ -n "$serial" ]] || return 0
+  adb -s "$serial" emu kill >/dev/null 2>&1 || true
+  STARTED_EMU_SERIAL=""
+  for _ in $(seq 1 30); do
+    if ! adb devices | grep -q "^${serial}[[:space:]]"; then
+      sleep 2
+      return 0
+    fi
+    sleep 1
+  done
+  sleep 2
+}
+
 ensure_android_device_ready() {
   echo "==> Checking for connected Android device or emulator..."
   local emu
@@ -55,12 +125,8 @@ ensure_android_device_ready() {
     local device
     device="$(adb devices | grep -E '\b(device)\b' | head -n 1 | awk '{print $1}' || true)"
     if [[ -z "$device" ]]; then
-      echo "==> No running device found. Starting Android emulator (Android_16_36.1)..."
-      "$ANDROID_HOME/emulator/emulator" -avd Android_16_36.1 -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect >/dev/null 2>&1 &
-      echo "==> Waiting for emulator boot completion..."
-      adb wait-for-device shell 'while [[ "$(getprop sys.boot_completed)" != "1" ]]; do sleep 1; done'
-      echo "PASS: Android emulator booted and ready"
-      export ANDROID_SERIAL="$(adb devices | grep -E 'emulator-[0-9]+\s+device' | head -n 1 | awk '{print $1}' || true)"
+      start_avd_and_wait "Android_16_36.1"
+      return
     else
       export ANDROID_SERIAL="$device"
       echo "PASS: Using running Android device/emulator: $ANDROID_SERIAL"
@@ -103,7 +169,6 @@ if [[ "$TARGET_SLICE" == "all" || "$TARGET_SLICE" == "--slice" && "${2:-}" == "1
   # Unpack AAR and inspect architectures
   VERIFY_DIR="/tmp/sipsdk-aar-verify-$$"
   mkdir -p "$VERIFY_DIR"
-  trap 'rm -rf "$VERIFY_DIR"' EXIT
 
   unzip -q "$AAR_PATH" -d "$VERIFY_DIR"
 
@@ -133,63 +198,100 @@ if [[ "$TARGET_SLICE" == "all" || "$TARGET_SLICE" == "--slice" && "${2:-}" == "1
   echo "==> [Slice 1] ALL CHECKS PASSED!"
 fi
 
-# Step 3: Slice 2 verification (SIP Registration Tests)
-if [[ "$TARGET_SLICE" == "all" || "$TARGET_SLICE" == "--slice" && "${2:-}" == "2" || "$TARGET_SLICE" == "2" ]]; then
-  echo "==> [Slice 2] Running Kotlin SDK Registration Tests..."
-  ensure_pbx_running
-  ensure_android_device_ready
+run_connected_test() {
+  local test_class="$1"
+  adb -s "$ANDROID_SERIAL" logcat -c >/dev/null 2>&1 || true
+  if ! ./gradlew :sipsdk:connectedDebugAndroidTest \
+    -Pandroid.testInstrumentationRunnerArguments.class="$test_class" \
+    -Pandroid.testInstrumentationRunnerArguments.sip_host="$SIP_HOST"; then
+    echo "==> Diagnostic logcat for $test_class ($ANDROID_SERIAL):" >&2
+    adb -s "$ANDROID_SERIAL" logcat -d -v time 2>/dev/null \
+      | grep -E "TestRunner|SipSdk|SipClient|CoreTelecom|CallsManager|Telecom|baresip|libre|sipcore|AndroidMediaCodec|CameraCapture|FATAL|SIGSEGV|SIGABRT" \
+      | tail -n 250 >&2 || true
+    return 1
+  fi
+}
 
-  cd "$ANDROID_DIR"
-  ./gradlew :sipsdk:testReleaseUnitTest
-  ./gradlew :sipsdk:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.sipsdk.SipClientRegistrationTest -Pandroid.testInstrumentationRunnerArguments.sip_host="$SIP_HOST"
-  echo "==> [Slice 2] Instrumentation test cases run:"
-  cat "$ANDROID_DIR"/sipsdk/build/outputs/androidTest-results/connected/debug/TEST-*.xml | grep -o 'testcase name="[A-Za-z0-9_]*"' || true
-  echo "==> [Slice 2] ALL CHECKS PASSED!"
+run_connected_slices() {
+  # Step 3: Slice 2 verification (SIP Registration Tests)
+  if [[ "$TARGET_SLICE" == "all" || "$TARGET_SLICE" == "2" ]]; then
+    echo "==> [Slice 2] Running Kotlin SDK Registration Tests on $ANDROID_SERIAL..."
+    ensure_pbx_running
+
+    cd "$ANDROID_DIR"
+    ./gradlew :sipsdk:testReleaseUnitTest
+    run_connected_test "com.sipsdk.SipClientRegistrationTest"
+    echo "==> [Slice 2] Instrumentation test cases run:"
+    cat "$ANDROID_DIR"/sipsdk/build/outputs/androidTest-results/connected/debug/TEST-*.xml | grep -o 'testcase name="[A-Za-z0-9_]*"' || true
+    echo "==> [Slice 2] ALL CHECKS PASSED!"
+  fi
+
+  # Step 4: Slice 3 verification (Audio Calling, Multi-Call, & Push Tests + Sample App Build)
+  if [[ "$TARGET_SLICE" == "all" || "$TARGET_SLICE" == "3" ]]; then
+    echo "==> [Slice 3] Running Kotlin SDK Audio Calling & Push Tests + Sample App Build on $ANDROID_SERIAL..."
+    ensure_pbx_running
+
+    cd "$ANDROID_DIR"
+    run_connected_test "com.sipsdk.SipCallAudioTest"
+    run_connected_test "com.sipsdk.SipPushHandlerTest"
+    ./gradlew :sample:assembleDebug
+    echo "==> [Slice 3] ALL CHECKS PASSED!"
+  fi
+
+  # Step 5: Slice 4 verification (MediaCodec H.264 Codec Driver)
+  if [[ "$TARGET_SLICE" == "all" || "$TARGET_SLICE" == "4" ]]; then
+    echo "==> [Slice 4] Running MediaCodec H.264 Driver Tests on $ANDROID_SERIAL..."
+    ensure_pbx_running
+
+    cd "$ANDROID_DIR"
+    run_connected_test "com.sipsdk.SipMediaCodecTest"
+    echo "==> [Slice 4] ALL CHECKS PASSED!"
+  fi
+
+  # Step 6: Slice 5 verification (Camera2 Capture Driver & Dynamic Controls)
+  if [[ "$TARGET_SLICE" == "all" || "$TARGET_SLICE" == "5" ]]; then
+    echo "==> [Slice 5] Running Camera2 Capture Driver Tests on $ANDROID_SERIAL..."
+
+    cd "$ANDROID_DIR"
+    run_connected_test "com.sipsdk.SipCameraCaptureTest"
+    echo "==> [Slice 5] ALL CHECKS PASSED!"
+  fi
+
+  # Step 7: Slice 6 verification (Two-Way Video Calling & SipSurfaceView)
+  if [[ "$TARGET_SLICE" == "all" || "$TARGET_SLICE" == "6" ]]; then
+    echo "==> [Slice 6] Running Two-Way Video Calling & SurfaceView Tests on $ANDROID_SERIAL..."
+    ensure_pbx_running
+
+    cd "$ANDROID_DIR"
+    run_connected_test "com.sipsdk.SipCallVideoTest"
+    ./gradlew :sample:assembleDebug
+    echo "==> [Slice 6] ALL CHECKS PASSED!"
+  fi
+}
+
+NEEDS_DEVICE=false
+if [[ "$TARGET_SLICE" == "all" || "$TARGET_SLICE" =~ ^(2|3|4|5|6)$ ]]; then
+  NEEDS_DEVICE=true
 fi
 
-# Step 4: Slice 3 verification (Audio Calling Tests & Sample App Build)
-if [[ "$TARGET_SLICE" == "all" || "$TARGET_SLICE" == "--slice" && "${2:-}" == "3" || "$TARGET_SLICE" == "3" ]]; then
-  echo "==> [Slice 3] Running Kotlin SDK Audio Calling Tests & Sample App Build..."
-  ensure_pbx_running
-  ensure_android_device_ready
+if [[ "$NEEDS_DEVICE" == "true" ]]; then
+  AVD_LIST=()
+  if [[ -n "${ANDROID_AVDS:-}" ]]; then
+    read -ra AVD_LIST <<< "$ANDROID_AVDS"
+  elif [[ -z "$(adb devices | grep -E '\b(device)\b' || true)" && -d "$HOME/.android/avd/SipSdk_API26.avd" && -d "$HOME/.android/avd/SipSdk_API34.avd" ]]; then
+    AVD_LIST=("SipSdk_API26" "SipSdk_API34")
+  fi
 
-  cd "$ANDROID_DIR"
-  ./gradlew :sipsdk:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.sipsdk.SipCallAudioTest -Pandroid.testInstrumentationRunnerArguments.sip_host="$SIP_HOST"
-  ./gradlew :sample:assembleDebug
-  echo "==> [Slice 3] ALL CHECKS PASSED!"
-fi
-
-# Step 5: Slice 4 verification (MediaCodec H.264 Codec Driver)
-if [[ "$TARGET_SLICE" == "all" || "$TARGET_SLICE" == "--slice" && "${2:-}" == "4" || "$TARGET_SLICE" == "4" ]]; then
-  echo "==> [Slice 4] Running MediaCodec H.264 Driver Tests..."
-  ensure_pbx_running
-  ensure_android_device_ready
-
-  cd "$ANDROID_DIR"
-  ./gradlew :sipsdk:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.sipsdk.SipMediaCodecTest -Pandroid.testInstrumentationRunnerArguments.sip_host="$SIP_HOST"
-  echo "==> [Slice 4] ALL CHECKS PASSED!"
-fi
-
-# Step 6: Slice 5 verification (Camera2 Capture Driver & Dynamic Controls)
-if [[ "$TARGET_SLICE" == "all" || "$TARGET_SLICE" == "--slice" && "${2:-}" == "5" || "$TARGET_SLICE" == "5" ]]; then
-  echo "==> [Slice 5] Running Camera2 Capture Driver Tests..."
-  ensure_android_device_ready
-
-  cd "$ANDROID_DIR"
-  ./gradlew :sipsdk:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.sipsdk.SipCameraCaptureTest -Pandroid.testInstrumentationRunnerArguments.sip_host="$SIP_HOST"
-  echo "==> [Slice 5] ALL CHECKS PASSED!"
-fi
-
-# Step 7: Slice 6 verification (Two-Way Video Calling & SipSurfaceView)
-if [[ "$TARGET_SLICE" == "all" || "$TARGET_SLICE" == "--slice" && "${2:-}" == "6" || "$TARGET_SLICE" == "6" ]]; then
-  echo "==> [Slice 6] Running Two-Way Video Calling & SurfaceView Tests..."
-  ensure_pbx_running
-  ensure_android_device_ready
-
-  cd "$ANDROID_DIR"
-  ./gradlew :sipsdk:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.sipsdk.SipCallVideoTest -Pandroid.testInstrumentationRunnerArguments.sip_host="$SIP_HOST"
-  ./gradlew :sample:assembleDebug
-  echo "==> [Slice 6] ALL CHECKS PASSED!"
+  if [[ ${#AVD_LIST[@]} -gt 0 ]]; then
+    for avd in "${AVD_LIST[@]}"; do
+      start_avd_and_wait "$avd"
+      run_connected_slices
+      stop_emulator "$ANDROID_SERIAL"
+    done
+  else
+    ensure_android_device_ready
+    run_connected_slices
+  fi
 fi
 
 echo "=================================================="

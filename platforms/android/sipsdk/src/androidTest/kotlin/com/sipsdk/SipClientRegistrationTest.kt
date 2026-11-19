@@ -46,33 +46,35 @@ class SipClientRegistrationTest {
             }
         }
 
-        val startRc = client.start()
-        assertEquals(0, startRc)
+        try {
+            val startRc = client.start()
+            assertEquals(0, startRc)
 
-        val regRc = client.register()
-        assertEquals(0, regRc)
+            val regRc = client.register()
+            assertEquals(0, regRc)
 
-        assertTrue("Timeout waiting for SIP registration", regLatch.await(10, TimeUnit.SECONDS))
-        assertTrue("Expected REGISTERED state", registeredStateReceived)
-        assertTrue("Callback must be dispatched on Main Looper", looperIsMainOnReg)
-        assertTrue("Client must report isRegistered == true", client.isRegistered)
+            assertTrue("Timeout waiting for SIP registration", regLatch.await(10, TimeUnit.SECONDS))
+            assertTrue("Expected REGISTERED state", registeredStateReceived)
+            assertTrue("Callback must be dispatched on Main Looper", looperIsMainOnReg)
+            assertTrue("Client must report isRegistered == true", client.isRegistered)
 
-        // Now unregister
-        val unregRc = client.unregister()
-        assertEquals(0, unregRc)
+            // Now unregister
+            val unregRc = client.unregister()
+            assertEquals(0, unregRc)
 
-        assertTrue("Timeout waiting for SIP unregistration", unregLatch.await(10, TimeUnit.SECONDS))
-        assertTrue("Expected UNREGISTERED state", unregisteredStateReceived)
+            assertTrue("Timeout waiting for SIP unregistration", unregLatch.await(10, TimeUnit.SECONDS))
+            assertTrue("Expected UNREGISTERED state", unregisteredStateReceived)
 
-        var isReg = client.isRegistered
-        val deadline = System.currentTimeMillis() + 2000
-        while (isReg && System.currentTimeMillis() < deadline) {
-            Thread.sleep(50)
-            isReg = client.isRegistered
+            var isReg = client.isRegistered
+            val deadline = System.currentTimeMillis() + 2000
+            while (isReg && System.currentTimeMillis() < deadline) {
+                Thread.sleep(50)
+                isReg = client.isRegistered
+            }
+            assertFalse("Client must report isRegistered == false", isReg)
+        } finally {
+            client.destroy()
         }
-        assertFalse("Client must report isRegistered == false", isReg)
-
-        client.destroy()
     }
 
     @Test
@@ -97,18 +99,20 @@ class SipClientRegistrationTest {
             }
         }
 
-        val startRc = client.start()
-        assertEquals(0, startRc)
+        try {
+            val startRc = client.start()
+            assertEquals(0, startRc)
 
-        val regRc = client.register()
-        assertEquals(0, regRc)
+            val regRc = client.register()
+            assertEquals(0, regRc)
 
-        assertTrue("Timeout waiting for registration failure", failLatch.await(10, TimeUnit.SECONDS))
-        assertTrue("Expected FAILED state on invalid credentials", failedStateReceived)
-        assertTrue("Expected 401/403 SIP failure code, got $failCode", failCode in listOf(401, 403))
-        assertFalse("Client must not report isRegistered == true", client.isRegistered)
-
-        client.destroy()
+            assertTrue("Timeout waiting for registration failure", failLatch.await(10, TimeUnit.SECONDS))
+            assertTrue("Expected FAILED state on invalid credentials", failedStateReceived)
+            assertTrue("Expected 401/403 SIP failure code, got $failCode", failCode in listOf(401, 403))
+            assertFalse("Client must not report isRegistered == true", client.isRegistered)
+        } finally {
+            client.destroy()
+        }
     }
 
     @Test
@@ -145,23 +149,26 @@ class SipClientRegistrationTest {
             }
         }
 
-        assertEquals(0, client.start())
-        assertEquals(0, client.register())
-        assertTrue("Timeout waiting for SIP registration", regLatch.await(10, TimeUnit.SECONDS))
+        try {
+            assertEquals(0, client.start())
+            assertEquals(0, client.register())
+            assertTrue("Timeout waiting for SIP registration", regLatch.await(10, TimeUnit.SECONDS))
 
-        val msgId = client.sendMessage("1001", "hello from Android")
-        assertTrue("Expected positive message id", msgId > 0)
-        assertTrue("Timeout waiting for message status", statusLatch.await(10, TimeUnit.SECONDS))
-        assertEquals(SipMessageStatus.SENT, receivedStatus)
-        assertTrue("Expected 2xx status code, got $receivedCode", receivedCode in 200..299)
+            val msgId = client.sendMessage("1001", "hello from Android")
+            assertTrue("Expected positive message id", msgId > 0)
+            assertTrue("Timeout waiting for message status", statusLatch.await(10, TimeUnit.SECONDS))
+            assertEquals(SipMessageStatus.SENT, receivedStatus)
+            assertTrue("Expected 2xx status code, got $receivedCode", receivedCode in 200..299)
 
-        assertTrue("Timeout waiting for echoed message", receiveLatch.await(10, TimeUnit.SECONDS))
-        assertEquals("text/plain", receivedMsg?.contentType)
-        assertEquals("hello from Android", receivedMsg?.text)
-        assertTrue("Expected sender sip:1001@, got ${receivedMsg?.from}", receivedMsg?.from?.startsWith("sip:1001@") == true)
+            assertTrue("Timeout waiting for echoed message", receiveLatch.await(10, TimeUnit.SECONDS))
+            assertEquals("text/plain", receivedMsg?.contentType)
+            assertEquals("hello from Android", receivedMsg?.text)
+            assertTrue("Expected sender sip:1001@, got ${receivedMsg?.from}", receivedMsg?.from?.startsWith("sip:1001@") == true)
 
-        client.unregister()
-        client.destroy()
+            client.unregister()
+        } finally {
+            client.destroy()
+        }
     }
 
     @Test
@@ -184,11 +191,15 @@ class SipClientRegistrationTest {
                 }
             }
         }
-        assertEquals(0, strictClient.start())
-        assertEquals(0, strictClient.register())
-        assertTrue("Expected TLS registration to fail on untrusted cert when verifyTlsCert=true", failLatch.await(10, TimeUnit.SECONDS))
-        assertTrue(gotFailure)
-        strictClient.destroy()
+        try {
+            assertEquals(0, strictClient.start())
+            assertEquals(0, strictClient.register())
+            assertTrue("Expected TLS registration to fail on untrusted cert when verifyTlsCert=true", failLatch.await(10, TimeUnit.SECONDS))
+            assertTrue(gotFailure)
+        } finally {
+            strictClient.destroy()
+        }
+        Thread.sleep(300)
 
         val client = SipClient("1004", TestConfig.host, context).apply {
             password = "test1004"
@@ -199,19 +210,32 @@ class SipClientRegistrationTest {
         }
         val regLatch = CountDownLatch(1)
         var registered = false
+        var lastState = SipRegistrationState.UNREGISTERED
+        var lastCode = 0
+        var lastReason = ""
         client.listener = object : SipClientListener {
             override fun onRegistrationStateChanged(state: SipRegistrationState, code: Int, reason: String) {
+                lastState = state
+                lastCode = code
+                lastReason = reason
                 if (state == SipRegistrationState.REGISTERED && code == 200) {
                     registered = true
                     regLatch.countDown()
                 }
             }
         }
-        assertEquals(0, client.start())
-        assertEquals(0, client.register())
-        assertTrue("Timeout waiting for TLS registration", regLatch.await(10, TimeUnit.SECONDS))
-        assertTrue(registered)
-        client.unregister()
-        client.destroy()
+        try {
+            assertEquals(0, client.start())
+            assertEquals(0, client.register())
+            val regOk = regLatch.await(15, TimeUnit.SECONDS)
+            assertTrue(
+                "Timeout waiting for TLS registration (lastState=$lastState code=$lastCode reason=$lastReason)",
+                regOk
+            )
+            assertTrue(registered)
+            client.unregister()
+        } finally {
+            client.destroy()
+        }
     }
 }

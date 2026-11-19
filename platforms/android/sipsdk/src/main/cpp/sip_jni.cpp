@@ -205,7 +205,10 @@ static void jni_dispatch_to_main(void (*task)(void *arg), void *arg, void *user_
     );
 
     if (runnable) {
-        guard.env->CallBooleanMethod(ctx->mainHandlerGlobalRef, ctx->postMethodId, runnable);
+        jboolean posted = guard.env->CallBooleanMethod(ctx->mainHandlerGlobalRef, ctx->postMethodId, runnable);
+        if (posted != JNI_TRUE && task) {
+            task(arg);
+        }
         guard.env->DeleteLocalRef(runnable);
     } else {
         if (task) task(arg);

@@ -78,6 +78,17 @@ clone_pinned_tag "https://github.com/baresip/baresip.git" "v$BARESIP_VERSION" "$
 clone_pinned_tag "https://github.com/openssl/openssl.git" "$OPENSSL_TAG" "$OPENSSL_COMMIT" "$SOURCE_DIR/openssl"
 clone_pinned_tag "https://github.com/xiph/opus.git" "v$OPUS_VERSION" "$OPUS_COMMIT" "$SOURCE_DIR/opus"
 
+# Avoid CLOCK_MONOTONIC_RAW on Android: QEMU/HVF ARM64 guest kernels can exhibit multi-second backward/forward jumps across vCPU migrations.
+if [[ -f "$SOURCE_DIR/re/src/tmr/tmr.c" ]]; then
+  python3 -c '
+from pathlib import Path
+p = Path("'"$SOURCE_DIR"'/re/src/tmr/tmr.c")
+text = p.read_text()
+assert "#ifdef CLOCK_MONOTONIC_RAW" in text, "Expected CLOCK_MONOTONIC_RAW guard in tmr.c"
+p.write_text(text.replace("#ifdef CLOCK_MONOTONIC_RAW", "#if defined(CLOCK_MONOTONIC_RAW) && !defined(__ANDROID__)"))
+'
+fi
+
 # Avoid duplicate srtp.c.o archive member name between srtp and dtls_srtp static modules
 if [[ -f "$SOURCE_DIR/baresip/modules/dtls_srtp/srtp.c" ]]; then
   mv "$SOURCE_DIR/baresip/modules/dtls_srtp/srtp.c" "$SOURCE_DIR/baresip/modules/dtls_srtp/dtls_srtp_stream.c"
