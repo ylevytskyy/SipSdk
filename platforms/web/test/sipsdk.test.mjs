@@ -521,11 +521,27 @@ test('multi-call auto-hold, swap, and maxCalls cap (EBUSY / 486)', () => {
   assert.equal(call2.isOnHold, true);
   assert.equal(call1.isOnHold, false);
 
+  // Unanswered incoming call (Incoming) must not be placed on hold by _autoHoldOthers when dialing.
+  const waiting = incoming(ctx, AUDIO_OFFER);
+  assert.equal(waiting.call.state, SipCallState.Incoming);
+  const call2b = client.makeCall('9003');
+  s1.emit('hold', { originator: 'local' });
+  assert.equal(waiting.call.isOnHold, false);
+  assert.equal(waiting.call.state, SipCallState.Incoming);
+  assert.deepEqual(waiting.session.holdCalls, []);
+  call2b.hangup();
+  ua.outgoing.at(-1).emit('ended', {});
+  waiting.call.hangup();
+  waiting.session.emit('ended', {});
+  call1.setHold(false);
+  s1.emit('unhold', { originator: 'local' });
+  const holdLenBeforeAnswer = s1.holdCalls.length;
+
   // Incoming call answer auto-holds call1
   const inc = incoming(ctx, AUDIO_OFFER);
   assert.ok(inc.call);
   inc.call.answer({ video: false });
-  assert.deepEqual(s1.holdCalls, ['hold', 'unhold', 'hold']);
+  assert.deepEqual(s1.holdCalls.slice(holdLenBeforeAnswer), ['hold']);
   s1.emit('hold', { originator: 'local' });
 
   call1.hangup(); s1.emit('ended', {});

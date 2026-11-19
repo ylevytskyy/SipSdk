@@ -87,6 +87,7 @@ int main()
         "sip_client_is_registered",
         "sip_client_destroy",
         "sip_call_make",
+        "sip_call_dial",
         "sip_call_answer",
         "sip_call_hangup",
         "sip_call_set_hold",

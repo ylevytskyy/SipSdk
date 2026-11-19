@@ -181,6 +181,10 @@ namespace SipSdk.Tests
         {
             using var client = new SipClient();
             Assert.Equal(4, client.MaxCalls);
+            client.MaxCalls = 0;
+            Assert.Equal(1, client.MaxCalls);
+            client.MaxCalls = 99;
+            Assert.Equal(8, client.MaxCalls);
             client.MaxCalls = 1;
             Assert.Equal(1, client.MaxCalls);
 

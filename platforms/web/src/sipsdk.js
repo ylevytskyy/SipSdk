@@ -125,6 +125,7 @@ export class SipCall extends Emitter {
   #state;
   #hasVideo;
   #onHold = false;
+  #holdFallback = false;
   #muted = false;
   #localVideoEnabled = true;
   #establishedAt = 0;
@@ -209,13 +210,29 @@ export class SipCall extends Emitter {
         if (this.#localStream) {
           for (const track of this.#localStream.getAudioTracks()) track.enabled = false;
         }
+        this.#holdFallback = true;
         this.#onHold = true;
         this.#setState(SipCallState.Hold);
         this.#emitMedia();
+      } else {
+        this.#holdFallback = false;
       }
     } else {
       this.#client._autoHoldOthers(this);
-      this.#session.unhold();
+      if (this.#holdFallback) {
+        this.#holdFallback = false;
+        if (this.#localStream && !this.#muted) {
+          for (const track of this.#localStream.getAudioTracks()) track.enabled = true;
+        }
+        try {
+          this.#session.unhold();
+        } catch { /* fallback already local */ }
+        this.#onHold = false;
+        this.#setState(SipCallState.Established);
+        this.#emitMedia();
+      } else {
+        this.#session.unhold();
+      }
     }
   }
 
@@ -677,7 +694,7 @@ export class SipClient extends Emitter {
   /** @internal */
   _autoHoldOthers(exceptCall) {
     for (const call of this.#calls) {
-      if (call !== exceptCall && !call.isClosed && !call.isOnHold) {
+      if (call !== exceptCall && !call.isClosed && !call.isOnHold && call.state === SipCallState.Established) {
         call.setHold(true);
       }
     }

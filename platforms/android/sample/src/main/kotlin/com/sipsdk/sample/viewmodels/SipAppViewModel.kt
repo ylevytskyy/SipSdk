@@ -189,37 +189,36 @@ class SipAppViewModel(application: Application) : AndroidViewModel(application),
         }
 
         val call = try {
-            client.makeCall(target, withVideo = withVideo)
+            client.dial(target, withVideo = withVideo)
         } catch (busy: SipBusyException) {
             showBusyBanner(busy.message ?: "Maximum concurrent calls reached (Busy)")
             return
+        } catch (err: IllegalStateException) {
+            showBusyBanner(err.message ?: "Failed to place call")
+            return
         }
-        if (call != null) {
-            _activeCall.value = call
-            _activeCallState.value = SipCallState.CONNECTING
-            _callDurationSeconds.value = 0L
-            _callIsOnHold.value = false
-            _isShowingInCallView.value = true
-            refreshOpenCalls()
-            if (withVideo) {
-                _isSpeakerEnabled.value = true
-                client.isSpeakerEnabled = true
-            }
+        _activeCall.value = call
+        _activeCallState.value = SipCallState.CONNECTING
+        _callDurationSeconds.value = 0L
+        _callIsOnHold.value = false
+        _isShowingInCallView.value = true
+        refreshOpenCalls()
+        if (withVideo) {
+            _isSpeakerEnabled.value = true
+            client.isSpeakerEnabled = true
+        }
 
-            // Record to history
-            val item = CallHistoryItem(
-                remoteUri = call.remoteUri,
-                displayName = call.peerDisplayName,
-                timestamp = System.currentTimeMillis(),
-                durationSeconds = 0L,
-                direction = CallDirection.OUTGOING,
-                hasVideo = withVideo
-            )
-            addHistoryItem(item)
-            startDurationTimer()
-        } else {
-            showBusyBanner("Failed to place call")
-        }
+        // Record to history
+        val item = CallHistoryItem(
+            remoteUri = call.remoteUri,
+            displayName = call.peerDisplayName,
+            timestamp = System.currentTimeMillis(),
+            durationSeconds = 0L,
+            direction = CallDirection.OUTGOING,
+            hasVideo = withVideo
+        )
+        addHistoryItem(item)
+        startDurationTimer()
     }
 
     fun answerIncomingCall(withVideo: Boolean = false) {

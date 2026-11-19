@@ -99,8 +99,8 @@ client.on('registrationStateChanged', ({ state, code, reason }) => {
   log(`Registration: ${el.textContent}`);
 });
 
-client.on('callRejectedBusy', ({ remoteUri }) => {
-  const msg = `Busy: rejected incoming call from ${remoteUri}`;
+client.on('callRejectedBusy', ({ callerUri }) => {
+  const msg = `Busy: rejected incoming call from ${callerUri}`;
   log(msg);
   showBusyBanner(msg);
 });

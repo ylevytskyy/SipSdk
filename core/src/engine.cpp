@@ -645,6 +645,8 @@ void Engine::handle_ua_event(int ev, struct bevent *event)
             if (bcall) {
                 sip_call_t *sess = find_call_session(bcall);
                 if (sess) {
+                    sess->set_hold_confirmed(true);
+                    sess->stop_hold_check_timer();
                     sess->set_on_hold(true);
                     dispatch_call_state(sess, SIP_CALL_STATE_HOLD, 200, "Hold");
                     dispatch_call_media(sess, 0, 0, true, sess->is_muted());
@@ -656,6 +658,7 @@ void Engine::handle_ua_event(int ev, struct bevent *event)
             if (bcall) {
                 sip_call_t *sess = find_call_session(bcall);
                 if (sess) {
+                    sess->set_hold_confirmed(false);
                     sess->set_on_hold(false);
                     dispatch_call_state(sess, SIP_CALL_STATE_ESTABLISHED, 200, "Resumed");
                     dispatch_call_media(sess, 0, 0, false, sess->is_muted());
@@ -910,6 +913,7 @@ int Engine::dial_call(const char *target_uri, bool with_video, sip_call_t **out_
     if (!posted) {
         call_session->set_closed(0);
         destroy_call(call_session);
+        call_session->release();
         release_audio_session_if_idle();
         return EIO;
     }
@@ -925,7 +929,7 @@ int Engine::answer_call(sip_call_t *call, bool with_video)
     prepare_audio_session();
 
     call->retain();
-    post_task([this, call, with_video]() {
+    bool posted = post_task([this, call, with_video]() {
         struct call *c = call->raw_call();
         if (m_ua != nullptr && c != nullptr) {
             auto_hold_other_calls(call);
@@ -936,6 +940,12 @@ int Engine::answer_call(sip_call_t *call, bool with_video)
         }
         call->release();
     });
+
+    if (!posted) {
+        release_audio_session_if_idle();
+        call->release();
+        return EIO;
+    }
 
     return 0;
 }
@@ -948,7 +958,7 @@ int Engine::hangup_call(sip_call_t *call, int code, const char *reason)
     uint16_t scode = code > 0 ? static_cast<uint16_t>(code) : 0;
 
     call->retain();
-    post_task([this, call, scode, reason_str]() {
+    bool posted = post_task([this, call, scode, reason_str]() {
         call->stop_stats_timer();
         struct call *c = call->raw_call();
         if (m_ua != nullptr && c != nullptr) {
@@ -960,6 +970,11 @@ int Engine::hangup_call(sip_call_t *call, int code, const char *reason)
         }
         call->release();
     });
+
+    if (!posted) {
+        call->release();
+        return EIO;
+    }
 
     return 0;
 }
@@ -973,9 +988,13 @@ void Engine::auto_hold_other_calls(sip_call_t *except_call)
             if (!sess || sess == except_call || sess->is_closed() || sess->is_on_hold()) {
                 continue;
             }
-            if (sess->raw_call() != nullptr) {
-                sess->retain();
-                to_hold.push_back(sess);
+            struct call *c = sess->raw_call();
+            if (c != nullptr) {
+                enum call_state st = call_state(c);
+                if (st == CALL_STATE_ESTABLISHED || st == CALL_STATE_TRANSFER) {
+                    sess->retain();
+                    to_hold.push_back(sess);
+                }
             }
         }
     }
@@ -998,6 +1017,10 @@ void Engine::trigger_hold_fallback_on_loop(sip_call_t *call, int code)
             audio_stop(au);
         }
     }
+    if (!call->is_muted()) {
+        call->set_muted(true);
+        call->set_hold_fallback_muted(true);
+    }
     call->set_on_hold(true);
     dispatch_call_state(call, SIP_CALL_STATE_HOLD, code, "Hold Fallback");
     dispatch_call_media(call, 0, 0, true, true);
@@ -1006,6 +1029,10 @@ void Engine::trigger_hold_fallback_on_loop(sip_call_t *call, int code)
 void Engine::evaluate_pending_hold_on_loop(sip_call_t *call)
 {
     if (!call || call->is_closed() || !call->is_hold_reinvite_pending()) {
+        return;
+    }
+    if (call->is_hold_confirmed()) {
+        call->stop_hold_check_timer();
         return;
     }
     struct call *c = call->raw_call();
@@ -1018,7 +1045,7 @@ void Engine::evaluate_pending_hold_on_loop(sip_call_t *call)
     if (neg != SDP_NEG_LOCAL_OFFER) {
         call->stop_hold_check_timer();
         trigger_hold_fallback_on_loop(call, 488);
-    } else if (ticks >= 20) {
+    } else if (ticks >= 50) {
         call->stop_hold_check_timer();
         trigger_hold_fallback_on_loop(call, 408);
     }
@@ -1032,7 +1059,11 @@ void Engine::hold_call_on_loop(sip_call_t *call, bool hold)
 
     if (!hold) {
         call->stop_hold_check_timer();
+        call->set_hold_confirmed(false);
         auto_hold_other_calls(call);
+        if (call->consume_hold_fallback_muted()) {
+            call->set_muted(false);
+        }
         int rc = call_hold(c, false);
         (void)rc;
         struct audio *au = call_audio(c);
@@ -1048,6 +1079,7 @@ void Engine::hold_call_on_loop(sip_call_t *call, bool hold)
         return;
     }
 
+    call->set_hold_confirmed(false);
     int rc = call_hold(c, true);
     if (rc != 0) {
         trigger_hold_fallback_on_loop(call, rc);
@@ -1055,7 +1087,9 @@ void Engine::hold_call_on_loop(sip_call_t *call, bool hold)
     }
 
     call->set_on_hold(true);
-    call->start_hold_check_timer();
+    if (!call->is_hold_confirmed()) {
+        call->start_hold_check_timer();
+    }
     dispatch_call_state(call, SIP_CALL_STATE_HOLD, 200, "Hold");
     dispatch_call_media(call, 0, 0, true, call->is_muted());
 }
@@ -1065,10 +1099,15 @@ int Engine::hold_call(sip_call_t *call, bool hold)
     if (!call) return EINVAL;
 
     call->retain();
-    post_task([this, call, hold]() {
+    bool posted = post_task([this, call, hold]() {
         hold_call_on_loop(call, hold);
         call->release();
     });
+
+    if (!posted) {
+        call->release();
+        return EIO;
+    }
 
     return 0;
 }
@@ -1078,18 +1117,24 @@ int Engine::mute_call(sip_call_t *call, bool muted)
     if (!call) return EINVAL;
 
     call->retain();
-    post_task([this, call, muted]() {
+    bool posted = post_task([this, call, muted]() {
         struct call *c = call->raw_call();
         if (c != nullptr) {
             struct audio *au = call_audio(c);
             if (au != nullptr) {
                 audio_mute(au, muted);
             }
+            call->set_hold_fallback_muted(false);
             call->set_muted(muted);
             dispatch_call_media(call, 0, 0, call->is_on_hold(), muted);
         }
         call->release();
     });
+
+    if (!posted) {
+        call->release();
+        return EIO;
+    }
 
     return 0;
 }
@@ -1101,7 +1146,7 @@ int Engine::send_dtmf(sip_call_t *call, const char *digits)
     std::string digits_str = digits;
 
     call->retain();
-    post_task([call, digits_str]() {
+    bool posted = post_task([call, digits_str]() {
         struct call *c = call->raw_call();
         if (c != nullptr) {
             for (char ch : digits_str) {
@@ -1112,6 +1157,11 @@ int Engine::send_dtmf(sip_call_t *call, const char *digits)
         call->release();
     });
 
+    if (!posted) {
+        call->release();
+        return EIO;
+    }
+
     return 0;
 }
 
@@ -1121,7 +1171,7 @@ int Engine::transfer_call(sip_call_t *call, const char *target_uri)
 
     std::string uri_str = target_uri;
     call->retain();
-    post_task([this, call, uri_str]() {
+    bool posted = post_task([this, call, uri_str]() {
         struct call *c = call->raw_call();
         if (c != nullptr) {
             int err = call_transfer(c, uri_str.c_str());
@@ -1134,6 +1184,11 @@ int Engine::transfer_call(sip_call_t *call, const char *target_uri)
         call->release();
     });
 
+    if (!posted) {
+        call->release();
+        return EIO;
+    }
+
     return 0;
 }
 
@@ -1143,7 +1198,7 @@ int Engine::attended_transfer_call(sip_call_t *call, sip_call_t *consult_call)
 
     call->retain();
     consult_call->retain();
-    post_task([this, call, consult_call]() {
+    bool posted = post_task([this, call, consult_call]() {
         struct call *c = call->raw_call();
         struct call *sc = consult_call->raw_call();
         if (c != nullptr && sc != nullptr) {
@@ -1160,6 +1215,12 @@ int Engine::attended_transfer_call(sip_call_t *call, sip_call_t *consult_call)
         call->release();
     });
 
+    if (!posted) {
+        consult_call->release();
+        call->release();
+        return EIO;
+    }
+
     return 0;
 }
 
@@ -1168,7 +1229,7 @@ int Engine::accept_transfer(sip_call_t *call, bool accept)
     if (!call) return EINVAL;
 
     call->retain();
-    post_task([this, call, accept]() {
+    bool posted = post_task([this, call, accept]() {
         struct call *c = call->raw_call();
         if (c != nullptr) {
             if (!accept) {
@@ -1204,6 +1265,11 @@ int Engine::accept_transfer(sip_call_t *call, bool accept)
         }
         call->release();
     });
+
+    if (!posted) {
+        call->release();
+        return EIO;
+    }
 
     return 0;
 }

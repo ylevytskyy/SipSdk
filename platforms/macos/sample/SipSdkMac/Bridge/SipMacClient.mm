@@ -679,7 +679,7 @@ struct ClientCallbacks {
         auto *self = (__bridge SipMacClient *)user_data;
         if (!self) return;
 
-        NSString *callerStr = caller_uri ? [NSString stringWithUTF8String:caller_uri] : @"Unknown";
+        NSString *callerStr = caller_uri ? ([NSString stringWithUTF8String:caller_uri] ?: @"Unknown") : @"Unknown";
         dispatch_async(dispatch_get_main_queue(), ^{
             if ([self.delegate respondsToSelector:@selector(client:didRejectIncomingCallBusyFrom:)]) {
                 [self.delegate client:self didRejectIncomingCallBusyFrom:callerStr];

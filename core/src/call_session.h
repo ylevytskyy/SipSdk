@@ -49,6 +49,10 @@ public:
     void stop_hold_check_timer();
     bool is_hold_reinvite_pending() const { return m_hold_reinvite_pending.load(); }
     int increment_hold_check_ticks() { return ++m_hold_check_ticks; }
+    void set_hold_fallback_muted(bool val) { m_hold_fallback_muted.store(val); }
+    bool consume_hold_fallback_muted() { return m_hold_fallback_muted.exchange(false); }
+    void set_hold_confirmed(bool val) { m_hold_confirmed.store(val); }
+    bool is_hold_confirmed() const { return m_hold_confirmed.load(); }
     void attach_raw_call(struct call *c);
     void detach_raw_call();
 
@@ -108,6 +112,8 @@ private:
     struct tmr *m_hold_check_tmr{nullptr};
     std::atomic<bool> m_hold_reinvite_pending{false};
     std::atomic<int> m_hold_check_ticks{0};
+    std::atomic<bool> m_hold_fallback_muted{false};
+    std::atomic<bool> m_hold_confirmed{false};
 };
 
 #endif // SIP_CORE_CALL_SESSION_H

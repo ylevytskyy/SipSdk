@@ -58,17 +58,18 @@ class SipPushCallHandle internal constructor(
     private val client: SipClient,
     private val telecom: SipTelecomManagerCoordinator?
 ) {
-    private val attachedFlag = AtomicBoolean(false)
-    private val missedFlag = AtomicBoolean(false)
+    private enum class State { PENDING, ATTACHED, MISSED, DECLINED }
+
+    private val stateRef = AtomicReference(State.PENDING)
     private val userAnsweredBeforeInvite = AtomicBoolean(false)
-    private val userDeclinedBeforeInvite = AtomicBoolean(false)
     private val attachedVideoChoice = AtomicBoolean(payload.hasVideo)
     private val attachedCall = AtomicReference<SipCall?>(null)
     @Volatile
     private var timeoutFuture: ScheduledFuture<*>? = null
 
-    val isAttached: Boolean get() = attachedFlag.get()
-    val isMissed: Boolean get() = missedFlag.get()
+    val isAttached: Boolean get() = stateRef.get() == State.ATTACHED
+    val isMissed: Boolean get() = stateRef.get() == State.MISSED
+    val isDeclined: Boolean get() = stateRef.get() == State.DECLINED
 
     internal fun setTimeoutFuture(future: ScheduledFuture<*>) {
         timeoutFuture = future
@@ -89,9 +90,10 @@ class SipPushCallHandle internal constructor(
             val call = attachedCall.get()
             if (call != null) {
                 call.hangup(0, "Hangup")
-            } else {
-                userDeclinedBeforeInvite.set(true)
+            } else if (stateRef.compareAndSet(State.PENDING, State.DECLINED)) {
                 cancelTimeout()
+                client.removePendingPushHandle(payload.sipCallId, this@SipPushCallHandle)
+                telecom?.disconnect(payload.sipCallId, SipDisconnectReason.REJECTED)
             }
         }
 
@@ -109,26 +111,45 @@ class SipPushCallHandle internal constructor(
     }
 
     internal fun onMatchingInviteArrived(call: SipCall): Boolean {
-        if (missedFlag.get() || !attachedFlag.compareAndSet(false, true)) {
-            return false
+        while (true) {
+            when (stateRef.get()) {
+                State.MISSED, State.ATTACHED, null -> return false
+                State.DECLINED -> {
+                    cancelTimeout()
+                    attachedCall.set(call)
+                    call.hangup(486, "Decline")
+                    return true
+                }
+                State.PENDING -> {
+                    if (stateRef.compareAndSet(State.PENDING, State.ATTACHED)) {
+                        cancelTimeout()
+                        attachedCall.set(call)
+                        if (userAnsweredBeforeInvite.get()) {
+                            call.answer(attachedVideoChoice.get())
+                        }
+                        return true
+                    }
+                }
+            }
         }
-        cancelTimeout()
-        attachedCall.set(call)
-        if (userDeclinedBeforeInvite.get()) {
-            call.hangup(486, "Decline")
-        } else if (userAnsweredBeforeInvite.get()) {
-            call.answer(attachedVideoChoice.get())
-        }
-        return true
     }
 
     internal fun onTimeout() {
-        if (attachedFlag.get() || !missedFlag.compareAndSet(false, true)) {
+        if (!stateRef.compareAndSet(State.PENDING, State.MISSED)) {
             return
         }
-        client.removePendingPushHandle(payload.sipCallId)
+        client.removePendingPushHandle(payload.sipCallId, this)
         telecom?.disconnect(payload.sipCallId, SipDisconnectReason.MISSED)
         client.notifyPushCallMissed(payload.sipCallId, payload.callerUri)
+    }
+
+    internal fun cancelReplaced() {
+        if (stateRef.compareAndSet(State.PENDING, State.MISSED)) {
+            cancelTimeout()
+            telecom?.disconnect(payload.sipCallId, SipDisconnectReason.ERROR)
+        } else {
+            cancelTimeout()
+        }
     }
 
     fun cancelTimeout() {

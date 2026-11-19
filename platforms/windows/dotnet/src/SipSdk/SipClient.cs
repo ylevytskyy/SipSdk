@@ -33,7 +33,12 @@ namespace SipSdk
         private bool _disposed;
         private string _accountAor = string.Empty;
 
-        public int MaxCalls { get; set; } = 4;
+        private int _maxCalls = 4;
+        public int MaxCalls
+        {
+            get => _maxCalls;
+            set => _maxCalls = Math.Max(1, Math.Min(8, value));
+        }
         public bool IsRegistered => _clientHandle != IntPtr.Zero && SipNativeAbi.sip_client_is_registered(_clientHandle);
         public bool IsMicMuted => _clientHandle != IntPtr.Zero && SipNativeAbi.sip_client_is_mic_muted(_clientHandle);
         public string AccountAor => _accountAor;

@@ -535,6 +535,10 @@ final class SipSdkTests: XCTestCase {
             "caller_name": "Bob",
             "video": false
         ])
+        let clientForPush = SipClient()
+        let pushUuid = UUID(uuidString: legacyUuid)!
+        clientForPush.registerPendingPushCall(sipCallId: "abc-123@pbx", uuid: pushUuid)
+
         XCTAssertEqual(alias.sipCallId, legacyUuid)
         XCTAssertEqual(alias.uuid.uuidString.lowercased(), legacyUuid)
         XCTAssertEqual(alias.callerUri, "sip:bob@pbx.local")
@@ -544,61 +548,74 @@ final class SipSdkTests: XCTestCase {
 
     @MainActor
     func testMultiCallLiveSwapAndBusyCap() async throws {
-        let client = SipClient()
-        try await client.start()
+        do {
+            let client = SipClient()
+            try await client.start()
 
-        let multiAccount = SipAccount(
-            username: "1001",
-            domain: "127.0.0.1",
-            password: "test1001",
-            transport: .udp,
-            port: 5060,
-            maxCalls: 4
-        )
-        try await client.register(multiAccount)
+            let multiAccount = SipAccount(
+                username: "1001",
+                domain: "127.0.0.1",
+                password: "test1001",
+                transport: .udp,
+                port: 5060,
+                maxCalls: 4
+            )
+            try await client.register(multiAccount)
 
-        var regWait = 0
-        while !client.registrationState.isRegistered && regWait < 30 {
-            try await Task.sleep(nanoseconds: 100_000_000)
-            regWait += 1
-        }
-        guard client.registrationState.isRegistered else {
+            var regWait = 0
+            while !client.registrationState.isRegistered && regWait < 30 {
+                try await Task.sleep(nanoseconds: 100_000_000)
+                regWait += 1
+            }
+            guard client.registrationState.isRegistered else {
+                await client.stop()
+                throw XCTSkip("Asterisk PBX not reachable on 127.0.0.1:5060")
+            }
+
+            // 1. Two concurrent calls + swap
+            let call1 = try await client.makeCall(to: "9001", withVideo: false)
+            var w1 = 0
+            while call1.state != .established && !call1.state.isClosed && w1 < 50 {
+                try await Task.sleep(nanoseconds: 100_000_000)
+                w1 += 1
+            }
+            XCTAssertEqual(call1.state, .established)
+
+            let call2 = try await client.makeCall(to: "9001", withVideo: false)
+            var w2 = 0
+            while (call2.state != .established || !call1.isOnHold) && w2 < 50 {
+                try await Task.sleep(nanoseconds: 100_000_000)
+                w2 += 1
+            }
+            XCTAssertTrue(call1.isOnHold, "call1 must auto-hold when dialing call2")
+            XCTAssertEqual(call2.state, .established)
+            XCTAssertFalse(call2.isOnHold)
+
+            try await call1.setHold(false)
+            var wSwap = 0
+            while (call1.isOnHold || !call2.isOnHold) && wSwap < 40 {
+                try await Task.sleep(nanoseconds: 100_000_000)
+                wSwap += 1
+            }
+            XCTAssertFalse(call1.isOnHold, "call1 should resume on swap")
+            XCTAssertTrue(call2.isOnHold, "call2 should auto-hold on swap")
+
+            // Invoke CallKit hold coordinator handler to unhold call2 and swap back
+            let handled = try await client.callKit.applyHoldAction(callUUID: call2.id, onHold: false)
+            XCTAssertTrue(handled)
+            var wSwapBack = 0
+            while (call2.isOnHold || !call1.isOnHold) && wSwapBack < 40 {
+                try await Task.sleep(nanoseconds: 100_000_000)
+                wSwapBack += 1
+            }
+            XCTAssertFalse(call2.isOnHold, "call2 should resume via CallKit hold handler")
+            XCTAssertTrue(call1.isOnHold, "call1 should auto-hold via CallKit swap")
+
+            await call1.hangup()
+            await call2.hangup()
+            try await Task.sleep(nanoseconds: 400_000_000)
             await client.stop()
-            throw XCTSkip("Asterisk PBX not reachable on 127.0.0.1:5060")
         }
-
-        // 1. Two concurrent calls + swap
-        let call1 = try await client.makeCall(to: "9001", withVideo: false)
-        var w1 = 0
-        while call1.state != .established && !call1.state.isClosed && w1 < 50 {
-            try await Task.sleep(nanoseconds: 100_000_000)
-            w1 += 1
-        }
-        XCTAssertEqual(call1.state, .established)
-
-        let call2 = try await client.makeCall(to: "9001", withVideo: false)
-        var w2 = 0
-        while (call2.state != .established || !call1.isOnHold) && w2 < 50 {
-            try await Task.sleep(nanoseconds: 100_000_000)
-            w2 += 1
-        }
-        XCTAssertTrue(call1.isOnHold, "call1 must auto-hold when dialing call2")
-        XCTAssertEqual(call2.state, .established)
-        XCTAssertFalse(call2.isOnHold)
-
-        try await call1.setHold(false)
-        var wSwap = 0
-        while (call1.isOnHold || !call2.isOnHold) && wSwap < 40 {
-            try await Task.sleep(nanoseconds: 100_000_000)
-            wSwap += 1
-        }
-        XCTAssertFalse(call1.isOnHold, "call1 should resume on swap")
-        XCTAssertTrue(call2.isOnHold, "call2 should auto-hold on swap")
-
-        await call1.hangup()
-        await call2.hangup()
-        try await Task.sleep(nanoseconds: 400_000_000)
-        await client.stop()
 
         // 2. Enforce maxCalls = 1 on a fresh SipClient:
         //    outgoing throws SipError.busy, incoming (Asterisk 9003 callback) rejects 486 + onCallRejectedBusy.

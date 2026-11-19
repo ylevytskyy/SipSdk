@@ -365,8 +365,10 @@ static void jni_on_call_rejected_busy(sip_client_t *client, const char *caller_u
 
     const char *caller = caller_uri ? caller_uri : "";
     jbyteArray jCaller = jni_bytes(guard.env, caller, std::strlen(caller));
-    guard.env->CallVoidMethod(ctx->javaClientGlobalRef, ctx->onCallRejectedBusyMethodId, jCaller);
-    if (jCaller) guard.env->DeleteLocalRef(jCaller);
+    if (jCaller) {
+        guard.env->CallVoidMethod(ctx->javaClientGlobalRef, ctx->onCallRejectedBusyMethodId, jCaller);
+        guard.env->DeleteLocalRef(jCaller);
+    }
 }
 
 static void jni_on_message_received(sip_client_t *client, const char *from_uri, const char *content_type,
@@ -383,7 +385,9 @@ static void jni_on_message_received(sip_client_t *client, const char *from_uri, 
     jbyteArray jFrom = jni_bytes(guard.env, from, std::strlen(from));
     jbyteArray jType = jni_bytes(guard.env, ctype, std::strlen(ctype));
     jbyteArray jBody = jni_bytes(guard.env, body, body_len);
-    guard.env->CallVoidMethod(ctx->javaClientGlobalRef, ctx->onMessageReceivedMethodId, jFrom, jType, jBody);
+    if (jFrom && jType && jBody) {
+        guard.env->CallVoidMethod(ctx->javaClientGlobalRef, ctx->onMessageReceivedMethodId, jFrom, jType, jBody);
+    }
     if (jFrom) guard.env->DeleteLocalRef(jFrom);
     if (jType) guard.env->DeleteLocalRef(jType);
     if (jBody) guard.env->DeleteLocalRef(jBody);
@@ -400,9 +404,11 @@ static void jni_on_message_status(sip_client_t *client, uint64_t message_id, sip
 
     const char *r = reason ? reason : "";
     jbyteArray jReason = jni_bytes(guard.env, r, std::strlen(r));
-    guard.env->CallVoidMethod(ctx->javaClientGlobalRef, ctx->onMessageStatusMethodId,
-                              static_cast<jlong>(message_id), (jint)status, (jint)code, jReason);
-    if (jReason) guard.env->DeleteLocalRef(jReason);
+    if (jReason) {
+        guard.env->CallVoidMethod(ctx->javaClientGlobalRef, ctx->onMessageStatusMethodId,
+                                  static_cast<jlong>(message_id), (jint)status, (jint)code, jReason);
+        guard.env->DeleteLocalRef(jReason);
+    }
 }
 
 static bool jni_prepare_audio_session(sip_client_t *client, void *user_data) {

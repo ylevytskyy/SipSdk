@@ -268,5 +268,49 @@ class SipSdkUnitTest {
         assertEquals("sip:carol@pbx.local", missedUri)
         assertEquals(SipTelecomCallState.DISCONNECTED, telecom.getCallState("missing-invite-123"))
         assertTrue(handle.isMissed)
+
+        // Pre-INVITE decline removes handle cleanly and rejects late INVITE without firing onIncomingCall
+        var lateIncomingFired = false
+        val declineClient = SipClient("1001", "10.0.2.2").apply {
+            telecomCoordinator = telecom
+            listener = object : SipClientListener {
+                override fun onIncomingCall(call: SipCall) {
+                    lateIncomingFired = true
+                }
+            }
+        }
+        val declinedHandle = SipPushHandler.handleIncomingCallPush(
+            context = null,
+            client = declineClient,
+            data = mapOf("sip_call_id" to "declined-before-invite", "caller_uri" to "sip:dave@pbx.local"),
+            timeoutMs = 2_000L,
+            autoRegister = false
+        )
+        declinedHandle.buildTelecomCallbacks().onDisconnect()
+        assertTrue(declinedHandle.isDeclined)
+        assertEquals(SipTelecomCallState.DISCONNECTED, telecom.getCallState("declined-before-invite"))
+        assertFalse(declineClient.attachPendingPushCall("declined-before-invite", SipCall(0L, "declined-before-invite", "sip:dave@pbx.local")))
+        assertFalse(lateIncomingFired)
+
+        // Duplicate push with same sip_call_id replaces prior timer safely
+        val dupFirst = SipPushHandler.handleIncomingCallPush(
+            context = null,
+            client = declineClient,
+            data = mapOf("sip_call_id" to "dup-call-id", "caller_uri" to "sip:eve@pbx.local"),
+            timeoutMs = 100L,
+            autoRegister = false
+        )
+        val dupSecond = SipPushHandler.handleIncomingCallPush(
+            context = null,
+            client = declineClient,
+            data = mapOf("sip_call_id" to "dup-call-id", "caller_uri" to "sip:eve@pbx.local"),
+            timeoutMs = 2_000L,
+            autoRegister = false
+        )
+        Thread.sleep(200)
+        assertTrue(declineClient.attachPendingPushCall("dup-call-id", SipCall(0L, "dup-call-id", "sip:eve@pbx.local")))
+        assertTrue(dupSecond.isAttached)
+        assertFalse(dupSecond.isMissed)
+        assertTrue(dupFirst.isMissed)
     }
 }

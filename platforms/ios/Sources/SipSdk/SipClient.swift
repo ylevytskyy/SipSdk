@@ -5,6 +5,7 @@
 
 import Foundation
 import UIKit
+import CallKit
 import SipCore
 import AVFoundation
 
@@ -73,6 +74,9 @@ public final class SipClient {
             localVideoView?.isMirrored = (cameraPosition == .front)
         }
     }
+
+    /// Pending VoIP push UUIDs keyed by `sip_call_id` so arriving INVITEs reuse the CallKit UUID.
+    private var pendingPushCallUUIDs: [String: UUID] = [:]
 
     /// Turnkey CallKit coordinator.
     public let callKit: SipCallKitCoordinator
@@ -505,6 +509,13 @@ public final class SipClient {
         eventContinuation.yield(.registrationChanged(newState))
     }
 
+    /// Registers an incoming push UUID so the matching SIP INVITE reuses it instead of reporting a duplicate CallKit call.
+    public func registerPendingPushCall(sipCallId: String, uuid: UUID) {
+        guard !sipCallId.isEmpty else { return }
+        pendingPushCallUUIDs[sipCallId] = uuid
+        callKit.markCallReported(uuid)
+    }
+
     private func handleIncomingCall(callHandle: OpaquePointer) {
         let remoteUriC = sip_call_get_remote_uri(callHandle)
         let remoteUri = remoteUriC != nil ? String(cString: remoteUriC!) : "Unknown"
@@ -512,9 +523,14 @@ public final class SipClient {
         let peerNameC = sip_call_get_peer_display_name(callHandle)
         let peerName = peerNameC != nil ? String(cString: peerNameC!) : nil
 
+        let cidC = sip_call_get_id(callHandle)
+        let sipCallId = cidC != nil ? String(cString: cidC!) : nil
+        let matchedPushUuid = sipCallId.flatMap { pendingPushCallUUIDs.removeValue(forKey: $0) }
+
         let hasVideo = sip_call_has_video(callHandle)
 
         let sipCall = SipCall(
+            id: matchedPushUuid ?? UUID(),
             coreCall: callHandle,
             remoteUri: remoteUri,
             peerDisplayName: peerName,
@@ -531,12 +547,14 @@ public final class SipClient {
         eventContinuation.yield(.incomingCall(sipCall))
         eventContinuation.yield(.callStateChanged(sipCall, .incoming))
 
-        // Automatically report to CallKit coordinator
-        Task {
-            do {
-                try await callKit.reportIncomingCall(sipCall)
-            } catch {
-                NSLog("[SipSdk] CallKit incoming report failed: %@", error.localizedDescription)
+        // Automatically report to CallKit coordinator unless the push payload already opened it
+        if matchedPushUuid == nil {
+            Task {
+                do {
+                    try await callKit.reportIncomingCall(sipCall)
+                } catch {
+                    NSLog("[SipSdk] CallKit incoming report failed: %@", error.localizedDescription)
+                }
             }
         }
     }
@@ -566,6 +584,8 @@ public final class SipClient {
         eventContinuation.yield(.callStateChanged(sipCall, newState))
 
         if newState.isClosed {
+            let endedReason: CXCallEndedReason = (code == 486 || code == 603) ? .declinedElsewhere : .remoteEnded
+            callKit.reportCallEnded(uuid: sipCall.id, reason: endedReason)
             calls.removeAll(where: { $0.id == sipCall.id })
             sip_call_destroy(callHandle)
             sipCall.coreCall = nil

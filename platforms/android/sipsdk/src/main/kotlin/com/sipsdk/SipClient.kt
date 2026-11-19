@@ -319,6 +319,10 @@ class SipClient(
                 return null
             }
         }
+        val statusOut = IntArray(1)
+        val callHandle = nativeDialCall(nativeHandle, uri, withVideo, statusOut)
+        lastDialErrorCode = statusOut[0]
+        if (callHandle == 0L) return null
         if (withVideo && cameraCapture == null) {
             cameraCapture = SipCameraCapture(context, nativeHandle)
             val cur = localVideoView?.currentSurface
@@ -327,10 +331,6 @@ class SipClient(
             }
             cameraCapture?.start()
         }
-        val statusOut = IntArray(1)
-        val callHandle = nativeDialCall(nativeHandle, uri, withVideo, statusOut)
-        lastDialErrorCode = statusOut[0]
-        if (callHandle == 0L) return null
         activeCallsMap.values.filter { !it.isClosed && !it.isOnHold }.forEach { existing ->
             telecomCoordinator?.setInactive(existing.callId)
         }
@@ -477,15 +477,26 @@ class SipClient(
     }
 
     internal fun registerPendingPushHandle(callId: String, handle: SipPushCallHandle) {
-        pendingPushHandles[callId] = handle
+        pendingPushHandles.put(callId, handle)?.cancelReplaced()
     }
 
-    internal fun removePendingPushHandle(callId: String) {
-        pendingPushHandles.remove(callId)
+    internal fun removePendingPushHandle(callId: String, handle: SipPushCallHandle? = null) {
+        if (handle == null) {
+            pendingPushHandles.remove(callId)
+        } else {
+            pendingPushHandles.remove(callId, handle)
+        }
     }
 
     internal fun notifyPushCallMissed(callId: String, callerUri: String) {
-        listener?.onPushCallMissed(callId, callerUri)
+        val dispatch = Runnable {
+            listener?.onPushCallMissed(callId, callerUri)
+        }
+        if (mainHandler != null && Looper.myLooper() != Looper.getMainLooper()) {
+            mainHandler.post(dispatch)
+        } else {
+            dispatch.run()
+        }
     }
 
     fun attachPendingPushCall(sipCallId: String, call: SipCall): Boolean {
@@ -505,7 +516,8 @@ class SipClient(
                 isOutgoing = false
             )
         }
-        val attachedToPush = attachPendingPushCall(call.callId, call)
+        val handle = pendingPushHandles.remove(call.callId)
+        val attachedToPush = handle?.onMatchingInviteArrived(call) == true
         if (!attachedToPush) {
             telecomCoordinator?.addCall(
                 callId = call.callId,
@@ -516,7 +528,9 @@ class SipClient(
                 callbacks = createTelecomCallbacks(call)
             )
         }
-        listener?.onIncomingCall(call)
+        if (handle?.isDeclined != true) {
+            listener?.onIncomingCall(call)
+        }
     }
 
     @JvmSynthetic

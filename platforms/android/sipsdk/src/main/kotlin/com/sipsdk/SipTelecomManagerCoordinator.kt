@@ -147,8 +147,9 @@ class CoreTelecomCoordinator(
             callCapabilities = CallAttributesCompat.SUPPORTS_SET_INACTIVE
         )
 
+        val prevInactiveJob = lastInactiveJob
         scope.launch {
-            runCatching { lastInactiveJob?.join() }
+            runCatching { prevInactiveJob?.join() }
             try {
                 callsManager.addCall(
                     callAttributes = attributes,
@@ -193,6 +194,7 @@ class CoreTelecomCoordinator(
                 }
             } catch (t: Throwable) {
                 Log.w(TAG, "Telecom addCall failed for $callId: ${t.message}")
+                trackedCalls.remove(callId, tracked)
                 if (!tracked.scopeReady.isCompleted) {
                     tracked.scopeReady.completeExceptionally(t)
                 }

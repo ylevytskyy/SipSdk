@@ -1812,15 +1812,23 @@ static int run_test_12_multicall(const sip_callbacks_t &callbacks, const char *c
                 "did not receive incoming call waiting from 9003");
     sip_call_t *call3 = inc_ev.call;
 
+    // Resuming call2 while call3 is unanswered INCOMING must not put unanswered call3 on hold.
+    TEST_ASSERT(sip_call_set_hold(call2, false) == 0, "resume call2 with unanswered call3 failed");
+    CallEvent ev2_unhold;
+    TEST_ASSERT(wait_for_call_state(call2, SIP_CALL_STATE_ESTABLISHED, 5, ev2_unhold),
+                "call2 did not resume");
+    TEST_ASSERT(sip_call_is_on_hold(call3) == false,
+                "unanswered incoming call3 must not be auto-held");
+
     clear_call_events();
     TEST_ASSERT(sip_call_answer(call3, false) == 0, "answer call3 failed");
-    CallEvent ev1_hold_cw, ev3_estab;
-    TEST_ASSERT(wait_for_call_state(call1, SIP_CALL_STATE_HOLD, 5, ev1_hold_cw),
-                "call1 did not auto-hold when answering call3");
+    CallEvent ev2_hold_cw, ev3_estab;
+    TEST_ASSERT(wait_for_call_state(call2, SIP_CALL_STATE_HOLD, 5, ev2_hold_cw),
+                "call2 did not auto-hold when answering call3");
     TEST_ASSERT(wait_for_call_state(call3, SIP_CALL_STATE_ESTABLISHED, 10, ev3_estab),
                 "call3 did not establish");
-    TEST_ASSERT(sip_call_is_on_hold(call1) == true, "call1 must be held after answering call3");
-    TEST_ASSERT(sip_call_is_on_hold(call2) == true, "call2 must stay held");
+    TEST_ASSERT(sip_call_is_on_hold(call1) == true, "call1 must stay held after answering call3");
+    TEST_ASSERT(sip_call_is_on_hold(call2) == true, "call2 must be held after answering call3");
     TEST_ASSERT(sip_call_is_on_hold(call3) == false, "call3 must be active");
 
     sip_call_hangup(call1, 0, "Hangup");
@@ -1894,6 +1902,7 @@ static int run_test_12_multicall(const sip_callbacks_t &callbacks, const char *c
         TEST_ASSERT(saw_fallback_media, "on_call_media(on_hold=true, is_muted=true) did not fire on fallback");
     }
     TEST_ASSERT(sip_call_is_on_hold(call_lb) == true, "call_lb must remain locally held after 488");
+    TEST_ASSERT(sip_call_is_muted(call_lb) == true, "call_lb must report is_muted=true on hold fallback");
 
     sip_call_hangup(call_lb, 0, "Hangup");
     sip_call_hangup(call_b, 0, "Hangup");

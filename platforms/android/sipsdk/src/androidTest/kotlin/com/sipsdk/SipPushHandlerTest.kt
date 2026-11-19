@@ -109,6 +109,7 @@ class SipPushHandlerTest {
             assertTrue("Expected incoming call from 9003 callback", incomingLatch.await(10, TimeUnit.SECONDS))
             assertTrue(incomingCall != null)
             incomingCall?.hangup(486, "Done")
+            telecom.disconnect("live-match-id", SipDisconnectReason.LOCAL)
         } finally {
             try { client.unregister() } catch (_: Throwable) {}
             client.destroy()
