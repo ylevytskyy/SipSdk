@@ -24,6 +24,7 @@ export class FakeSession extends Emitter {
     this.holdCalls = [];
     this.muteCalls = [];
     this.dtmfSent = [];
+    this.referCalls = [];
     this.established = false;
     this.ended = false;
   }
@@ -34,6 +35,11 @@ export class FakeSession extends Emitter {
   mute(options) { this.muteCalls.push(['mute', options]); }
   unmute(options) { this.muteCalls.push(['unmute', options]); }
   sendDTMF(tones, options) { this.dtmfSent.push([tones, options]); }
+  refer(target, options = {}) {
+    if (!this.established) return false;
+    this.referCalls.push([target, options]);
+    return { id: this.referCalls.length };
+  }
   isEstablished() { return this.established; }
   isEnded() { return this.ended; }
 }

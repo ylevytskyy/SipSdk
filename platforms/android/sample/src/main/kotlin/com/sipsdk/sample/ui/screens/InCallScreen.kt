@@ -65,6 +65,7 @@ fun InCallScreen(
     modifier: Modifier = Modifier
 ) {
     val call by viewModel.activeCall.collectAsState()
+    val openCalls by viewModel.openCalls.collectAsState()
     val callState by viewModel.activeCallState.collectAsState()
     val durationSeconds by viewModel.callDurationSeconds.collectAsState()
     val isOnHold by viewModel.callIsOnHold.collectAsState()
@@ -128,11 +129,13 @@ fun InCallScreen(
             }
         }
 
-        // Top Header
-        Box(
+        // Top Header + Multi-line Switcher
+        Column(
             modifier = Modifier
                 .align(Alignment.TopCenter)
-                .padding(top = 44.dp)
+                .padding(top = 44.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Column(
                 modifier = Modifier
@@ -154,6 +157,46 @@ fun InCallScreen(
                     fontWeight = FontWeight.Medium,
                     color = Color.White.copy(alpha = 0.85f)
                 )
+            }
+
+            if (openCalls.size > 1) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    openCalls.forEach { line ->
+                        val isFocused = line.callId == call?.callId
+                        Surface(
+                            modifier = Modifier.clickable { viewModel.swapToCall(line) },
+                            color = if (isFocused) Color(0xFF007AFF) else Color.Black.copy(alpha = 0.6f),
+                            shape = RoundedCornerShape(16.dp)
+                        ) {
+                            Text(
+                                text = "${line.peerDisplayName ?: line.remoteUri} • ${if (line.isOnHold) "Hold" else "Active"}",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = Color.White,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                            )
+                        }
+                    }
+                    val other = openCalls.firstOrNull { it.callId != call?.callId }
+                    if (other != null) {
+                        Surface(
+                            modifier = Modifier.clickable { viewModel.swapToCall(other) },
+                            color = Color.White.copy(alpha = 0.25f),
+                            shape = RoundedCornerShape(16.dp)
+                        ) {
+                            Text(
+                                text = "Swap",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White,
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp)
+                            )
+                        }
+                    }
+                }
             }
         }
 

@@ -125,4 +125,103 @@ namespace SipSdk
             Reason = reason ?? string.Empty;
         }
     }
+
+    /// <summary>
+    /// Real-time audio and video quality telemetry metrics for an active call.
+    /// </summary>
+    public sealed class SipCallStats
+    {
+        public string AudioCodec { get; }
+        public uint AudioBitrateKbps { get; }
+        public float AudioLossRate { get; }
+        public uint AudioJitterMs { get; }
+        public uint AudioRttMs { get; }
+        public string VideoCodec { get; }
+        public uint VideoBitrateKbps { get; }
+        public float VideoLossRate { get; }
+        public uint VideoJitterMs { get; }
+        public uint VideoFps { get; }
+
+        public SipCallStats(
+            string audioCodec,
+            uint audioBitrateKbps,
+            float audioLossRate,
+            uint audioJitterMs,
+            uint audioRttMs,
+            string videoCodec,
+            uint videoBitrateKbps,
+            float videoLossRate,
+            uint videoJitterMs,
+            uint videoFps)
+        {
+            AudioCodec = audioCodec ?? string.Empty;
+            AudioBitrateKbps = audioBitrateKbps;
+            AudioLossRate = audioLossRate;
+            AudioJitterMs = audioJitterMs;
+            AudioRttMs = audioRttMs;
+            VideoCodec = videoCodec ?? string.Empty;
+            VideoBitrateKbps = videoBitrateKbps;
+            VideoLossRate = videoLossRate;
+            VideoJitterMs = videoJitterMs;
+            VideoFps = videoFps;
+        }
+    }
+
+    /// <summary>
+    /// Event arguments for periodic real-time call quality telemetry updates.
+    /// </summary>
+    public class CallStatsEventArgs : EventArgs
+    {
+        public SipCallStats Stats { get; }
+
+        public CallStatsEventArgs(SipCallStats stats)
+        {
+            Stats = stats ?? throw new ArgumentNullException(nameof(stats));
+        }
+    }
+
+    /// <summary>
+    /// Event arguments for outgoing call transfer (REFER) status progression.
+    /// </summary>
+    public class TransferStatusEventArgs : EventArgs
+    {
+        public int StatusCode { get; }
+        public string Reason { get; }
+
+        public TransferStatusEventArgs(int statusCode, string reason)
+        {
+            StatusCode = statusCode;
+            Reason = reason ?? string.Empty;
+        }
+    }
+
+    /// <summary>
+    /// Event arguments for incoming call transfer requests (REFER) from the remote peer.
+    /// </summary>
+    public class TransferRequestEventArgs : EventArgs
+    {
+        public string ReferToUri { get; }
+        public bool HasReplaces { get; }
+
+        public TransferRequestEventArgs(string referToUri, bool hasReplaces)
+        {
+            ReferToUri = referToUri ?? string.Empty;
+            HasReplaces = hasReplaces;
+        }
+    }
+
+    public class CallRejectedBusyEventArgs : EventArgs
+    {
+        public string CallerUri { get; }
+
+        public CallRejectedBusyEventArgs(string callerUri)
+        {
+            CallerUri = callerUri ?? string.Empty;
+        }
+    }
+
+    public class SipBusyException : InvalidOperationException
+    {
+        public SipBusyException(string message) : base(message) { }
+    }
 }

@@ -37,6 +37,10 @@ struct AccountConfig {
     std::string stun_pass;
     std::string media_nat;
     uint32_t reg_interval{0};
+    std::string tls_ca_file;
+    bool verify_tls_cert{true};
+    std::string media_enc;
+    int max_calls{4};
 };
 
 class Engine {
@@ -57,6 +61,7 @@ public:
     int reset_transports(bool re_register);
 
     sip_call_t *make_call(const char *target_uri, bool with_video);
+    int dial_call(const char *target_uri, bool with_video, sip_call_t **out_call);
     int answer_call(sip_call_t *call, bool with_video);
     int hangup_call(sip_call_t *call, int code, const char *reason);
     int hold_call(sip_call_t *call, bool hold);
@@ -68,6 +73,9 @@ public:
     int get_audio_driver(char *src_mod, size_t src_mod_sz, char *play_mod, size_t play_mod_sz) const;
     void destroy_call(sip_call_t *call);
     int request_keyframe(sip_call_t *call);
+    int transfer_call(sip_call_t *call, const char *target_uri);
+    int attended_transfer_call(sip_call_t *call, sip_call_t *consult_call);
+    int accept_transfer(sip_call_t *call, bool accept);
 
     int switch_camera();
     int set_camera(int position);
@@ -109,6 +117,10 @@ public:
     void dispatch_incoming_call(sip_call_t *call);
     void dispatch_call_media(sip_call_t *call, int width, int height, bool on_hold, bool is_muted);
     void dispatch_dtmf_digit(sip_call_t *call, const char *digit);
+    void dispatch_call_stats(sip_call_t *call, const sip_call_stats_t *stats);
+    void dispatch_transfer_status(sip_call_t *call, int code, const char *reason);
+    void dispatch_transfer_request(sip_call_t *call, const char *refer_to_uri, bool has_replaces);
+    void dispatch_call_rejected_busy(const char *caller_uri);
 
     bool prepare_audio_session();
     void release_audio_session_if_idle();
@@ -116,11 +128,15 @@ public:
     sip_call_t *find_or_create_call_session(struct call *c, const char *remote_uri, bool is_outgoing, bool with_video);
     sip_call_t *find_call_session(struct call *c);
     void remove_call_session(struct call *c);
+    void evaluate_pending_hold_on_loop(sip_call_t *call);
+    void trigger_hold_fallback_on_loop(sip_call_t *call, int code);
 
 private:
     int init_on_loop_thread(const char *config_path);
     void run_loop(std::string config_path);
     void cleanup_on_loop_thread();
+    void auto_hold_other_calls(sip_call_t *except_call);
+    void hold_call_on_loop(sip_call_t *call, bool hold);
 
     static void mqueue_callback(int id, void *data, void *arg);
     static bool sip_request_handler(const struct sip_msg *msg, void *arg);
@@ -140,6 +156,7 @@ private:
     std::atomic<bool> m_mic_muted{false};
     std::atomic<bool> m_audio_session_active{false};
     std::atomic<bool> m_is_registered{false};
+    std::atomic<int> m_max_calls{4};
 
     struct mqueue *m_mq{nullptr};
     struct ua *m_ua{nullptr};

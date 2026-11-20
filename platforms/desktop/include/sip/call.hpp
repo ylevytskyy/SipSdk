@@ -33,9 +33,11 @@ public:
     bool is_on_hold() const;
     bool is_muted() const;
     bool is_closed() const;
+    bool is_secure() const;
     uint32_t get_duration() const;
     /** Counts of what the call received; complete once the call is closed. */
     CallMediaStats get_media_stats() const;
+    CallStats get_stats() const;
 
     int answer(bool with_video = false);
     int hangup(int code = 0, const std::string &reason = "Hangup");
@@ -43,6 +45,9 @@ public:
     int set_muted(bool muted);
     int send_dtmf(const std::string &digits);
     int request_keyframe();
+    int transfer(const std::string &target_uri);
+    int attended_transfer(const std::shared_ptr<Call> &consult_call);
+    int accept_transfer(bool accept);
 
     void invalidate();
 

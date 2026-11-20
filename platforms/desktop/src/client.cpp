@@ -38,8 +38,6 @@ static std::string ensure_default_config_dir()
 #else
             ofs << "audio_player pulse,nil\n";
             ofs << "audio_source pulse,nil\n";
-            ofs << "module pulse.so\n";
-            ofs << "module alsa.so\n";
 #endif
             ofs << "video_source avcapture,nil\n";
             ofs << "video_display iosview,nil\n";
@@ -160,6 +158,84 @@ struct Client::Callbacks {
         }
     }
 
+    static void on_call_stats(sip_call_t *call, const sip_call_stats_t *stats, void *user_data)
+    {
+        auto *self = static_cast<Client *>(user_data);
+        if (!self || !call || !stats) return;
+
+        auto call_ptr = self->get_or_create_call(call);
+        std::shared_ptr<IClientListener> listener;
+        {
+            std::lock_guard<std::mutex> lock(self->m_mutex);
+            listener = self->m_listener;
+        }
+
+        if (listener && call_ptr) {
+            CallStats s;
+            s.audio_loss_rate = stats->audio_loss_rate;
+            s.audio_jitter_ms = stats->audio_jitter_ms;
+            s.audio_rtt_ms = stats->audio_rtt_ms;
+            s.audio_bitrate_kbps = stats->audio_bitrate_kbps;
+            s.audio_codec = stats->audio_codec;
+            s.video_loss_rate = stats->video_loss_rate;
+            s.video_jitter_ms = stats->video_jitter_ms;
+            s.video_bitrate_kbps = stats->video_bitrate_kbps;
+            s.video_fps = stats->video_fps;
+            s.video_codec = stats->video_codec;
+            listener->on_call_stats(call_ptr, s);
+        }
+    }
+
+    static void on_transfer_status(sip_call_t *call, int code, const char *reason, void *user_data)
+    {
+        auto *self = static_cast<Client *>(user_data);
+        if (!self || !call) return;
+
+        auto call_ptr = self->get_or_create_call(call);
+        std::shared_ptr<IClientListener> listener;
+        {
+            std::lock_guard<std::mutex> lock(self->m_mutex);
+            listener = self->m_listener;
+        }
+
+        if (listener && call_ptr) {
+            listener->on_transfer_status(call_ptr, code, reason ? reason : "");
+        }
+    }
+
+    static void on_transfer_request(sip_call_t *call, const char *refer_to_uri, bool has_replaces, void *user_data)
+    {
+        auto *self = static_cast<Client *>(user_data);
+        if (!self || !call) return;
+
+        auto call_ptr = self->get_or_create_call(call);
+        std::shared_ptr<IClientListener> listener;
+        {
+            std::lock_guard<std::mutex> lock(self->m_mutex);
+            listener = self->m_listener;
+        }
+
+        if (listener && call_ptr) {
+            listener->on_transfer_request(call_ptr, refer_to_uri ? refer_to_uri : "", has_replaces);
+        }
+    }
+
+    static void on_call_rejected_busy(sip_client_t *client, const char *caller_uri, void *user_data)
+    {
+        (void)client;
+        auto *self = static_cast<Client *>(user_data);
+        if (!self) return;
+
+        std::shared_ptr<IClientListener> listener;
+        {
+            std::lock_guard<std::mutex> lock(self->m_mutex);
+            listener = self->m_listener;
+        }
+        if (listener) {
+            listener->on_call_rejected_busy(caller_uri ? caller_uri : "");
+        }
+    }
+
     static void on_message_received(sip_client_t *client, const char *from_uri, const char *content_type,
                                     const uint8_t *body, size_t body_len, void *user_data)
     {
@@ -250,6 +326,10 @@ int Client::start(const std::string &config_path)
     cb.on_call_state = Callbacks::on_call_state;
     cb.on_call_media = Callbacks::on_call_media;
     cb.on_dtmf_digit = Callbacks::on_dtmf_digit;
+    cb.on_call_stats = Callbacks::on_call_stats;
+    cb.on_transfer_status = Callbacks::on_transfer_status;
+    cb.on_transfer_request = Callbacks::on_transfer_request;
+    cb.on_call_rejected_busy = Callbacks::on_call_rejected_busy;
 
     m_client = sip_client_create(&cb, this);
     if (!m_client) {
@@ -274,6 +354,10 @@ int Client::start(const std::string &config_path)
         std::string mod = AudioDriverManager::get_backend_name(m_audio_backend);
         if (mod == "dummy") mod = "nil";
         sip_client_set_audio_driver(m_client, mod.c_str(), m_audio_device.c_str(), mod.c_str(), m_audio_device.c_str());
+    } else {
+#if !defined(__APPLE__)
+        sip_client_set_audio_driver(m_client, "nil", "", "nil", "");
+#endif
     }
 
     return 0;
@@ -304,12 +388,17 @@ int Client::register_account()
 {
     std::lock_guard<std::mutex> lock(m_mutex);
     if (!m_client) return -1;
-    return sip_client_register(m_client,
-                               m_username.c_str(),
-                               m_domain.c_str(),
-                               m_password.c_str(),
-                               m_transport.c_str(),
-                               m_port);
+    sip_account_config_t cfg{};
+    cfg.user = m_username.c_str();
+    cfg.domain = m_domain.c_str();
+    cfg.pwd = m_password.empty() ? nullptr : m_password.c_str();
+    cfg.transport = m_transport.c_str();
+    cfg.port = m_port;
+    cfg.tls_ca_file = m_tls_ca_file.empty() ? nullptr : m_tls_ca_file.c_str();
+    cfg.verify_tls_cert = m_verify_tls_cert;
+    cfg.media_enc = m_media_enc.empty() ? nullptr : m_media_enc.c_str();
+    cfg.max_calls = m_max_calls;
+    return sip_client_register_account(m_client, &cfg);
 }
 
 int Client::unregister_account()
@@ -328,17 +417,27 @@ bool Client::is_registered() const
 
 std::shared_ptr<Call> Client::make_call(const std::string &target_uri, bool with_video)
 {
+    std::shared_ptr<Call> out_call;
+    (void)dial(target_uri, with_video, out_call);
+    return out_call;
+}
+
+int Client::dial(const std::string &target_uri, bool with_video, std::shared_ptr<Call> &out_call)
+{
+    out_call.reset();
     sip_client_t *cli = nullptr;
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         cli = m_client;
     }
-    if (!cli) return nullptr;
+    if (!cli) return EINVAL;
 
-    sip_call_t *handle = sip_call_make(cli, target_uri.c_str(), with_video);
-    if (!handle) return nullptr;
+    sip_call_t *handle = nullptr;
+    int rc = sip_call_dial(cli, target_uri.c_str(), with_video, &handle);
+    if (rc != 0 || !handle) return rc != 0 ? rc : EIO;
 
-    return get_or_create_call(handle);
+    out_call = get_or_create_call(handle);
+    return 0;
 }
 
 int Client::send_message(const std::string &target_uri,

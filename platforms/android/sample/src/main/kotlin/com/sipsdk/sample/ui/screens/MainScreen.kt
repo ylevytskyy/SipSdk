@@ -42,6 +42,7 @@ fun MainScreen(
     val isShowingAccountSheet by viewModel.isShowingAccountSheet.collectAsState()
     val isShowingInCallView by viewModel.isShowingInCallView.collectAsState()
     val incomingCall by viewModel.incomingCall.collectAsState()
+    val busyBannerMessage by viewModel.busyBannerMessage.collectAsState()
 
     Box(modifier = modifier.fillMaxSize()) {
         if (!isShowingInCallView) {
@@ -153,17 +154,36 @@ fun MainScreen(
                     )
                 }
             }
-
-            // Fullscreen overlay for Incoming Call
-            AnimatedVisibility(
-                visible = incomingCall != null,
-                enter = fadeIn(),
-                exit = fadeOut()
-            ) {
-                IncomingCallScreen(viewModel = viewModel)
-            }
         } else {
             InCallScreen(viewModel = viewModel)
+        }
+
+        // Fullscreen overlay for Incoming Call (supports call waiting during active calls)
+        AnimatedVisibility(
+            visible = incomingCall != null,
+            enter = fadeIn(),
+            exit = fadeOut()
+        ) {
+            IncomingCallScreen(viewModel = viewModel)
+        }
+
+        // Busy Toast Banner
+        if (busyBannerMessage != null) {
+            androidx.compose.material3.Surface(
+                modifier = Modifier
+                    .align(androidx.compose.ui.Alignment.TopCenter)
+                    .padding(top = 48.dp, start = 16.dp, end = 16.dp),
+                color = Color(0xFFD32F2F),
+                shape = androidx.compose.foundation.shape.RoundedCornerShape(20.dp)
+            ) {
+                Text(
+                    text = busyBannerMessage ?: "",
+                    color = Color.White,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                )
+            }
         }
     }
 }

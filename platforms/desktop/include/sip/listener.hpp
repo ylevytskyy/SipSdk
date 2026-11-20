@@ -40,6 +40,22 @@ public:
     virtual void on_message_status(uint64_t message_id, MessageStatus status, int code, const std::string &reason) {
         (void)message_id; (void)status; (void)code; (void)reason;
     }
+
+    virtual void on_call_stats(std::shared_ptr<Call> call, const CallStats &stats) {
+        (void)call; (void)stats;
+    }
+
+    virtual void on_transfer_status(std::shared_ptr<Call> call, int code, const std::string &reason) {
+        (void)call; (void)code; (void)reason;
+    }
+
+    virtual void on_transfer_request(std::shared_ptr<Call> call, const std::string &refer_to_uri, bool has_replaces) {
+        (void)call; (void)refer_to_uri; (void)has_replaces;
+    }
+
+    virtual void on_call_rejected_busy(const std::string &caller_uri) {
+        (void)caller_uri;
+    }
 };
 
 } // namespace sip

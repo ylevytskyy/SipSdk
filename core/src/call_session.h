@@ -10,6 +10,7 @@
 #include <string>
 
 struct call;
+struct tmr;
 
 namespace sip_core {
 class Engine;
@@ -39,7 +40,9 @@ public:
     bool is_on_hold() const;
     bool is_muted() const;
     bool is_closed() const;
+    bool is_secure() const;
     uint32_t get_duration() const;
+    int get_stats(sip_call_stats_t *stats) const;
 
     void *get_user_data() const;
     void set_user_data(void *data);
@@ -56,6 +59,16 @@ public:
     void latch_media_stats();
     /** The counts kept by latch_media_stats(); complete once the call is closed. */
     sip_call_media_stats_t get_media_stats() const;
+    void start_stats_timer();
+    void stop_stats_timer();
+    void start_hold_check_timer();
+    void stop_hold_check_timer();
+    bool is_hold_reinvite_pending() const { return m_hold_reinvite_pending.load(); }
+    int increment_hold_check_ticks() { return ++m_hold_check_ticks; }
+    void set_hold_fallback_muted(bool val) { m_hold_fallback_muted.store(val); }
+    bool consume_hold_fallback_muted() { return m_hold_fallback_muted.exchange(false); }
+    void set_hold_confirmed(bool val) { m_hold_confirmed.store(val); }
+    bool is_hold_confirmed() const { return m_hold_confirmed.load(); }
     void attach_raw_call(struct call *c);
     void detach_raw_call();
 
@@ -68,6 +81,15 @@ public:
     int set_call_muted(bool muted);
     int send_dtmf(const char *digits);
     int request_keyframe();
+    int transfer(const char *target_uri);
+    int attended_transfer(sip_call_t *consult_call);
+    int accept_transfer(bool accept);
+
+    std::string pending_transfer_uri() const;
+    void set_pending_transfer_uri(const std::string &uri);
+
+    void set_consult_call(sip_call_t *consult_call);
+    sip_call_t *take_consult_call();
 
     struct call *raw_call() const { return m_raw_call; }
     sip_client_t *owner() const { return m_owner; }
@@ -94,9 +116,22 @@ private:
     std::chrono::steady_clock::time_point m_established_at{};
     bool m_is_established{false};
     void *m_user_data{nullptr};
-
     sip_call_media_stats_t m_media_stats{};
     uint64_t m_frames_at_start{0};
+    std::string m_pending_transfer_uri;
+    sip_call_t *m_consult_call{nullptr};
+
+    static void stats_timer_handler(void *arg);
+    struct tmr *m_stats_tmr{nullptr};
+    bool m_stats_timer_running{false};
+    sip_call_stats_t m_last_stats{};
+
+    static void hold_check_timer_handler(void *arg);
+    struct tmr *m_hold_check_tmr{nullptr};
+    std::atomic<bool> m_hold_reinvite_pending{false};
+    std::atomic<int> m_hold_check_ticks{0};
+    std::atomic<bool> m_hold_fallback_muted{false};
+    std::atomic<bool> m_hold_confirmed{false};
 };
 
 #endif // SIP_CORE_CALL_SESSION_H

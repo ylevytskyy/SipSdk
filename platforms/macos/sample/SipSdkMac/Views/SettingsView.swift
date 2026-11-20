@@ -15,6 +15,9 @@ public struct SettingsView: View {
     @State private var stunServer: String = ""
     @State private var useIce: Bool = false
     @State private var regIntervalString: String = "3600"
+    @State private var verifyTlsCert: Bool = true
+    @State private var tlsCaFile: String = ""
+    @State private var mediaEnc: String = "none"
 
     public init(appModel: SipAppModel) {
         self.appModel = appModel
@@ -128,9 +131,47 @@ public struct SettingsView: View {
                             Picker("", selection: $transport) {
                                 Text("UDP").tag("udp")
                                 Text("TCP").tag("tcp")
+                                Text("TLS").tag("tls")
                             }
                             .pickerStyle(.segmented)
-                            .frame(maxWidth: 160)
+                            .frame(maxWidth: 220)
+                            .onChange(of: transport) { newVal in
+                                if newVal == "tls" {
+                                    if portString == "5060" { portString = "5061" }
+                                    if mediaEnc == "none" { mediaEnc = "srtp-mand" }
+                                }
+                            }
+                        }
+
+                        GridRow {
+                            Text("Media Encryption:")
+                                .foregroundColor(.secondary)
+                                .frame(width: 120, alignment: .trailing)
+                            Picker("", selection: $mediaEnc) {
+                                Text("None").tag("none")
+                                Text("SRTP").tag("srtp")
+                                Text("SRTP (Mand)").tag("srtp-mand")
+                                Text("DTLS-SRTP").tag("dtls_srtp")
+                            }
+                            .pickerStyle(.menu)
+                            .frame(maxWidth: 180)
+                        }
+
+                        if transport == "tls" {
+                            GridRow {
+                                Text("Verify TLS:")
+                                    .foregroundColor(.secondary)
+                                    .frame(width: 120, alignment: .trailing)
+                                Toggle("Verify TLS Server Certificate", isOn: $verifyTlsCert)
+                                    .toggleStyle(.switch)
+                            }
+                            GridRow {
+                                Text("CA Cert File:")
+                                    .foregroundColor(.secondary)
+                                    .frame(width: 120, alignment: .trailing)
+                                TextField("Optional PEM path", text: $tlsCaFile)
+                                    .textFieldStyle(.roundedBorder)
+                            }
                         }
 
                         GridRow {
@@ -391,10 +432,13 @@ public struct SettingsView: View {
         self.stunServer = accountStore.stunServer
         self.useIce = accountStore.useIce
         self.regIntervalString = "\(accountStore.regInterval)"
+        self.verifyTlsCert = accountStore.verifyTlsCert
+        self.tlsCaFile = accountStore.tlsCaFile
+        self.mediaEnc = accountStore.mediaEnc
     }
 
     private func saveAndRegister() {
-        let p = Int(portString) ?? 5060
+        let p = Int(portString) ?? (transport == "tls" ? 5061 : 5060)
         let interval = UInt32(regIntervalString) ?? 3600
 
         accountStore.username = username.trimmingCharacters(in: .whitespaces)
@@ -407,6 +451,9 @@ public struct SettingsView: View {
         accountStore.stunServer = stunServer.trimmingCharacters(in: .whitespaces)
         accountStore.useIce = useIce
         accountStore.regInterval = interval
+        accountStore.verifyTlsCert = verifyTlsCert
+        accountStore.tlsCaFile = tlsCaFile.trimmingCharacters(in: .whitespaces)
+        accountStore.mediaEnc = mediaEnc
 
         appModel.registerAccount()
     }

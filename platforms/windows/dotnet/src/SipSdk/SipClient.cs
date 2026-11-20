@@ -22,6 +22,10 @@ namespace SipSdk
         private readonly NativeCallStateCallback _callStateCallback;
         private readonly NativeCallMediaCallback _callMediaCallback;
         private readonly NativeDtmfDigitCallback _dtmfCallback;
+        private readonly NativeCallStatsCallback _callStatsCallback;
+        private readonly NativeTransferStatusCallback _transferStatusCallback;
+        private readonly NativeTransferRequestCallback _transferRequestCallback;
+        private readonly NativeCallRejectedBusyCallback _callRejectedBusyCallback;
         private readonly NativeMessageReceivedCallback _messageReceivedCallback;
         private readonly NativeMessageStatusCallback _messageStatusCallback;
 
@@ -29,12 +33,19 @@ namespace SipSdk
         private bool _disposed;
         private string _accountAor = string.Empty;
 
+        private int _maxCalls = 4;
+        public int MaxCalls
+        {
+            get => _maxCalls;
+            set => _maxCalls = Math.Max(1, Math.Min(8, value));
+        }
         public bool IsRegistered => _clientHandle != IntPtr.Zero && SipNativeAbi.sip_client_is_registered(_clientHandle);
         public bool IsMicMuted => _clientHandle != IntPtr.Zero && SipNativeAbi.sip_client_is_mic_muted(_clientHandle);
         public string AccountAor => _accountAor;
 
         public event EventHandler<RegistrationStateChangedEventArgs>? RegistrationStateChanged;
         public event EventHandler<IncomingCallEventArgs>? IncomingCall;
+        public event EventHandler<CallRejectedBusyEventArgs>? CallRejectedBusy;
         public event EventHandler<MessageReceivedEventArgs>? MessageReceived;
         public event EventHandler<MessageStatusChangedEventArgs>? MessageStatusChanged;
 
@@ -47,6 +58,10 @@ namespace SipSdk
             _callStateCallback = HandleNativeCallState;
             _callMediaCallback = HandleNativeCallMedia;
             _dtmfCallback = HandleNativeDtmfDigit;
+            _callStatsCallback = HandleNativeCallStats;
+            _transferStatusCallback = HandleNativeTransferStatus;
+            _transferRequestCallback = HandleNativeTransferRequest;
+            _callRejectedBusyCallback = HandleNativeCallRejectedBusy;
             _messageReceivedCallback = HandleNativeMessageReceived;
             _messageStatusCallback = HandleNativeMessageStatus;
 
@@ -59,7 +74,11 @@ namespace SipSdk
                 OnIncomingCall = Marshal.GetFunctionPointerForDelegate(_incomingCallCallback),
                 OnCallState = Marshal.GetFunctionPointerForDelegate(_callStateCallback),
                 OnCallMedia = Marshal.GetFunctionPointerForDelegate(_callMediaCallback),
-                OnDtmfDigit = Marshal.GetFunctionPointerForDelegate(_dtmfCallback)
+                OnDtmfDigit = Marshal.GetFunctionPointerForDelegate(_dtmfCallback),
+                OnCallStats = Marshal.GetFunctionPointerForDelegate(_callStatsCallback),
+                OnTransferStatus = Marshal.GetFunctionPointerForDelegate(_transferStatusCallback),
+                OnTransferRequest = Marshal.GetFunctionPointerForDelegate(_transferRequestCallback),
+                OnCallRejectedBusy = Marshal.GetFunctionPointerForDelegate(_callRejectedBusyCallback)
             };
 
             _clientHandle = SipNativeAbi.sip_client_create(ref callbacks, userData);
@@ -91,14 +110,40 @@ namespace SipSdk
             }
         }
 
-        public int Register(string username, string domain, string password, string transport = "udp", int port = 5060)
+        public int Register(
+            string username,
+            string domain,
+            string password,
+            string transport = "udp",
+            int port = 5060,
+            string? tlsCaFile = null,
+            bool verifyTlsCert = true,
+            string? mediaEnc = null,
+            int? maxCalls = null)
         {
             ThrowIfDisposed();
             if (string.IsNullOrEmpty(username)) throw new ArgumentException("Username cannot be empty", nameof(username));
             if (string.IsNullOrEmpty(domain)) throw new ArgumentException("Domain cannot be empty", nameof(domain));
 
+            if (maxCalls.HasValue)
+            {
+                MaxCalls = maxCalls.Value;
+            }
+
             _accountAor = $"sip:{username}@{domain}:{port}";
-            return SipNativeAbi.sip_client_register(_clientHandle, username, domain, password, transport, port);
+            var cfg = new SipNativeAbi.SipAccountConfigNative
+            {
+                User = username,
+                Domain = domain,
+                Pwd = password,
+                Transport = transport,
+                Port = port,
+                TlsCaFile = tlsCaFile,
+                VerifyTlsCert = verifyTlsCert,
+                MediaEnc = mediaEnc,
+                MaxCalls = MaxCalls
+            };
+            return SipNativeAbi.sip_client_register_account(_clientHandle, ref cfg);
         }
 
         public int Unregister()
@@ -107,21 +152,27 @@ namespace SipSdk
             return SipNativeAbi.sip_client_unregister(_clientHandle);
         }
 
-        public SipCall MakeCall(string targetUri, bool withVideo = false)
+        public SipCall Dial(string targetUri, bool withVideo = false)
         {
             ThrowIfDisposed();
             if (string.IsNullOrEmpty(targetUri)) throw new ArgumentException("Target URI cannot be empty", nameof(targetUri));
 
-            IntPtr callHandle = SipNativeAbi.sip_call_make(_clientHandle, targetUri, withVideo);
-            if (callHandle == IntPtr.Zero)
+            int rc = SipNativeAbi.sip_call_dial(_clientHandle, targetUri, withVideo, out IntPtr callHandle);
+            if (rc == 16)
             {
-                throw new InvalidOperationException($"Failed to initiate call to {targetUri}");
+                throw new SipBusyException($"Maximum concurrent calls reached ({MaxCalls})");
+            }
+            if (rc != 0 || callHandle == IntPtr.Zero)
+            {
+                throw new InvalidOperationException($"Failed to initiate call to {targetUri} (error {rc})");
             }
 
             var call = new SipCall(callHandle, this);
             _activeCalls[callHandle] = call;
             return call;
         }
+
+        public SipCall MakeCall(string targetUri, bool withVideo = false) => Dial(targetUri, withVideo);
 
         /// <summary>
         /// Sends a UTF-8 text message (SIP MESSAGE, text/plain).
@@ -265,6 +316,68 @@ namespace SipSdk
             {
                 call.HandleDtmf(digit);
             }
+        }
+
+        private void HandleNativeCallStats(IntPtr callHandle, IntPtr statsPtr, IntPtr userData)
+        {
+            if (statsPtr == IntPtr.Zero) return;
+            if (_activeCalls.TryGetValue(callHandle, out var call))
+            {
+                var raw = Marshal.PtrToStructure<SipCallbacksStatsMarshal>(statsPtr);
+                var stats = new SipCallStats(
+                    raw.AudioCodec ?? string.Empty,
+                    raw.AudioBitrateKbps,
+                    raw.AudioLossRate,
+                    raw.AudioJitterMs,
+                    raw.AudioRttMs,
+                    raw.VideoCodec ?? string.Empty,
+                    raw.VideoBitrateKbps,
+                    raw.VideoLossRate,
+                    raw.VideoJitterMs,
+                    raw.VideoFps);
+                call.HandleStatsUpdate(stats);
+            }
+        }
+
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Ansi)]
+        private struct SipCallbacksStatsMarshal
+        {
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)]
+            public string AudioCodec;
+            public uint AudioBitrateKbps;
+            public float AudioLossRate;
+            public uint AudioJitterMs;
+            public uint AudioRttMs;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)]
+            public string VideoCodec;
+            public uint VideoBitrateKbps;
+            public float VideoLossRate;
+            public uint VideoJitterMs;
+            public uint VideoFps;
+        }
+
+        private void HandleNativeTransferStatus(IntPtr callHandle, int code, string reason, IntPtr userData)
+        {
+            if (_activeCalls.TryGetValue(callHandle, out var call))
+            {
+                call.HandleTransferStatus(code, reason);
+            }
+        }
+
+        private void HandleNativeTransferRequest(IntPtr callHandle, string referToUri, bool hasReplaces, IntPtr userData)
+        {
+            if (_activeCalls.TryGetValue(callHandle, out var call))
+            {
+                call.HandleTransferRequest(referToUri, hasReplaces);
+            }
+        }
+
+        private void HandleNativeCallRejectedBusy(IntPtr client, string callerUri, IntPtr userData)
+        {
+            DispatchToUi(() =>
+            {
+                CallRejectedBusy?.Invoke(this, new CallRejectedBusyEventArgs(callerUri ?? string.Empty));
+            });
         }
 
         private void HandleNativeMessageReceived(IntPtr client, IntPtr fromUri, IntPtr contentType, IntPtr body, UIntPtr bodyLen, IntPtr userData)

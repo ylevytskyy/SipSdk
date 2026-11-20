@@ -22,7 +22,12 @@ struct sip_call_t;
 @property (nonatomic, readonly) BOOL isOnHold;
 @property (nonatomic, readonly) BOOL isMuted;
 @property (nonatomic, readonly) BOOL isClosed;
+@property (nonatomic, readonly) BOOL isSecure;
 @property (nonatomic, readonly) uint32_t duration;
+@property (nonatomic, readonly, copy) NSString *audioCodec;
+@property (nonatomic, readonly) uint32_t audioBitrateKbps;
+@property (nonatomic, readonly) float audioLossRate;
+@property (nonatomic, readonly) uint32_t audioJitterMs;
 
 - (instancetype)initWithHandle:(struct sip_call_t *)handle;
 
@@ -32,6 +37,9 @@ struct sip_call_t;
 - (int)setMuted:(BOOL)muted;
 - (int)sendDtmf:(NSString *)digits;
 - (int)requestKeyframe;
+- (int)transferToUri:(NSString *)targetUri;
+- (int)attendedTransferWithCall:(SipMacCall *)consultCall;
+- (int)acceptTransfer:(BOOL)accept;
 
 - (void)invalidate;
 - (struct sip_call_t *)handle;

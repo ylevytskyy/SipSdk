@@ -20,8 +20,38 @@ public final class SipAppModel {
     public var isShowingInCallView: Bool = false
     public var isShowingAccountSheet: Bool = false
     public var isShowingKeypadSheet: Bool = false
+    public var busyBannerMessage: String?
+    public var selectedCallId: UUID?
 
     private let historyKey = "com.sipsdk.sample.history"
+
+    public var openCalls: [SipCall] {
+        client.calls.filter { !$0.state.isClosed }
+    }
+
+    public var focusedCall: SipCall? {
+        if let id = selectedCallId, let match = openCalls.first(where: { $0.id == id }) {
+            return match
+        }
+        return client.activeCall ?? openCalls.first
+    }
+
+    public func showBusyBanner(_ message: String) {
+        busyBannerMessage = message
+        Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 4_000_000_000)
+            if self?.busyBannerMessage == message {
+                self?.busyBannerMessage = nil
+            }
+        }
+    }
+
+    public func swapToCall(_ call: SipCall) async {
+        selectedCallId = call.id
+        if call.isOnHold {
+            try? await call.setHold(false)
+        }
+    }
 
     public init() {
         self.client = SipClient()
@@ -48,6 +78,7 @@ public final class SipAppModel {
                 try await client.start()
             }
             let call = try await client.makeCall(to: destination, withVideo: withVideo)
+            selectedCallId = call.id
             isShowingInCallView = true
 
             // Record to history
@@ -61,6 +92,8 @@ public final class SipAppModel {
             )
             history.insert(item, at: 0)
             saveHistory()
+        } catch SipError.busy {
+            showBusyBanner("Maximum concurrent calls reached (Busy)")
         } catch {
             NSLog("[SipPhone] Failed to place call: %@", error.localizedDescription)
         }
@@ -71,6 +104,7 @@ public final class SipAppModel {
         incomingCall = nil
         do {
             try await call.answer(withVideo: withVideo)
+            selectedCallId = call.id
             isShowingInCallView = true
         } catch {
             NSLog("[SipPhone] Failed to answer incoming call: %@", error.localizedDescription)
@@ -108,12 +142,17 @@ public final class SipAppModel {
 
                 case .callStateChanged(let call, let state):
                     if state.isConnected {
+                        self.selectedCallId = call.id
                         self.isShowingInCallView = true
                     } else if state.isClosed {
                         if self.incomingCall?.id == call.id {
                             self.incomingCall = nil
                         }
-                        if self.client.activeCall == nil {
+                        if self.selectedCallId == call.id {
+                            self.selectedCallId = self.openCalls.first?.id
+                        }
+                        if self.openCalls.isEmpty {
+                            self.selectedCallId = nil
                             self.isShowingInCallView = false
                         }
                         // Update last history item duration
@@ -132,6 +171,9 @@ public final class SipAppModel {
                             self.saveHistory()
                         }
                     }
+
+                case .callRejectedBusy(let callerUri):
+                    self.showBusyBanner("Line busy — rejected call from \(callerUri)")
 
                 default:
                     break

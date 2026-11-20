@@ -8,6 +8,7 @@ import PushKit
 
 /// Incoming VoIP Push notification payload data.
 public struct SipIncomingPushPayload: @unchecked Sendable {
+    public let sipCallId: String?
     public let callerUri: String
     public let callerName: String?
     public let hasVideo: Bool
@@ -19,13 +20,61 @@ public struct SipIncomingPushPayload: @unchecked Sendable {
         callerName: String? = nil,
         hasVideo: Bool = false,
         uuid: UUID = UUID(),
+        sipCallId: String? = nil,
         rawPayload: [AnyHashable: Any] = [:]
     ) {
+        self.sipCallId = sipCallId
         self.callerUri = callerUri
         self.callerName = callerName
         self.hasVideo = hasVideo
         self.uuid = uuid
         self.rawPayload = rawPayload
+    }
+
+    /// Parses unified push keys (`sip_call_id`/`call_id`, `caller_uri`/`from_uri`/`from`,
+    /// `display_name`/`caller_name`, `has_video`/`video`).
+    public init(dictionary: [AnyHashable: Any]) {
+        let sipCallId = (dictionary["sip_call_id"] as? String)
+            ?? (dictionary["call_id"] as? String)
+        let callerUri = (dictionary["caller_uri"] as? String)
+            ?? (dictionary["from_uri"] as? String)
+            ?? (dictionary["from"] as? String)
+            ?? "Unknown"
+        let callerName = (dictionary["display_name"] as? String)
+            ?? (dictionary["caller_name"] as? String)
+        let hasVideo = Self.parseBool(dictionary["has_video"])
+            ?? Self.parseBool(dictionary["video"])
+            ?? false
+
+        var callUuid = UUID()
+        if let uuidStr = (dictionary["uuid"] as? String)
+            ?? (dictionary["call_id"] as? String)
+            ?? (dictionary["sip_call_id"] as? String),
+           let parsed = UUID(uuidString: uuidStr) {
+            callUuid = parsed
+        }
+
+        self.init(
+            callerUri: callerUri,
+            callerName: callerName,
+            hasVideo: hasVideo,
+            uuid: callUuid,
+            sipCallId: sipCallId,
+            rawPayload: dictionary
+        )
+    }
+
+    private static func parseBool(_ value: Any?) -> Bool? {
+        if let boolVal = value as? Bool { return boolVal }
+        if let intVal = value as? Int { return intVal != 0 }
+        if let strVal = value as? String {
+            switch strVal.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+            case "1", "true", "yes": return true
+            case "0", "false", "no": return false
+            default: return nil
+            }
+        }
+        return nil
     }
 }
 
@@ -89,23 +138,7 @@ public final class SipPushRegistry: NSObject, PKPushRegistryDelegate, @unchecked
             return
         }
 
-        let dict = payload.dictionaryPayload
-        let callerUri = (dict["caller_uri"] as? String) ?? (dict["from"] as? String) ?? "Unknown"
-        let callerName = (dict["caller_name"] as? String) ?? (dict["display_name"] as? String)
-        let hasVideo = (dict["video"] as? Bool) ?? (dict["has_video"] as? Bool) ?? false
-
-        var callUuid = UUID()
-        if let uuidStr = dict["call_id"] as? String, let parsed = UUID(uuidString: uuidStr) {
-            callUuid = parsed
-        }
-
-        let incomingPayload = SipIncomingPushPayload(
-            callerUri: callerUri,
-            callerName: callerName,
-            hasVideo: hasVideo,
-            uuid: callUuid,
-            rawPayload: dict
-        )
+        let incomingPayload = SipIncomingPushPayload(dictionary: payload.dictionaryPayload)
 
         if let handler = onIncomingPush {
             handler(incomingPayload, completion)

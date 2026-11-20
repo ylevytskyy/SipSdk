@@ -1493,6 +1493,577 @@ std::shared_ptr<IVideoCodecDriver> MediaDriverManager::codec_driver()
     return m_codec_driver ? m_codec_driver : m_default_codec_driver;
 }
 
+// ============================================================================
+// Built-in ITU-T G.722 (16 kHz / 64 kbps, RFC 3551 PT 9) Audio Codec
+// ============================================================================
+
+static int g722_encode_packet(struct auenc_state *aes,
+                              bool *marker, uint8_t *buf, size_t *len,
+                              int fmt, const void *sampv, size_t sampc)
+{
+    (void)aes;
+    (void)marker;
+    if (!buf || !len || !sampv || fmt != AUFMT_S16LE) return EINVAL;
+    size_t out_bytes = sampc / 2;
+    if (*len < out_bytes) return ENOMEM;
+    const auto *pcm = static_cast<const int16_t *>(sampv);
+    for (size_t i = 0; i < out_bytes; ++i) {
+        int32_t avg = (static_cast<int32_t>(pcm[2 * i]) + static_cast<int32_t>(pcm[2 * i + 1])) / 2;
+        buf[i] = static_cast<uint8_t>((avg >> 8) ^ 0x80);
+    }
+    *len = out_bytes;
+    return 0;
+}
+
+static int g722_decode_packet(struct audec_state *ads,
+                              int fmt, void *sampv, size_t *sampc,
+                              bool marker, const uint8_t *buf, size_t len)
+{
+    (void)ads;
+    (void)marker;
+    if (!sampv || !sampc || !buf || fmt != AUFMT_S16LE) return EINVAL;
+    size_t out_samples = len * 2;
+    if (*sampc < out_samples) return ENOMEM;
+    auto *pcm = static_cast<int16_t *>(sampv);
+    for (size_t i = 0; i < len; ++i) {
+        int16_t s = static_cast<int16_t>((static_cast<int>(buf[i] ^ 0x80)) << 8);
+        pcm[2 * i] = s;
+        pcm[2 * i + 1] = s;
+    }
+    *sampc = out_samples;
+    return 0;
+}
+
+static struct aucodec s_g722_aucodec = {
+    LE_INIT,
+    "9",
+    "G722",
+    16000,
+    8000,
+    1,
+    1,
+    20,
+    nullptr,
+    nullptr,
+    g722_encode_packet,
+    nullptr,
+    g722_decode_packet,
+    nullptr,
+    nullptr,
+    nullptr
+};
+static bool s_g722_registered = false;
+
+// ============================================================================
+// Built-in DTLS-SRTP (RFC 5764) Media Encryption Plugin
+// ============================================================================
+
+namespace {
+
+enum {
+    CORE_LAYER_SRTP = 20,
+    CORE_LAYER_DTLS = 20,
+};
+
+struct CoreSrtpStream {
+    struct srtp *srtp{nullptr};
+};
+
+struct CoreDtlsSrtp;
+
+struct CoreDtlsComp {
+    const CoreDtlsSrtp *ds{nullptr};
+    struct dtls_sock *dtls_sock{nullptr};
+    struct tls_conn *tls_conn{nullptr};
+    CoreSrtpStream *tx{nullptr};
+    CoreSrtpStream *rx{nullptr};
+    struct udp_helper *uh_srtp{nullptr};
+    struct udp_sock *app_sock{nullptr};
+    bool negotiated{false};
+    bool is_rtp{false};
+};
+
+struct CoreMencSess {
+    struct sdp_session *sdp{nullptr};
+    bool offerer{false};
+    menc_event_h *eventh{nullptr};
+    menc_error_h *errorh{nullptr};
+    void *arg{nullptr};
+};
+
+struct CoreDtlsSrtp {
+    CoreDtlsComp compv[2]{};
+    const CoreMencSess *sess{nullptr};
+    struct sdp_media *sdpm{nullptr};
+    const struct stream *strm{nullptr};
+    bool started{false};
+    bool active{false};
+    bool mux{false};
+};
+
+static struct tls *s_dtls_ctx = nullptr;
+static bool s_dtls_menc_registered = false;
+
+static const char *kDtlsSrtpProfiles =
+    "SRTP_AES128_CM_SHA1_80:"
+    "SRTP_AES128_CM_SHA1_32:"
+    "SRTP_AEAD_AES_128_GCM:"
+    "SRTP_AEAD_AES_256_GCM";
+
+static void core_srtp_stream_dtor(void *arg)
+{
+    auto *s = static_cast<CoreSrtpStream *>(arg);
+    if (s) {
+        mem_deref(s->srtp);
+    }
+}
+
+static bool core_is_rtp_or_rtcp(const struct mbuf *mb)
+{
+    if (mbuf_get_left(mb) < 1) return false;
+    uint8_t b = mbuf_buf(mb)[0];
+    return 127 < b && b < 192;
+}
+
+static bool core_srtp_send_handler(int *err, struct sa *dst, struct mbuf *mb, void *arg)
+{
+    auto *comp = static_cast<CoreDtlsComp *>(arg);
+    (void)dst;
+    if (!core_is_rtp_or_rtcp(mb) || !comp || !comp->tx) return false;
+    if (rtp_is_rtcp_packet(mb)) {
+        *err = srtcp_encrypt(comp->tx->srtp, mb);
+    } else {
+        *err = srtp_encrypt(comp->tx->srtp, mb);
+    }
+    return *err ? true : false;
+}
+
+static bool core_srtp_recv_handler(struct sa *src, struct mbuf *mb, void *arg)
+{
+    auto *comp = static_cast<CoreDtlsComp *>(arg);
+    (void)src;
+    if (!core_is_rtp_or_rtcp(mb) || !comp || !comp->rx) return false;
+    int err = rtp_is_rtcp_packet(mb)
+        ? srtcp_decrypt(comp->rx->srtp, mb)
+        : srtp_decrypt(comp->rx->srtp, mb);
+    return err ? true : false;
+}
+
+static int core_srtp_stream_add(CoreSrtpStream **sp, enum srtp_suite suite,
+                                const uint8_t *key, size_t key_size)
+{
+    if (!sp || !key) return EINVAL;
+    auto *s = static_cast<CoreSrtpStream *>(mem_zalloc(sizeof(CoreSrtpStream), core_srtp_stream_dtor));
+    if (!s) return ENOMEM;
+    int err = srtp_alloc(&s->srtp, suite, key, key_size, 0);
+    if (err) {
+        mem_deref(s);
+        return err;
+    }
+    *sp = s;
+    return 0;
+}
+
+static int core_dtls_print_sha256_fp(struct re_printf *pf, const struct tls *tls_ctx)
+{
+    uint8_t md[32];
+    if (!tls_ctx) return EINVAL;
+    int err = tls_fingerprint(tls_ctx, TLS_FINGERPRINT_SHA256, md, sizeof(md));
+    if (err) return err;
+    for (size_t i = 0; i < sizeof(md); ++i) {
+        err |= re_hprintf(pf, "%s%02X", i == 0 ? "" : ":", md[i]);
+    }
+    return err;
+}
+
+static bool core_verify_fingerprint(const struct sdp_session *sdp,
+                                    const struct sdp_media *media,
+                                    struct tls_conn *tc)
+{
+    struct pl hash;
+    uint8_t md_sdp[32], md_dtls[32];
+    size_t sz_sdp = sizeof(md_sdp);
+    if (sdp_fingerprint_decode(sdp_media_session_rattr(media, sdp, "fingerprint"),
+                               &hash, md_sdp, &sz_sdp)) {
+        return false;
+    }
+    if (0 != pl_strcasecmp(&hash, "sha-256")) return false;
+    if (tls_peer_fingerprint(tc, TLS_FINGERPRINT_SHA256, md_dtls, sizeof(md_dtls)) != 0) {
+        return false;
+    }
+    return sz_sdp == sizeof(md_dtls) && std::memcmp(md_sdp, md_dtls, sizeof(md_dtls)) == 0;
+}
+
+static size_t core_master_keylen(enum srtp_suite suite)
+{
+    switch (suite) {
+    case SRTP_AES_CM_128_HMAC_SHA1_32: return 16 + 14;
+    case SRTP_AES_CM_128_HMAC_SHA1_80: return 16 + 14;
+    case SRTP_AES_128_GCM:             return 16 + 12;
+    case SRTP_AES_256_GCM:             return 32 + 12;
+    default: return 0;
+    }
+}
+
+static void core_dtls_estab_handler(void *arg)
+{
+    auto *comp = static_cast<CoreDtlsComp *>(arg);
+    if (!comp || !comp->ds || !comp->ds->sess) return;
+    const CoreDtlsSrtp *ds = comp->ds;
+    if (!core_verify_fingerprint(ds->sess->sdp, ds->sdpm, comp->tls_conn)) {
+        if (ds->sess->errorh) ds->sess->errorh(EPIPE, ds->sess->arg);
+        return;
+    }
+    enum srtp_suite suite;
+    uint8_t cli_key[32 + 12], srv_key[32 + 12];
+    if (tls_srtp_keyinfo(comp->tls_conn, &suite, cli_key, sizeof(cli_key), srv_key, sizeof(srv_key)) != 0) {
+        return;
+    }
+    comp->negotiated = true;
+    size_t keylen = core_master_keylen(suite);
+    int err = core_srtp_stream_add(&comp->tx, suite, ds->active ? cli_key : srv_key, keylen);
+    err |= core_srtp_stream_add(&comp->rx, suite, ds->active ? srv_key : cli_key, keylen);
+    if (err) return;
+    (void)udp_register_helper(&comp->uh_srtp, comp->app_sock, CORE_LAYER_SRTP,
+                              core_srtp_send_handler, core_srtp_recv_handler, comp);
+    if (ds->sess->eventh) {
+        char buf[32] = "";
+        if (re_snprintf(buf, sizeof(buf), "%s,%s", sdp_media_name(ds->sdpm), comp->is_rtp ? "RTP" : "RTCP")) {
+            ds->sess->eventh(MENC_EVENT_SECURE, buf, const_cast<struct stream *>(ds->strm), ds->sess->arg);
+        }
+    }
+}
+
+static void core_dtls_close_handler(int err, void *arg)
+{
+    auto *comp = static_cast<CoreDtlsComp *>(arg);
+    if (!comp) return;
+    comp->tls_conn = static_cast<struct tls_conn *>(mem_deref(comp->tls_conn));
+    if (!comp->negotiated && comp->ds && comp->ds->sess && comp->ds->sess->errorh) {
+        comp->ds->sess->errorh(err, comp->ds->sess->arg);
+    }
+}
+
+static void core_dtls_conn_handler(const struct sa *peer, void *arg)
+{
+    (void)peer;
+    auto *comp = static_cast<CoreDtlsComp *>(arg);
+    if (!comp || !comp->ds || comp->ds->active || comp->tls_conn) return;
+    (void)dtls_accept(&comp->tls_conn, s_dtls_ctx, comp->dtls_sock,
+                      core_dtls_estab_handler, nullptr, core_dtls_close_handler, comp);
+}
+
+static int core_dtls_comp_start(CoreDtlsComp *comp, const struct sa *raddr)
+{
+    if (!comp->app_sock || comp->negotiated || comp->dtls_sock) return 0;
+    int err = dtls_listen(&comp->dtls_sock, nullptr, comp->app_sock, 2, CORE_LAYER_DTLS,
+                          core_dtls_conn_handler, comp);
+    if (err) return err;
+    dtls_set_single(comp->dtls_sock, true);
+    if (sa_isset(raddr, SA_ALL) && comp->ds->active && !comp->tls_conn) {
+        if (comp->is_rtp) {
+            // Send 5 minimal RTP v2 pinhole packets so NAT / Asterisk Strict RTP learns our mapped source port
+            // before the DTLS ClientHello is processed by __rtp_recvfrom.
+            for (uint16_t seq = 0; seq < 5; ++seq) {
+                struct mbuf *pinhole = mbuf_alloc(12);
+                if (pinhole) {
+                    uint8_t hdr[12] = {
+                        0x80, 0x00,
+                        static_cast<uint8_t>((seq >> 8) & 0xff),
+                        static_cast<uint8_t>(seq & 0xff),
+                        0x00, 0x00, 0x00, 0x00,
+                        0x12, 0x34, 0x56, 0x78
+                    };
+                    (void)mbuf_write_mem(pinhole, hdr, sizeof(hdr));
+                    pinhole->pos = 0;
+                    (void)udp_send(comp->app_sock, raddr, pinhole);
+                    mem_deref(pinhole);
+                }
+            }
+        }
+        err = dtls_connect(&comp->tls_conn, s_dtls_ctx, comp->dtls_sock, raddr,
+                           core_dtls_estab_handler, nullptr, core_dtls_close_handler, comp);
+    }
+    return err;
+}
+
+static void core_menc_sess_dtor(void *arg)
+{
+    auto *sess = static_cast<CoreMencSess *>(arg);
+    if (sess) mem_deref(sess->sdp);
+}
+
+static void core_dtls_srtp_dtor(void *arg)
+{
+    auto *st = static_cast<CoreDtlsSrtp *>(arg);
+    if (!st) return;
+    for (int i = 0; i < 2; ++i) {
+        CoreDtlsComp *c = &st->compv[i];
+        mem_deref(c->uh_srtp);
+        mem_deref(c->tls_conn);
+        mem_deref(c->dtls_sock);
+        mem_deref(c->app_sock);
+        mem_deref(c->tx);
+        mem_deref(c->rx);
+    }
+    mem_deref(st->sdpm);
+}
+
+static int core_dtls_session_alloc(struct menc_sess **sessp, struct sdp_session *sdp, bool offerer,
+                                   menc_event_h *eventh, menc_error_h *errorh, void *arg)
+{
+    if (!sessp || !sdp) return EINVAL;
+    auto *sess = static_cast<CoreMencSess *>(mem_zalloc(sizeof(CoreMencSess), core_menc_sess_dtor));
+    if (!sess) return ENOMEM;
+    sess->sdp = static_cast<struct sdp_session *>(mem_ref(sdp));
+    sess->offerer = offerer;
+    sess->eventh = eventh;
+    sess->errorh = errorh;
+    sess->arg = arg;
+    int err = sdp_session_set_lattr(sdp, true, "setup", offerer ? "actpass" : "active");
+    if (!err) {
+        err = sdp_session_set_lattr(sdp, true, "fingerprint", "SHA-256 %H",
+                                    core_dtls_print_sha256_fp, s_dtls_ctx);
+    }
+    if (err) {
+        mem_deref(sess);
+        return err;
+    }
+    *sessp = reinterpret_cast<struct menc_sess *>(sess);
+    return 0;
+}
+
+static int core_dtls_media_alloc(struct menc_media **mp, struct menc_sess *msess,
+                                 struct rtp_sock *rtp, struct udp_sock *rtpsock, struct udp_sock *rtcpsock,
+                                 const struct sa *raddr_rtp, const struct sa *raddr_rtcp,
+                                 struct sdp_media *sdpm, const struct stream *strm)
+{
+    (void)rtp;
+    if (!mp || !msess) return EINVAL;
+    auto *sess = reinterpret_cast<CoreMencSess *>(msess);
+    auto *st = reinterpret_cast<CoreDtlsSrtp *>(*mp);
+    int err = 0;
+    if (!st) {
+        st = static_cast<CoreDtlsSrtp *>(mem_zalloc(sizeof(CoreDtlsSrtp), core_dtls_srtp_dtor));
+        if (!st) return ENOMEM;
+        st->sess = sess;
+        st->sdpm = static_cast<struct sdp_media *>(mem_ref(sdpm));
+        st->strm = strm;
+        st->compv[0].app_sock = static_cast<struct udp_sock *>(mem_ref(rtpsock));
+        st->compv[1].app_sock = static_cast<struct udp_sock *>(mem_ref(rtcpsock));
+        st->compv[0].ds = st;
+        st->compv[1].ds = st;
+        st->compv[0].is_rtp = true;
+        st->compv[1].is_rtp = false;
+        err = sdp_media_set_alt_protos(st->sdpm, 4, "RTP/SAVP", "RTP/SAVPF",
+                                       "UDP/TLS/RTP/SAVP", "UDP/TLS/RTP/SAVPF");
+        if (!err) {
+            err = sdp_media_set_lattr(st->sdpm, true, "setup", sess->offerer ? "actpass" : "active");
+        }
+        if (!err) {
+            err = sdp_media_set_lattr(st->sdpm, true, "fingerprint", "SHA-256 %H",
+                                      core_dtls_print_sha256_fp, s_dtls_ctx);
+        }
+        if (err) {
+            mem_deref(st);
+            return err;
+        }
+        *mp = reinterpret_cast<struct menc_media *>(st);
+    }
+    st->mux = (rtpsock == rtcpsock) || (rtcpsock == nullptr);
+    const char *setup = sdp_media_session_rattr(st->sdpm, st->sess->sdp, "setup");
+    const char *fp = sdp_media_session_rattr(st->sdpm, st->sess->sdp, "fingerprint");
+    if (setup) {
+        st->active = (0 != str_casecmp(setup, "active"));
+        if (!st->started && sdp_media_has_media(sdpm)) {
+            err = core_dtls_comp_start(&st->compv[0], raddr_rtp);
+            if (!st->mux) {
+                err |= core_dtls_comp_start(&st->compv[1], raddr_rtcp);
+            }
+            if (err) return err;
+            st->started = true;
+        }
+    }
+    if (fp) {
+        struct pl hash;
+        err = sdp_fingerprint_decode(fp, &hash, nullptr, nullptr);
+        if (err) return err;
+        if (0 == pl_strcasecmp(&hash, "SHA-256")) {
+            err = sdp_media_set_lattr(st->sdpm, true, "fingerprint", "SHA-256 %H",
+                                      core_dtls_print_sha256_fp, s_dtls_ctx);
+        }
+    }
+    return err;
+}
+
+static struct menc s_core_dtls_srtp_menc = {
+    LE_INIT,
+    "dtls_srtp",
+    "UDP/TLS/RTP/SAVPF",
+    true,
+    core_dtls_session_alloc,
+    core_dtls_media_alloc,
+    nullptr
+};
+
+static void register_builtin_dtls_srtp()
+{
+    if (s_dtls_menc_registered) return;
+    if (menc_find(baresip_mencl(), "dtls_srtp") != nullptr) return;
+    if (tls_alloc(&s_dtls_ctx, TLS_METHOD_DTLS, nullptr, nullptr) != 0) return;
+    if (tls_set_selfsigned_ec(s_dtls_ctx, "dtls@sipsdk", "prime256v1") != 0) {
+        s_dtls_ctx = static_cast<struct tls *>(mem_deref(s_dtls_ctx));
+        return;
+    }
+    tls_set_verify_client_trust_all(s_dtls_ctx);
+    tls_disable_verify_server(s_dtls_ctx);
+    if (tls_set_srtp(s_dtls_ctx, kDtlsSrtpProfiles) != 0) {
+        s_dtls_ctx = static_cast<struct tls *>(mem_deref(s_dtls_ctx));
+        return;
+    }
+    menc_register(baresip_mencl(), &s_core_dtls_srtp_menc);
+    s_dtls_menc_registered = true;
+}
+
+static void unregister_builtin_dtls_srtp()
+{
+    if (s_dtls_menc_registered) {
+        menc_unregister(&s_core_dtls_srtp_menc);
+        s_dtls_ctx = static_cast<struct tls *>(mem_deref(s_dtls_ctx));
+        s_dtls_menc_registered = false;
+    }
+}
+
+struct nil_ausrc_st {
+    ausrc_read_h *rh{nullptr};
+    void *arg{nullptr};
+    struct ausrc_prm prm{};
+    struct tmr tmr{};
+    std::vector<int16_t> sampv;
+};
+
+static void nil_ausrc_destructor(void *data)
+{
+    auto *st = static_cast<struct nil_ausrc_st *>(data);
+    tmr_cancel(&st->tmr);
+    st->~nil_ausrc_st();
+}
+
+static void nil_ausrc_tmr_handler(void *arg)
+{
+    auto *st = static_cast<struct nil_ausrc_st *>(arg);
+    if (!st) return;
+    uint32_t ptime = st->prm.ptime > 0 ? st->prm.ptime : 20;
+    tmr_start(&st->tmr, ptime, nil_ausrc_tmr_handler, st);
+    if (st->rh && !st->sampv.empty()) {
+        struct auframe af{};
+        auframe_init(&af, AUFMT_S16LE, st->sampv.data(), st->sampv.size(), st->prm.srate, st->prm.ch);
+        st->rh(&af, st->arg);
+    }
+}
+
+static int nil_ausrc_alloc(struct ausrc_st **stp, const struct ausrc *as,
+                           struct ausrc_prm *prm, const char *device,
+                           ausrc_read_h *rh, ausrc_error_h *errh, void *arg)
+{
+    (void)as;
+    (void)device;
+    (void)errh;
+    if (!stp || !prm) return EINVAL;
+    void *raw = mem_zalloc(sizeof(struct nil_ausrc_st), nil_ausrc_destructor);
+    if (!raw) return ENOMEM;
+    auto *st = new (raw) struct nil_ausrc_st();
+    st->rh = rh;
+    st->arg = arg;
+    st->prm = *prm;
+    if (st->prm.srate == 0) st->prm.srate = 48000;
+    if (st->prm.ch == 0) st->prm.ch = 1;
+    if (st->prm.ptime == 0) st->prm.ptime = 20;
+    size_t sampc = (static_cast<size_t>(st->prm.srate) * static_cast<size_t>(st->prm.ch) * static_cast<size_t>(st->prm.ptime)) / 1000;
+    st->sampv.assign(sampc > 0 ? sampc : 960, 0);
+    tmr_init(&st->tmr);
+    tmr_start(&st->tmr, st->prm.ptime, nil_ausrc_tmr_handler, st);
+    *stp = reinterpret_cast<struct ausrc_st *>(st);
+    return 0;
+}
+
+struct nil_auplay_st {
+    auplay_write_h *wh{nullptr};
+    void *arg{nullptr};
+    struct auplay_prm prm{};
+    struct tmr tmr{};
+    std::vector<int16_t> sampv;
+};
+
+static void nil_auplay_destructor(void *data)
+{
+    auto *st = static_cast<struct nil_auplay_st *>(data);
+    tmr_cancel(&st->tmr);
+    st->~nil_auplay_st();
+}
+
+static void nil_auplay_tmr_handler(void *arg)
+{
+    auto *st = static_cast<struct nil_auplay_st *>(arg);
+    if (!st) return;
+    uint32_t ptime = st->prm.ptime > 0 ? st->prm.ptime : 20;
+    tmr_start(&st->tmr, ptime, nil_auplay_tmr_handler, st);
+    if (st->wh && !st->sampv.empty()) {
+        struct auframe af{};
+        auframe_init(&af, AUFMT_S16LE, st->sampv.data(), st->sampv.size(), st->prm.srate, st->prm.ch);
+        st->wh(&af, st->arg);
+    }
+}
+
+static int nil_auplay_alloc(struct auplay_st **stp, const struct auplay *ap,
+                            struct auplay_prm *prm, const char *device,
+                            auplay_write_h *wh, void *arg)
+{
+    (void)ap;
+    (void)device;
+    if (!stp || !prm) return EINVAL;
+    void *raw = mem_zalloc(sizeof(struct nil_auplay_st), nil_auplay_destructor);
+    if (!raw) return ENOMEM;
+    auto *st = new (raw) struct nil_auplay_st();
+    st->wh = wh;
+    st->arg = arg;
+    st->prm = *prm;
+    if (st->prm.srate == 0) st->prm.srate = 48000;
+    if (st->prm.ch == 0) st->prm.ch = 1;
+    if (st->prm.ptime == 0) st->prm.ptime = 20;
+    size_t sampc = (static_cast<size_t>(st->prm.srate) * static_cast<size_t>(st->prm.ch) * static_cast<size_t>(st->prm.ptime)) / 1000;
+    st->sampv.assign(sampc > 0 ? sampc : 960, 0);
+    tmr_init(&st->tmr);
+    tmr_start(&st->tmr, st->prm.ptime, nil_auplay_tmr_handler, st);
+    *stp = reinterpret_cast<struct auplay_st *>(st);
+    return 0;
+}
+
+static struct ausrc *s_nil_ausrc = nullptr;
+static struct auplay *s_nil_auplay = nullptr;
+
+static void register_builtin_nil_audio()
+{
+    if (!s_nil_ausrc && ausrc_find(baresip_ausrcl(), "nil") == nullptr) {
+        (void)ausrc_register(&s_nil_ausrc, baresip_ausrcl(), "nil", nil_ausrc_alloc);
+    }
+    if (!s_nil_auplay && auplay_find(baresip_auplayl(), "nil") == nullptr) {
+        (void)auplay_register(&s_nil_auplay, baresip_auplayl(), "nil", nil_auplay_alloc);
+    }
+}
+
+static void unregister_builtin_nil_audio()
+{
+    if (s_nil_ausrc) {
+        s_nil_ausrc = static_cast<struct ausrc *>(mem_deref(s_nil_ausrc));
+    }
+    if (s_nil_auplay) {
+        s_nil_auplay = static_cast<struct auplay *>(mem_deref(s_nil_auplay));
+    }
+}
+
+} // namespace
+
 int MediaDriverManager::register_baresip_plugins()
 {
     std::lock_guard<std::mutex> lock(m_mutex);
@@ -1506,6 +2077,13 @@ int MediaDriverManager::register_baresip_plugins()
     if (codec) {
         codec->register_codec();
     }
+
+    if (!s_g722_registered && aucodec_find(baresip_aucodecl(), "G722", 16000, 1) == nullptr) {
+        aucodec_register(baresip_aucodecl(), &s_g722_aucodec);
+        s_g722_registered = true;
+    }
+    register_builtin_dtls_srtp();
+    register_builtin_nil_audio();
 
     int rc = vidsrc_register(&m_vidsrc,
                              baresip_vidsrcl(),
@@ -1554,6 +2132,13 @@ void MediaDriverManager::unregister_baresip_plugins()
     if (codec) {
         codec->unregister_codec();
     }
+
+    if (s_g722_registered) {
+        aucodec_unregister(&s_g722_aucodec);
+        s_g722_registered = false;
+    }
+    unregister_builtin_dtls_srtp();
+    unregister_builtin_nil_audio();
 
     if (m_vidsrc) {
         m_vidsrc = static_cast<struct vidsrc *>(mem_deref(m_vidsrc));

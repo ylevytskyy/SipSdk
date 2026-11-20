@@ -26,6 +26,29 @@ namespace SipSdk.Tests
 
             var dtmfArgs = new DtmfReceivedEventArgs("5");
             Assert.Equal("5", dtmfArgs.Digit);
+
+            var stats = new SipCallStats("opus", 64, 0.5f, 4, 15, "H264", 512, 0.1f, 8, 30);
+            Assert.Equal("opus", stats.AudioCodec);
+            Assert.Equal(64u, stats.AudioBitrateKbps);
+            Assert.Equal(0.5f, stats.AudioLossRate);
+            Assert.Equal(4u, stats.AudioJitterMs);
+            Assert.Equal(15u, stats.AudioRttMs);
+            Assert.Equal("H264", stats.VideoCodec);
+            Assert.Equal(512u, stats.VideoBitrateKbps);
+            Assert.Equal(0.1f, stats.VideoLossRate);
+            Assert.Equal(8u, stats.VideoJitterMs);
+            Assert.Equal(30u, stats.VideoFps);
+
+            var statsArgs = new CallStatsEventArgs(stats);
+            Assert.Same(stats, statsArgs.Stats);
+
+            var transferStatusArgs = new TransferStatusEventArgs(200, "Call transferred");
+            Assert.Equal(200, transferStatusArgs.StatusCode);
+            Assert.Equal("Call transferred", transferStatusArgs.Reason);
+
+            var transferReqArgs = new TransferRequestEventArgs("sip:9002@127.0.0.1", true);
+            Assert.Equal("sip:9002@127.0.0.1", transferReqArgs.ReferToUri);
+            Assert.True(transferReqArgs.HasReplaces);
         }
 
         [Fact]

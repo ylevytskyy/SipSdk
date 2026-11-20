@@ -49,6 +49,10 @@ SIP_ABI_EXPORT int sip_client_register_account(sip_client_t *client, const sip_a
     cfg.stun_pass = config->stun_pass ? config->stun_pass : "";
     cfg.media_nat = config->media_nat ? config->media_nat : "";
     cfg.reg_interval = config->reg_interval;
+    cfg.tls_ca_file = config->tls_ca_file ? config->tls_ca_file : "";
+    cfg.verify_tls_cert = config->verify_tls_cert;
+    cfg.media_enc = config->media_enc ? config->media_enc : "";
+    cfg.max_calls = config->max_calls;
     return client->engine->register_account(cfg);
 }
 
@@ -104,9 +108,27 @@ SIP_ABI_EXPORT void sip_client_destroy(sip_client_t *client)
 SIP_ABI_EXPORT sip_call_t *sip_call_make(sip_client_t *client, const char *target_uri, bool with_video)
 {
     if (!client || !client->engine) {
+        errno = EINVAL;
         return nullptr;
     }
-    return client->engine->make_call(target_uri, with_video);
+    sip_call_t *call = nullptr;
+    int rc = client->engine->dial_call(target_uri, with_video, &call);
+    if (rc != 0) {
+        errno = rc;
+        return nullptr;
+    }
+    return call;
+}
+
+SIP_ABI_EXPORT int sip_call_dial(sip_client_t *client, const char *target_uri, bool with_video, sip_call_t **out_call)
+{
+    if (out_call) {
+        *out_call = nullptr;
+    }
+    if (!client || !client->engine || !out_call) {
+        return EINVAL;
+    }
+    return client->engine->dial_call(target_uri, with_video, out_call);
 }
 
 SIP_ABI_EXPORT int sip_call_answer(sip_call_t *call, bool with_video)
@@ -137,6 +159,24 @@ SIP_ABI_EXPORT int sip_call_send_dtmf(sip_call_t *call, const char *digits)
 {
     if (!call) return EINVAL;
     return call->send_dtmf(digits);
+}
+
+SIP_ABI_EXPORT int sip_call_transfer(sip_call_t *call, const char *target_uri)
+{
+    if (!call || !target_uri) return EINVAL;
+    return call->transfer(target_uri);
+}
+
+SIP_ABI_EXPORT int sip_call_attended_transfer(sip_call_t *call, sip_call_t *consult_call)
+{
+    if (!call || !consult_call) return EINVAL;
+    return call->attended_transfer(consult_call);
+}
+
+SIP_ABI_EXPORT int sip_call_accept_transfer(sip_call_t *call, bool accept)
+{
+    if (!call) return EINVAL;
+    return call->accept_transfer(accept);
 }
 
 SIP_ABI_EXPORT int sip_client_set_mic_muted(sip_client_t *client, bool muted)
@@ -209,6 +249,18 @@ SIP_ABI_EXPORT bool sip_call_is_closed(const sip_call_t *call)
 {
     if (!call) return true;
     return call->is_closed();
+}
+
+SIP_ABI_EXPORT bool sip_call_is_secure(const sip_call_t *call)
+{
+    if (!call) return false;
+    return call->is_secure();
+}
+
+SIP_ABI_EXPORT int sip_call_get_stats(const sip_call_t *call, sip_call_stats_t *stats)
+{
+    if (!call || !stats) return EINVAL;
+    return call->get_stats(stats);
 }
 
 SIP_ABI_EXPORT uint32_t sip_call_get_duration(const sip_call_t *call)

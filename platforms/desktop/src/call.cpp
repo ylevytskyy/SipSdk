@@ -90,6 +90,11 @@ bool Call::is_closed() const
     return m_handle ? sip_call_is_closed(m_handle) : true;
 }
 
+bool Call::is_secure() const
+{
+    return m_handle ? sip_call_is_secure(m_handle) : false;
+}
+
 uint32_t Call::get_duration() const
 {
     return m_handle ? sip_call_get_duration(m_handle) : 0;
@@ -103,6 +108,26 @@ CallMediaStats Call::get_media_stats() const
     out.video_frames_decoded = s.video_frames_decoded;
     out.video_rtp_received = s.video_rtp_received;
     out.audio_rtp_received = s.audio_rtp_received;
+    return out;
+}
+
+CallStats Call::get_stats() const
+{
+    CallStats out;
+    if (!m_handle) return out;
+    sip_call_stats_t raw{};
+    if (sip_call_get_stats(m_handle, &raw) == 0) {
+        out.audio_loss_rate = raw.audio_loss_rate;
+        out.audio_jitter_ms = raw.audio_jitter_ms;
+        out.audio_rtt_ms = raw.audio_rtt_ms;
+        out.audio_bitrate_kbps = raw.audio_bitrate_kbps;
+        out.audio_codec = raw.audio_codec;
+        out.video_loss_rate = raw.video_loss_rate;
+        out.video_jitter_ms = raw.video_jitter_ms;
+        out.video_bitrate_kbps = raw.video_bitrate_kbps;
+        out.video_fps = raw.video_fps;
+        out.video_codec = raw.video_codec;
+    }
     return out;
 }
 
@@ -140,6 +165,24 @@ int Call::request_keyframe()
 {
     if (!m_handle) return -1;
     return sip_call_request_keyframe(m_handle);
+}
+
+int Call::transfer(const std::string &target_uri)
+{
+    if (!m_handle) return -1;
+    return sip_call_transfer(m_handle, target_uri.c_str());
+}
+
+int Call::attended_transfer(const std::shared_ptr<Call> &consult_call)
+{
+    if (!m_handle || !consult_call || !consult_call->m_handle) return -1;
+    return sip_call_attended_transfer(m_handle, consult_call->m_handle);
+}
+
+int Call::accept_transfer(bool accept)
+{
+    if (!m_handle) return -1;
+    return sip_call_accept_transfer(m_handle, accept);
 }
 
 void Call::invalidate()

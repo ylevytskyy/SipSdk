@@ -33,6 +33,11 @@ public:
     void set_password(std::string password) { m_password = std::move(password); }
     void set_port(int port) { m_port = port; }
     void set_transport(std::string transport) { m_transport = std::move(transport); }
+    void set_tls_ca_file(std::string ca_file) { m_tls_ca_file = std::move(ca_file); }
+    void set_verify_tls_cert(bool verify) { m_verify_tls_cert = verify; }
+    void set_media_enc(std::string media_enc) { m_media_enc = std::move(media_enc); }
+    void set_max_calls(int max_calls) { m_max_calls = max_calls; }
+    int max_calls() const { return m_max_calls; }
     void set_listener(std::shared_ptr<IClientListener> listener);
 
     int start(const std::string &config_path = "");
@@ -44,6 +49,7 @@ public:
     bool is_registered() const;
 
     std::shared_ptr<Call> make_call(const std::string &target_uri, bool with_video = false);
+    int dial(const std::string &target_uri, bool with_video, std::shared_ptr<Call> &out_call);
 
     /**
      * Sends a SIP MESSAGE. body holds UTF-8 text for text/plain or raw bytes for other
@@ -77,6 +83,10 @@ private:
     std::string m_password;
     int m_port{5060};
     std::string m_transport{"udp"};
+    std::string m_tls_ca_file;
+    bool m_verify_tls_cert{true};
+    std::string m_media_enc;
+    int m_max_calls{4};
 
     AudioBackend m_audio_backend{AudioBackend::Auto};
     std::string m_audio_device;

@@ -11,9 +11,15 @@ if [[ "$STATUS" != '"healthy"' ]]; then
   bash scripts/run-pbx.sh
 fi
 
-echo "==> 2. Verifying Asterisk PJSIP endpoints..."
+echo "==> 2. Verifying Asterisk PJSIP endpoints & TLS/SRTP transport..."
 docker exec sipsdk-asterisk asterisk -rx "pjsip show endpoints" | grep -E "1001|1002|1003|1004|1005"
 echo "    PASS: All 5 extensions (1001-1005) loaded in Asterisk"
+docker exec sipsdk-asterisk asterisk -rx "pjsip show transports" | grep -E "transport-tls.*5061"
+echo "    PASS: PJSIP transport-tls active on port 5061"
+docker exec sipsdk-asterisk asterisk -rx "pjsip show endpoint 1004" | grep -E "media_encryption\s*:\s*sdes"
+echo "    PASS: Endpoint 1004 configured with media_encryption=sdes"
+docker exec sipsdk-asterisk asterisk -rx "dialplan show 9003@default" | grep -E "pbx-callback\.sh"
+echo "    PASS: Dialplan extension 9003 callback loaded"
 
 echo "==> 3. Verifying SIP UDP registration for Mobile App (Extension 1001)..."
 python3 -c '
@@ -66,6 +72,18 @@ print("    PASS: UDP REGISTER 200 OK for Extension 1001")
 '
 
 echo "==> 4. Verifying SIP WebSocket registration & Two-way Video Call for Web Client (Extension 1002)..."
+WEB_SERVER_PID=""
+if ! curl -s -f http://localhost:5101/ >/dev/null 2>&1; then
+  python3 -m http.server 5101 --directory web >/dev/null 2>&1 &
+  WEB_SERVER_PID=$!
+  sleep 1
+fi
+cleanup() {
+  if [[ -n "$WEB_SERVER_PID" ]]; then
+    kill "$WEB_SERVER_PID" 2>/dev/null || true
+  fi
+}
+trap cleanup EXIT
 node -e '
 const { chromium } = require("/Users/lion/.nvm/versions/node/v24.13.1/lib/node_modules/playwright");
 async function run() {

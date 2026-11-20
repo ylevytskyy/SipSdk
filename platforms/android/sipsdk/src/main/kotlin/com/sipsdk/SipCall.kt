@@ -19,6 +19,9 @@ class SipCall internal constructor(
     val durationSeconds: Long
         get() = if (nativeHandle != 0L) nativeGetDuration(nativeHandle) else 0L
 
+    val isSecure: Boolean
+        get() = if (nativeHandle != 0L) nativeIsSecure(nativeHandle) else false
+
     fun answer(withVideo: Boolean = false): Int =
         if (nativeHandle != 0L) nativeAnswer(nativeHandle, withVideo) else -1
 
@@ -31,6 +34,20 @@ class SipCall internal constructor(
 
     fun requestKeyframe(): Int = if (nativeHandle != 0L) nativeRequestKeyframe(nativeHandle) else -1
 
+    fun getStats(): SipCallStats? = if (nativeHandle != 0L) nativeGetStats(nativeHandle) else null
+
+    fun transfer(target: String): Int = if (nativeHandle != 0L) nativeTransfer(nativeHandle, target) else -1
+
+    fun attendedTransfer(consultCall: SipCall): Int =
+        if (nativeHandle != 0L && consultCall.nativeHandle != 0L) {
+            nativeAttendedTransfer(nativeHandle, consultCall.nativeHandle)
+        } else {
+            -1
+        }
+
+    fun acceptTransfer(accept: Boolean): Int =
+        if (nativeHandle != 0L) nativeAcceptTransfer(nativeHandle, accept) else -1
+
     private external fun nativeAnswer(handle: Long, withVideo: Boolean): Int
     private external fun nativeHangup(handle: Long, code: Int, reason: String): Int
     private external fun nativeSetHold(handle: Long, hold: Boolean): Int
@@ -40,4 +57,9 @@ class SipCall internal constructor(
     private external fun nativeIsOnHold(handle: Long): Boolean
     private external fun nativeHasVideo(handle: Long): Boolean
     private external fun nativeRequestKeyframe(handle: Long): Int
+    private external fun nativeIsSecure(handle: Long): Boolean
+    private external fun nativeGetStats(handle: Long): SipCallStats?
+    private external fun nativeTransfer(handle: Long, target: String): Int
+    private external fun nativeAttendedTransfer(handle: Long, consultHandle: Long): Int
+    private external fun nativeAcceptTransfer(handle: Long, accept: Boolean): Int
 }

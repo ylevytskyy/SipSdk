@@ -60,12 +60,14 @@ Each item is a check that can fail.
 - Manual evidence in `specs/enterprise-telephony/evidence/` from one physical Android device:
   lock-screen incoming UI, Bluetooth headset routing, and a real FCM wake-up from a killed app.
 
+## Resolved decisions (from `grill-deep`)
+- **`core-telecom` version:** Pin `androidx.core:core-telecom:1.0.1` (latest stable 1.0.x on Google Maven) with `minSdk = 26`.
+- **Unified push payload keys:** Both Android `SipPushHandler` and iOS `SipPushRegistry` accept `sip_call_id` (alias `call_id`, opaque SIP `Call-ID` string; iOS also preserves optional UUID parsing), `caller_uri` (aliases `from_uri`, `from`), `display_name` (alias `caller_name`), and `has_video` (alias `video`).
+- **Asterisk multi-call / `486` test driver:** Add delayed-callback extension `9003` to `docker/asterisk/config/extensions.conf` (answers, waits ~2 s while the single-process test fills `max_calls` via `9001`, and originates an `INVITE` back to the caller) to test real PBX incoming Call Waiting and `486 Busy Here`; use an in-test loopback SIP socket only for protocol-error edge cases (e.g., rejected hold re-INVITE).
+- **Android emulator targets:** Verify `verify-android-sdk.sh` on both `system-images;android-26;google_apis;arm64-v8a` and `system-images;android-34;google_apis;arm64-v8a`.
+
 ## Open questions
-- Which stable `core-telecom` 1.0.x version do we pin? Check the newest 1.0.x on Google Maven at build time.
-- What push payload keys does the SDK expect (for example `call_id`, `from_uri`, `display_name`)?
-  Should they match the iOS `SipPushRegistry` payload model exactly?
-- Does the Docker Asterisk need extra extensions (for example a second auto-answer target) to drive
-  the two-call and cap tests from one test process?
+None (all open questions resolved).
 
 ## Deliberately does NOT do
 - **Multiple accounts per `SipClient`.** Single `m_ua` stays; a later spec.

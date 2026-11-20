@@ -113,8 +113,91 @@ static void test_on_call_media(sip_call_t *call, int width, int height, bool on_
 {
     (void)user_data;
     MediaEvent ev{call, width, height, on_hold, is_muted};
-    std::lock_guard<std::mutex> lock(g_call_mutex);
-    g_media_events.push_back(ev);
+    {
+        std::lock_guard<std::mutex> lock(g_call_mutex);
+        g_media_events.push_back(ev);
+    }
+    g_call_cv.notify_all();
+}
+
+static std::atomic<int> g_call_stats_count{0};
+static sip_call_stats_t g_last_call_stats{};
+static std::mutex g_stats_mutex;
+
+static void test_on_call_stats(sip_call_t *call, const sip_call_stats_t *stats, void *user_data)
+{
+    (void)call;
+    (void)user_data;
+    if (stats) {
+        std::lock_guard<std::mutex> lock(g_stats_mutex);
+        g_last_call_stats = *stats;
+        g_call_stats_count.fetch_add(1);
+    }
+}
+
+struct TransferStatusEvent {
+    sip_call_t *call{nullptr};
+    int code{0};
+    std::string reason;
+};
+
+struct TransferRequestEvent {
+    sip_call_t *call{nullptr};
+    std::string refer_to_uri;
+    bool has_replaces{false};
+};
+
+static std::mutex g_transfer_mutex;
+static std::condition_variable g_transfer_cv;
+static std::vector<TransferStatusEvent> g_transfer_status_events;
+static std::vector<TransferRequestEvent> g_transfer_request_events;
+
+static void test_on_transfer_status(sip_call_t *call, int code, const char *reason, void *user_data)
+{
+    (void)user_data;
+    std::lock_guard<std::mutex> lock(g_transfer_mutex);
+    g_transfer_status_events.push_back({call, code, reason ? reason : ""});
+    g_transfer_cv.notify_all();
+}
+
+static void test_on_transfer_request(sip_call_t *call, const char *refer_to_uri, bool has_replaces, void *user_data)
+{
+    (void)user_data;
+    std::lock_guard<std::mutex> lock(g_transfer_mutex);
+    g_transfer_request_events.push_back({call, refer_to_uri ? refer_to_uri : "", has_replaces});
+    g_transfer_cv.notify_all();
+}
+
+static bool wait_for_transfer_status(sip_call_t *call, int expected_code, int timeout_sec, TransferStatusEvent &matched)
+{
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(timeout_sec);
+    std::unique_lock<std::mutex> lock(g_transfer_mutex);
+    while (std::chrono::steady_clock::now() < deadline) {
+        for (const auto &ev : g_transfer_status_events) {
+            if ((call == nullptr || ev.call == call) && (expected_code <= 0 || ev.code == expected_code)) {
+                matched = ev;
+                return true;
+            }
+        }
+        g_transfer_cv.wait_for(lock, std::chrono::milliseconds(50));
+    }
+    return false;
+}
+
+static bool wait_for_transfer_request(sip_call_t *call, int timeout_sec, TransferRequestEvent &matched)
+{
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(timeout_sec);
+    std::unique_lock<std::mutex> lock(g_transfer_mutex);
+    while (std::chrono::steady_clock::now() < deadline) {
+        for (const auto &ev : g_transfer_request_events) {
+            if (call == nullptr || ev.call == call) {
+                matched = ev;
+                return true;
+            }
+        }
+        g_transfer_cv.wait_for(lock, std::chrono::milliseconds(50));
+    }
+    return false;
 }
 
 static bool wait_for_call_state(sip_call_t *call, sip_call_state_t target_state, int timeout_sec, CallEvent &matched_event)
@@ -137,6 +220,57 @@ static void clear_call_events()
 {
     std::lock_guard<std::mutex> lock(g_call_mutex);
     g_call_events.clear();
+    g_media_events.clear();
+}
+
+static bool wait_for_media_hold(sip_call_t *call, bool expected_hold, int timeout_sec)
+{
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(timeout_sec);
+    std::unique_lock<std::mutex> lock(g_call_mutex);
+    while (std::chrono::steady_clock::now() < deadline) {
+        for (const auto &ev : g_media_events) {
+            if ((call == nullptr || ev.call == call) && ev.on_hold == expected_hold) {
+                return true;
+            }
+        }
+        g_call_cv.wait_for(lock, std::chrono::milliseconds(50));
+    }
+    return false;
+}
+
+static std::mutex g_busy_mutex;
+static std::condition_variable g_busy_cv;
+static std::vector<std::string> g_busy_rejected_uris;
+
+static void test_on_call_rejected_busy(sip_client_t *client, const char *caller_uri, void *user_data)
+{
+    (void)client;
+    (void)user_data;
+    {
+        std::lock_guard<std::mutex> lock(g_busy_mutex);
+        g_busy_rejected_uris.push_back(caller_uri ? caller_uri : "");
+    }
+    g_busy_cv.notify_all();
+}
+
+static bool wait_for_busy_rejected(int timeout_sec, std::string &matched_uri)
+{
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(timeout_sec);
+    std::unique_lock<std::mutex> lock(g_busy_mutex);
+    while (std::chrono::steady_clock::now() < deadline) {
+        if (!g_busy_rejected_uris.empty()) {
+            matched_uri = g_busy_rejected_uris.back();
+            return true;
+        }
+        g_busy_cv.wait_for(lock, std::chrono::milliseconds(50));
+    }
+    return false;
+}
+
+static void clear_busy_events()
+{
+    std::lock_guard<std::mutex> lock(g_busy_mutex);
+    g_busy_rejected_uris.clear();
 }
 
 static void test_on_incoming_call(sip_client_t *client, sip_call_t *call, void *user_data)
@@ -214,7 +348,7 @@ static std::string extract_header(const std::string &msg, const std::string &nam
 
 class LoopbackCaller {
 public:
-    explicit LoopbackCaller(uint16_t port)
+    explicit LoopbackCaller(uint16_t port = 0)
         : m_port(port)
     {
         m_sock = socket(AF_INET, SOCK_DGRAM, 0);
@@ -233,7 +367,13 @@ public:
         addr.sin_port = htons(port);
         int rc = bind(m_sock, (struct sockaddr *)&addr, sizeof(addr));
         assert(rc == 0);
+        socklen_t len = sizeof(addr);
+        if (getsockname(m_sock, (struct sockaddr *)&addr, &len) == 0) {
+            m_port = ntohs(addr.sin_port);
+        }
     }
+
+    uint16_t port() const { return m_port; }
 
     ~LoopbackCaller()
     {
@@ -354,6 +494,92 @@ public:
         return m_last_response_body;
     }
 
+    bool wait_for_refer(int timeout_sec, std::string &refer_to)
+    {
+        auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(timeout_sec);
+        std::unique_lock<std::mutex> lock(m_mutex);
+        while (std::chrono::steady_clock::now() < deadline) {
+            if (m_refer_received) {
+                refer_to = m_refer_to;
+                return true;
+            }
+            m_cv.wait_for(lock, std::chrono::milliseconds(50));
+        }
+        return false;
+    }
+
+    void clear_refer()
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_refer_received = false;
+        m_refer_to.clear();
+    }
+
+    bool wait_for_client_invite(int timeout_sec, std::string &sdp_out)
+    {
+        auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(timeout_sec);
+        std::unique_lock<std::mutex> lock(m_mutex);
+        while (std::chrono::steady_clock::now() < deadline) {
+            if (m_client_invite_received) {
+                sdp_out = m_last_client_invite_sdp;
+                return true;
+            }
+            m_cv.wait_for(lock, std::chrono::milliseconds(50));
+        }
+        return false;
+    }
+
+    void clear_client_invite()
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_client_invite_received = false;
+        m_last_client_invite_sdp.clear();
+    }
+
+    void set_auto_answer_sdp(const std::string &sdp)
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_auto_answer_sdp = sdp;
+    }
+
+    void set_reinvite_reject_code(int scode)
+    {
+        m_reinvite_reject_code.store(scode);
+    }
+
+    bool send_refer(const std::string &target_uri)
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        char buf[2048];
+        m_last_cseq++;
+        std::string ruri = m_client_contact_uri.empty() ?
+            ("sip:1001@127.0.0.1:" + std::to_string(ntohs(m_client_addr.sin_port))) :
+            m_client_contact_uri;
+
+        int len = std::snprintf(buf, sizeof(buf),
+            "REFER %s SIP/2.0\r\n"
+            "Via: SIP/2.0/UDP 127.0.0.1:%u;branch=z9hG4bK-refer-%u;rport\r\n"
+            "Max-Forwards: 70\r\n"
+            "From: %s\r\n"
+            "To: %s\r\n"
+            "Call-ID: %s\r\n"
+            "CSeq: %u REFER\r\n"
+            "Refer-To: %s\r\n"
+            "Referred-By: <sip:loopback@127.0.0.1:%u>\r\n"
+            "Content-Length: 0\r\n\r\n",
+            ruri.c_str(),
+            m_port, m_last_cseq,
+            m_last_from.c_str(),
+            m_last_to.c_str(),
+            m_last_call_id.c_str(),
+            m_last_cseq,
+            target_uri.c_str(),
+            m_port);
+
+        ssize_t sent = sendto(m_sock, buf, len, 0, (struct sockaddr *)&m_client_addr, sizeof(m_client_addr));
+        return sent == len;
+    }
+
 private:
     void serve()
     {
@@ -433,6 +659,11 @@ private:
                         std::string to = extract_header(msg, "To");
                         std::string from = extract_header(msg, "From");
                         std::string call_id = extract_header(msg, "Call-ID");
+                        {
+                            std::lock_guard<std::mutex> lock(m_mutex);
+                            m_last_from = from;
+                            m_last_to = to;
+                        }
                         std::string ruri = m_client_contact_uri.empty() ?
                             ("sip:1001@127.0.0.1:" + std::to_string(ntohs(peer.sin_port))) :
                             m_client_contact_uri;
@@ -489,6 +720,117 @@ private:
                 m_cv.notify_all();
                 continue;
             }
+
+            // 4. REFER
+            if (msg.rfind("REFER", 0) == 0) {
+                std::string refer_to = extract_header(msg, "Refer-To");
+                std::string via = extract_header(msg, "Via");
+                std::string from = extract_header(msg, "From");
+                std::string to = extract_header(msg, "To");
+                std::string call_id = extract_header(msg, "Call-ID");
+                std::string cseq = extract_header(msg, "CSeq");
+
+                std::string resp = "SIP/2.0 202 Accepted\r\n"
+                                   "Via: " + via + "\r\n"
+                                   "From: " + from + "\r\n"
+                                   "To: " + to + "\r\n"
+                                   "Call-ID: " + call_id + "\r\n"
+                                   "CSeq: " + cseq + "\r\n"
+                                   "Contact: <sip:loopback@127.0.0.1:" + std::to_string(m_port) + ">\r\n"
+                                   "Content-Length: 0\r\n\r\n";
+                sendto(m_sock, resp.c_str(), resp.length(), 0, (struct sockaddr *)&peer, peer_len);
+
+                {
+                    std::lock_guard<std::mutex> lock(m_mutex);
+                    m_refer_received = true;
+                    m_refer_to = refer_to;
+                }
+                m_cv.notify_all();
+
+                // Send NOTIFY with sipfrag 200 OK
+                std::string ruri = m_client_contact_uri.empty() ?
+                    ("sip:1001@127.0.0.1:" + std::to_string(ntohs(peer.sin_port))) :
+                    m_client_contact_uri;
+
+                std::string notify = "NOTIFY " + ruri + " SIP/2.0\r\n"
+                                     "Via: SIP/2.0/UDP 127.0.0.1:" + std::to_string(m_port) + ";branch=z9hG4bK-not-1;rport\r\n"
+                                     "Max-Forwards: 70\r\n"
+                                     "From: " + to + "\r\n"
+                                     "To: " + from + "\r\n"
+                                     "Call-ID: " + call_id + "\r\n"
+                                     "CSeq: 101 NOTIFY\r\n"
+                                     "Event: refer\r\n"
+                                     "Subscription-State: terminated;reason=noresource\r\n"
+                                     "Content-Type: message/sipfrag\r\n"
+                                     "Content-Length: 16\r\n\r\n"
+                                     "SIP/2.0 200 OK\r\n";
+                sendto(m_sock, notify.c_str(), notify.length(), 0, (struct sockaddr *)&peer, peer_len);
+                continue;
+            }
+
+            // 5. Outgoing INVITE from client (or re-INVITE)
+            if (msg.rfind("INVITE", 0) == 0) {
+                std::string via = extract_header(msg, "Via");
+                std::string from = extract_header(msg, "From");
+                std::string to = extract_header(msg, "To");
+                std::string call_id = extract_header(msg, "Call-ID");
+                std::string cseq = extract_header(msg, "CSeq");
+                bool is_reinvite = (to.find(";tag=") != std::string::npos);
+                if (!is_reinvite) {
+                    to += ";tag=loopback-inv";
+                }
+                std::string body;
+                auto body_pos = msg.find("\r\n\r\n");
+                if (body_pos != std::string::npos) {
+                    body = msg.substr(body_pos + 4);
+                }
+
+                std::string answer_sdp;
+                {
+                    std::lock_guard<std::mutex> lock(m_mutex);
+                    m_client_invite_received = true;
+                    m_last_client_invite_sdp = body;
+                    answer_sdp = m_auto_answer_sdp;
+                }
+                m_cv.notify_all();
+
+                int reject_code = m_reinvite_reject_code.load();
+                if (is_reinvite && reject_code >= 400) {
+                    std::string resp = "SIP/2.0 " + std::to_string(reject_code) + " Not Acceptable Here\r\n"
+                                       "Via: " + via + "\r\n"
+                                       "From: " + from + "\r\n"
+                                       "To: " + to + "\r\n"
+                                       "Call-ID: " + call_id + "\r\n"
+                                       "CSeq: " + cseq + "\r\n"
+                                       "Content-Length: 0\r\n\r\n";
+                    sendto(m_sock, resp.c_str(), resp.length(), 0, (struct sockaddr *)&peer, peer_len);
+                    continue;
+                }
+
+                if (answer_sdp.empty()) {
+                    answer_sdp = "v=0\r\n"
+                                 "o=loopback 1 1 IN IP4 127.0.0.1\r\n"
+                                 "s=Loopback Answer\r\n"
+                                 "c=IN IP4 127.0.0.1\r\n"
+                                 "t=0 0\r\n"
+                                 "m=audio 16000 RTP/AVP 0\r\n"
+                                 "a=rtpmap:0 PCMU/8000\r\n"
+                                 "a=sendrecv\r\n";
+                }
+
+                std::string resp = "SIP/2.0 200 OK\r\n"
+                                   "Via: " + via + "\r\n"
+                                   "From: " + from + "\r\n"
+                                   "To: " + to + "\r\n"
+                                   "Call-ID: " + call_id + "\r\n"
+                                   "CSeq: " + cseq + "\r\n"
+                                   "Contact: <sip:loopback@127.0.0.1:" + std::to_string(m_port) + ">\r\n"
+                                   "Content-Type: application/sdp\r\n"
+                                   "Content-Length: " + std::to_string(answer_sdp.size()) + "\r\n\r\n" +
+                                   answer_sdp;
+                sendto(m_sock, resp.c_str(), resp.length(), 0, (struct sockaddr *)&peer, peer_len);
+                continue;
+            }
         }
     }
 
@@ -507,7 +849,286 @@ private:
     std::string m_last_call_id;
     uint32_t m_last_cseq{0};
     std::atomic<bool> m_bye_received{false};
+    std::atomic<bool> m_refer_received{false};
+    std::string m_refer_to;
+    std::string m_last_from;
+    std::string m_last_to;
+    bool m_client_invite_received{false};
+    std::string m_last_client_invite_sdp;
+    std::string m_auto_answer_sdp;
+    std::atomic<int> m_reinvite_reject_code{0};
 };
+
+static int run_test_9(const sip_callbacks_t &callbacks, const char *config_dir, const char *asterisk_host, int asterisk_port)
+{
+    std::printf("--- Test 9: Opus wideband audio & real-time call quality telemetry ---\n");
+    clear_call_events();
+    g_call_stats_count.store(0);
+    {
+        sip_client_t *telemetry_client = sip_client_create(&callbacks, nullptr);
+        TEST_ASSERT(telemetry_client != nullptr, "telemetry_client creation failed");
+        int rc_init = sip_client_init(telemetry_client, config_dir);
+        TEST_ASSERT(rc_init == 0, "sip_client_init failed for telemetry client");
+
+        int rc = sip_client_register(telemetry_client, "1001", asterisk_host, "test1001", "udp", asterisk_port);
+        TEST_ASSERT(rc == 0, "sip_client_register failed for telemetry client");
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+        std::string echo_uri = "sip:9001@" + std::string(asterisk_host) + ":" + std::to_string(asterisk_port);
+        sip_call_t *telem_call = sip_call_make(telemetry_client, echo_uri.c_str(), false);
+        TEST_ASSERT(telem_call != nullptr, "sip_call_make failed for telemetry call");
+
+        CallEvent estab_ev9;
+        bool estab9 = wait_for_call_state(telem_call, SIP_CALL_STATE_ESTABLISHED, 10, estab_ev9);
+        TEST_ASSERT(estab9, "Telemetry call did not transition to ESTABLISHED");
+        std::printf("PASS: Telemetry call established to %s\n", echo_uri.c_str());
+
+        // Let media flow for 4.5 seconds to allow periodic 2s telemetry timer to fire at least twice
+        std::this_thread::sleep_for(std::chrono::milliseconds(4500));
+
+        // 1. Verify synchronous pull telemetry
+        sip_call_stats_t pull_stats{};
+        rc = sip_call_get_stats(telem_call, &pull_stats);
+        TEST_ASSERT(rc == 0, "sip_call_get_stats failed");
+        std::printf("PASS: sip_call_get_stats: codec='%s', bitrate=%u kbps, loss=%.2f, jitter=%u ms, rtt=%u ms\n",
+                    pull_stats.audio_codec, pull_stats.audio_bitrate_kbps, pull_stats.audio_loss_rate,
+                    pull_stats.audio_jitter_ms, pull_stats.audio_rtt_ms);
+        TEST_ASSERT(std::string(pull_stats.audio_codec) == "opus", "Synchronous pull audio codec is not opus");
+        TEST_ASSERT(pull_stats.audio_bitrate_kbps > 0, "Synchronous pull audio bitrate is 0 kbps");
+
+        // 2. Verify asynchronous periodic push callback
+        int stats_count = g_call_stats_count.load();
+        std::printf("PASS: on_call_stats callback invoked %d times during 4.5s call\n", stats_count);
+        TEST_ASSERT(stats_count >= 2, "Expected on_call_stats callback to fire at least twice in 4.5s");
+
+        {
+            std::lock_guard<std::mutex> lock(g_stats_mutex);
+            std::printf("PASS: push stats: codec='%s', bitrate=%u kbps, loss=%.2f, jitter=%u ms, rtt=%u ms\n",
+                        g_last_call_stats.audio_codec, g_last_call_stats.audio_bitrate_kbps,
+                        g_last_call_stats.audio_loss_rate, g_last_call_stats.audio_jitter_ms,
+                        g_last_call_stats.audio_rtt_ms);
+            TEST_ASSERT(std::string(g_last_call_stats.audio_codec) == "opus", "Push stats audio codec is not opus");
+            TEST_ASSERT(g_last_call_stats.audio_bitrate_kbps > 0, "Push stats audio bitrate is 0 kbps");
+        }
+
+        rc = sip_call_hangup(telem_call, 0, "Hangup");
+        TEST_ASSERT(rc == 0, "sip_call_hangup failed for telemetry call");
+
+        CallEvent close_ev9;
+        bool closed9 = wait_for_call_state(telem_call, SIP_CALL_STATE_CLOSED, 5, close_ev9);
+        TEST_ASSERT(closed9, "Telemetry call did not transition to CLOSED");
+        sip_call_destroy(telem_call);
+        sip_client_destroy(telemetry_client);
+        std::printf("PASS: Telemetry call cleanly terminated\n");
+    }
+
+    // --- Test 9b: Wideband codec priority (opus > G722 > PCMU/PCMA) & G.722 negotiation ---
+    std::printf("--- Test 9b: Wideband codec priority (opus > G722 > PCMU/PCMA) & G.722 negotiation ---\n");
+    clear_call_events();
+    {
+        LoopbackCaller g722_peer(15097);
+        g722_peer.set_auto_answer_sdp(
+            "v=0\r\n"
+            "o=loopback 1 1 IN IP4 127.0.0.1\r\n"
+            "s=G722 Answer\r\n"
+            "c=IN IP4 127.0.0.1\r\n"
+            "t=0 0\r\n"
+            "m=audio 16000 RTP/AVP 9\r\n"
+            "a=rtpmap:9 G722/8000\r\n"
+            "a=sendrecv\r\n");
+        g722_peer.start();
+
+        sip_client_t *g722_client = sip_client_create(&callbacks, nullptr);
+        TEST_ASSERT(g722_client != nullptr, "g722_client creation failed");
+        TEST_ASSERT(sip_client_init(g722_client, config_dir) == 0, "sip_client_init failed for g722_client");
+        TEST_ASSERT(sip_client_register(g722_client, "1001", "127.0.0.1", "test1001", "udp", 15097) == 0,
+                    "sip_client_register failed for g722_client");
+        TEST_ASSERT(g722_peer.wait_for_registration(5), "g722_peer did not receive registration");
+
+        sip_call_t *g722_call = sip_call_make(g722_client, "sip:bob@127.0.0.1:15097", false);
+        TEST_ASSERT(g722_call != nullptr, "sip_call_make failed for g722_call");
+
+        std::string offer_sdp;
+        TEST_ASSERT(g722_peer.wait_for_client_invite(5, offer_sdp), "g722_peer did not receive INVITE");
+        auto pos_opus = offer_sdp.find("opus/48000/2");
+        auto pos_g722 = offer_sdp.find("G722/");
+        auto pos_pcmu = offer_sdp.find("PCMU/8000");
+        auto pos_pcma = offer_sdp.find("PCMA/8000");
+        TEST_ASSERT(pos_opus != std::string::npos, "SDP offer missing opus/48000/2");
+        TEST_ASSERT(pos_g722 != std::string::npos, "SDP offer missing G722");
+        TEST_ASSERT(pos_pcmu != std::string::npos, "SDP offer missing PCMU/8000");
+        TEST_ASSERT(pos_pcma != std::string::npos, "SDP offer missing PCMA/8000");
+        TEST_ASSERT(pos_opus < pos_g722 && pos_g722 < pos_pcmu, "SDP codec priority order is not opus > G722 > PCMU");
+        std::printf("PASS: Outgoing SDP offer prioritizes opus/48000/2 > G722 > PCMU/PCMA\n");
+
+        CallEvent estab_g722;
+        TEST_ASSERT(wait_for_call_state(g722_call, SIP_CALL_STATE_ESTABLISHED, 5, estab_g722),
+                    "G722 call did not establish");
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+        sip_call_stats_t g722_stats{};
+        TEST_ASSERT(sip_call_get_stats(g722_call, &g722_stats) == 0, "sip_call_get_stats failed for G722 call");
+        TEST_ASSERT(std::string(g722_stats.audio_codec) == "G722", "Negotiated codec is not G722");
+        std::printf("PASS: G722 call negotiated codec='%s'\n", g722_stats.audio_codec);
+
+        sip_call_hangup(g722_call, 0, "Hangup");
+        CallEvent close_g722;
+        wait_for_call_state(g722_call, SIP_CALL_STATE_CLOSED, 5, close_g722);
+        sip_call_destroy(g722_call);
+        g722_peer.stop();
+        sip_client_destroy(g722_client);
+    }
+    return 0;
+}
+
+static int run_test_10(const sip_callbacks_t &callbacks, const char *config_dir, const char *asterisk_host, int asterisk_port)
+{
+    (void)asterisk_host;
+    (void)asterisk_port;
+    std::printf("--- Test 10: Blind & attended call transfer (RFC 3515 REFER) ---\n");
+    clear_call_events();
+    clear_incoming_events();
+    {
+        std::lock_guard<std::mutex> lock(g_transfer_mutex);
+        g_transfer_status_events.clear();
+        g_transfer_request_events.clear();
+    }
+
+    LoopbackCaller caller(15096);
+    caller.start();
+
+    sip_client_t *client = sip_client_create(&callbacks, nullptr);
+    TEST_ASSERT(client != nullptr, "client creation failed");
+    int rc_init = sip_client_init(client, config_dir);
+    TEST_ASSERT(rc_init == 0, "sip_client_init failed");
+
+    int rc = sip_client_register(client, "1001", "127.0.0.1", "test1001", "udp", 15096);
+    TEST_ASSERT(rc == 0, "sip_client_register failed for transfer test");
+    TEST_ASSERT(caller.wait_for_registration(5), "Client registration not received by loopback");
+
+    // Establish incoming call from caller to client
+    caller.send_invite("call-id-test10-a", 10, "Bob Transfer", false);
+    IncomingCallEvent in_ev;
+    TEST_ASSERT(wait_for_incoming_call(5, in_ev), "Incoming call not received");
+    rc = sip_call_answer(in_ev.call, false);
+    TEST_ASSERT(rc == 0, "sip_call_answer failed");
+    TEST_ASSERT(caller.wait_for_response(5) == 200, "Expected 200 OK answer");
+
+    CallEvent estab_ev;
+    TEST_ASSERT(wait_for_call_state(in_ev.call, SIP_CALL_STATE_ESTABLISHED, 5, estab_ev), "Call did not establish");
+    std::printf("PASS: Established call for transfer test\n");
+
+    // Part A: Blind Transfer Initiation (sip_call_transfer)
+    std::string target = "sip:9002@127.0.0.1:5060";
+    rc = sip_call_transfer(in_ev.call, target.c_str());
+    TEST_ASSERT(rc == 0, "sip_call_transfer returned non-zero");
+
+    std::string received_refer_to;
+    TEST_ASSERT(caller.wait_for_refer(5, received_refer_to), "Loopback caller did not receive REFER");
+    TEST_ASSERT(received_refer_to.find("9002") != std::string::npos, "Refer-To does not contain target");
+    std::printf("PASS: Remote peer received REFER with Refer-To: %s\n", received_refer_to.c_str());
+
+    TransferStatusEvent status_ev;
+    TEST_ASSERT(wait_for_transfer_status(in_ev.call, 200, 5, status_ev), "Did not receive transfer status 200");
+    std::printf("PASS: Transfer status callback received code 200 ('%s')\n", status_ev.reason.c_str());
+
+    CallEvent close_ev;
+    TEST_ASSERT(wait_for_call_state(in_ev.call, SIP_CALL_STATE_CLOSED, 5, close_ev), "Call did not close after transfer");
+    sip_call_destroy(in_ev.call);
+    std::printf("PASS: Original call closed after successful transfer\n");
+
+    // Part B: Incoming Transfer Request (on_transfer_request & sip_call_accept_transfer)
+    clear_call_events();
+    clear_incoming_events();
+    caller.send_invite("call-id-test10-b", 20, "Bob Transfer 2", false);
+    IncomingCallEvent in_ev2;
+    TEST_ASSERT(wait_for_incoming_call(5, in_ev2), "Second incoming call not received");
+    rc = sip_call_answer(in_ev2.call, false);
+    TEST_ASSERT(rc == 0, "sip_call_answer failed");
+    TEST_ASSERT(caller.wait_for_response(5) == 200, "Expected 200 OK");
+    TEST_ASSERT(wait_for_call_state(in_ev2.call, SIP_CALL_STATE_ESTABLISHED, 5, estab_ev), "Second call did not establish");
+
+    // Loopback sends REFER to client
+    TEST_ASSERT(caller.send_refer("<sip:9001@127.0.0.1:5060>"), "send_refer failed");
+    TransferRequestEvent req_ev;
+    TEST_ASSERT(wait_for_transfer_request(in_ev2.call, 5, req_ev), "Did not receive on_transfer_request");
+    TEST_ASSERT(req_ev.refer_to_uri.find("9001") != std::string::npos, "refer_to_uri mismatch");
+    TEST_ASSERT(req_ev.has_replaces == false, "Expected has_replaces to be false for blind transfer");
+    std::printf("PASS: on_transfer_request invoked with target '%s', has_replaces=%d\n",
+                req_ev.refer_to_uri.c_str(), req_ev.has_replaces);
+
+    // Decline incoming transfer
+    rc = sip_call_accept_transfer(in_ev2.call, false);
+    TEST_ASSERT(rc == 0, "sip_call_accept_transfer failed");
+    std::printf("PASS: sip_call_accept_transfer(false) cleanly declined incoming transfer\n");
+
+    sip_call_hangup(in_ev2.call, 0, "Hangup");
+    wait_for_call_state(in_ev2.call, SIP_CALL_STATE_CLOSED, 5, close_ev);
+    sip_call_destroy(in_ev2.call);
+
+    // Part C: Attended Transfer (sip_call_attended_transfer with Replaces)
+    clear_call_events();
+    clear_incoming_events();
+    caller.clear_refer();
+    {
+        std::lock_guard<std::mutex> lock(g_transfer_mutex);
+        g_transfer_status_events.clear();
+        g_transfer_request_events.clear();
+    }
+
+    // 1. Primary call A (incoming from caller, then placed on hold)
+    caller.send_invite("call-id-test10-primary", 30, "Alice Primary", false);
+    IncomingCallEvent in_ev_a;
+    TEST_ASSERT(wait_for_incoming_call(5, in_ev_a), "Primary call A not received");
+    TEST_ASSERT(sip_call_answer(in_ev_a.call, false) == 0, "sip_call_answer failed for call A");
+    TEST_ASSERT(caller.wait_for_response(5) == 200, "Expected 200 OK for call A");
+    TEST_ASSERT(wait_for_call_state(in_ev_a.call, SIP_CALL_STATE_ESTABLISHED, 5, estab_ev), "Call A did not establish");
+    TEST_ASSERT(sip_call_set_hold(in_ev_a.call, true) == 0, "sip_call_set_hold failed for call A");
+    CallEvent hold_ev_a;
+    TEST_ASSERT(wait_for_call_state(in_ev_a.call, SIP_CALL_STATE_HOLD, 5, hold_ev_a), "Call A did not enter HOLD");
+
+    // 2. Consultation call B (outgoing from client to caller)
+    caller.clear_client_invite();
+    sip_call_t *consult_call = sip_call_make(client, "sip:consult@127.0.0.1:15096", false);
+    TEST_ASSERT(consult_call != nullptr, "sip_call_make failed for consult_call");
+    CallEvent estab_ev_b;
+    TEST_ASSERT(wait_for_call_state(consult_call, SIP_CALL_STATE_ESTABLISHED, 5, estab_ev_b), "Consult call B did not establish");
+    std::printf("PASS: Call A (on hold) and Call B (consultation active) established\n");
+
+    // 3. Execute attended transfer: transfer Call A to Call B
+    rc = sip_call_attended_transfer(in_ev_a.call, consult_call);
+    TEST_ASSERT(rc == 0, "sip_call_attended_transfer returned non-zero");
+
+    std::string attended_refer_to;
+    TEST_ASSERT(caller.wait_for_refer(5, attended_refer_to), "Did not receive REFER for attended transfer");
+    TEST_ASSERT(attended_refer_to.find("Replaces=") != std::string::npos, "Attended REFER missing Replaces= parameter");
+    TEST_ASSERT(attended_refer_to.find("%3Bto-tag%3D") != std::string::npos, "Attended REFER missing URL-escaped to-tag");
+    TEST_ASSERT(attended_refer_to.find("%3Bfrom-tag%3D") != std::string::npos, "Attended REFER missing URL-escaped from-tag");
+    std::printf("PASS: Attended transfer sent REFER with Replaces: %s\n", attended_refer_to.c_str());
+
+    TransferStatusEvent attended_status;
+    TEST_ASSERT(wait_for_transfer_status(in_ev_a.call, 200, 5, attended_status),
+                "Did not receive transfer status 200 for attended transfer");
+    CallEvent close_ev_a, close_ev_b;
+    TEST_ASSERT(wait_for_call_state(in_ev_a.call, SIP_CALL_STATE_CLOSED, 5, close_ev_a),
+                "Primary call A did not close after attended transfer");
+    TEST_ASSERT(wait_for_call_state(consult_call, SIP_CALL_STATE_CLOSED, 5, close_ev_b),
+                "Consultation call B did not close after attended transfer");
+    std::printf("PASS: Both primary and consultation calls transitioned to SIP_CALL_STATE_CLOSED\n");
+
+    sip_call_destroy(in_ev_a.call);
+    sip_call_destroy(consult_call);
+
+    caller.stop();
+    sip_client_destroy(client);
+    std::printf("PASS: All call transfer tests passed\n");
+    return 0;
+}
+
+static int run_test_8b(const sip_callbacks_t &callbacks, const char *config_dir, const char *asterisk_host, int asterisk_port);
+static int run_test_11_cap(const sip_callbacks_t &callbacks, const char *config_dir, const char *asterisk_host, int asterisk_port);
+static int run_test_12_multicall(const sip_callbacks_t &callbacks, const char *config_dir, const char *asterisk_host, int asterisk_port);
 
 int main(int argc, char *argv[])
 {
@@ -524,6 +1145,26 @@ int main(int argc, char *argv[])
     callbacks.on_incoming_call = test_on_incoming_call;
     callbacks.on_call_state = test_on_call_state;
     callbacks.on_call_media = test_on_call_media;
+    callbacks.on_call_stats = test_on_call_stats;
+    callbacks.on_transfer_status = test_on_transfer_status;
+    callbacks.on_transfer_request = test_on_transfer_request;
+    callbacks.on_call_rejected_busy = test_on_call_rejected_busy;
+
+    if (argc > 4 && std::string(argv[4]) == "--only-dtls") {
+        return run_test_8b(callbacks, config_dir, asterisk_host, asterisk_port);
+    }
+    if (argc > 4 && std::string(argv[4]) == "--only-telem") {
+        return run_test_9(callbacks, config_dir, asterisk_host, asterisk_port);
+    }
+    if (argc > 4 && std::string(argv[4]) == "--only-transfer") {
+        return run_test_10(callbacks, config_dir, asterisk_host, asterisk_port);
+    }
+    if (argc > 4 && std::string(argv[4]) == "--only-cap") {
+        return run_test_11_cap(callbacks, config_dir, asterisk_host, asterisk_port);
+    }
+    if (argc > 4 && std::string(argv[4]) == "--only-multicall") {
+        return run_test_12_multicall(callbacks, config_dir, asterisk_host, asterisk_port);
+    }
 
     // --- Test 1: Client initialization & account registration ---
     sip_client_t *client = sip_client_create(&callbacks, nullptr);
@@ -798,8 +1439,481 @@ int main(int argc, char *argv[])
 
     caller.stop();
 
-    // Teardown
+    // Teardown first client before starting TLS client
     sip_client_destroy(client);
+    client = nullptr;
+
+    // --- Test 8: SIP over TLS + SRTP audio call to Echo 9001 ---
+    std::printf("--- Test 8: SIP over TLS + SRTP audio call to Echo 9001 ---\n");
+    clear_call_events();
+    {
+        sip_client_t *tls_client = sip_client_create(&callbacks, nullptr);
+        TEST_ASSERT(tls_client != nullptr, "tls_client creation failed");
+        int rc_init = sip_client_init(tls_client, config_dir);
+        TEST_ASSERT(rc_init == 0, "sip_client_init failed for TLS client");
+
+        sip_account_config_t cfg{};
+        cfg.user = "1004";
+        cfg.domain = asterisk_host;
+        cfg.pwd = "test1004";
+        cfg.transport = "tls";
+        cfg.port = 5061;
+        cfg.verify_tls_cert = true;
+        const char *ca_path = "docker/asterisk/keys/asterisk.crt";
+        for (const char *cand : {"docker/asterisk/keys/asterisk.crt",
+                                 "../../docker/asterisk/keys/asterisk.crt",
+                                 "/workspace/docker/asterisk/keys/asterisk.crt"}) {
+            if (FILE *f = std::fopen(cand, "r")) {
+                std::fclose(f);
+                ca_path = cand;
+                break;
+            }
+        }
+        cfg.tls_ca_file = ca_path;
+        cfg.media_enc = "srtp-mand";
+
+        rc = sip_client_register_account(tls_client, &cfg);
+        TEST_ASSERT(rc == 0, "sip_client_register_account failed for TLS client");
+
+        // Wait a moment for registration
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+        std::string echo_uri = "sip:9001@" + std::string(asterisk_host) + ":5061;transport=tls";
+        sip_call_t *tls_call = sip_call_make(tls_client, echo_uri.c_str(), false);
+        TEST_ASSERT(tls_call != nullptr, "sip_call_make failed for TLS/SRTP echo call");
+
+        CallEvent estab_ev8;
+        bool estab8 = wait_for_call_state(tls_call, SIP_CALL_STATE_ESTABLISHED, 10, estab_ev8);
+        TEST_ASSERT(estab8, "TLS/SRTP call did not transition to ESTABLISHED");
+        std::printf("PASS: TLS/SRTP call established to %s\n", echo_uri.c_str());
+
+        // Verify media duration advances
+        std::this_thread::sleep_for(std::chrono::milliseconds(1200));
+        uint32_t dur8 = sip_call_get_duration(tls_call);
+        TEST_ASSERT(dur8 >= 1, "Call duration did not advance for TLS/SRTP call");
+        std::printf("PASS: TLS/SRTP call duration: %u sec\n", dur8);
+
+        // Verify call is secure (SRTP active)
+        TEST_ASSERT(sip_call_is_secure(tls_call) == true, "sip_call_is_secure returned false for SRTP call");
+        std::printf("PASS: TLS/SRTP call media is encrypted (sip_call_is_secure == true)\n");
+
+        rc = sip_call_hangup(tls_call, 0, "Hangup");
+        TEST_ASSERT(rc == 0, "sip_call_hangup failed for TLS/SRTP call");
+
+        CallEvent close_ev8;
+        bool closed8 = wait_for_call_state(tls_call, SIP_CALL_STATE_CLOSED, 5, close_ev8);
+        TEST_ASSERT(closed8, "TLS/SRTP call did not transition to CLOSED");
+        sip_call_destroy(tls_call);
+        sip_client_destroy(tls_client);
+        std::printf("PASS: TLS/SRTP audio call cleanly terminated\n");
+    }
+
+    // --- Test 8b: DTLS-SRTP (media_enc = "dtls_srtp") SDP & Echo 9001 call ---
+    int rc8b = run_test_8b(callbacks, config_dir, asterisk_host, asterisk_port);
+    if (rc8b != 0) return rc8b;
+
+    // --- Test 9: Opus wideband audio & real-time call quality telemetry ---
+    run_test_9(callbacks, config_dir, asterisk_host, asterisk_port);
+
+    // --- Test 10: Blind & attended call transfer (RFC 3515 REFER) ---
+    run_test_10(callbacks, config_dir, asterisk_host, asterisk_port);
+
+    // --- Test 11: max_calls cap (EBUSY on dial & 486 Busy Here on incoming) ---
+    run_test_11_cap(callbacks, config_dir, asterisk_host, asterisk_port);
+
+    // --- Test 12: Multi-call auto-hold, swap, call waiting & rejected hold fallback ---
+    run_test_12_multicall(callbacks, config_dir, asterisk_host, asterisk_port);
+
     std::printf("ALL_AUDIO_CALL_TESTS_PASSED\n");
+    return 0;
+}
+
+static int run_test_8b(const sip_callbacks_t &callbacks, const char *config_dir, const char *asterisk_host, int asterisk_port)
+{
+    int rc = 0;
+    std::printf("--- Test 8b: DTLS-SRTP (media_enc = \"dtls_srtp\") SDP & Echo 9001 call ---\n");
+    clear_call_events();
+    {
+        // 1. Verify outgoing SDP offer with media_enc = "dtls_srtp" has UDP/TLS/RTP/SAVPF and a=fingerprint
+        LoopbackCaller dtls_sdp_peer(15098);
+        dtls_sdp_peer.start();
+
+        sip_client_t *dtls_sdp_client = sip_client_create(&callbacks, nullptr);
+        TEST_ASSERT(dtls_sdp_client != nullptr, "dtls_sdp_client creation failed");
+        TEST_ASSERT(sip_client_init(dtls_sdp_client, config_dir) == 0, "sip_client_init failed for dtls_sdp_client");
+
+        sip_account_config_t sdp_cfg{};
+        sdp_cfg.user = "1001";
+        sdp_cfg.domain = "127.0.0.1";
+        sdp_cfg.pwd = "test1001";
+        sdp_cfg.transport = "udp";
+        sdp_cfg.port = 15098;
+        sdp_cfg.media_enc = "dtls_srtp";
+
+        TEST_ASSERT(sip_client_register_account(dtls_sdp_client, &sdp_cfg) == 0, "register failed for dtls_sdp_client");
+        TEST_ASSERT(dtls_sdp_peer.wait_for_registration(5), "dtls_sdp_peer did not receive registration");
+
+        sip_call_t *dtls_sdp_call = sip_call_make(dtls_sdp_client, "sip:bob@127.0.0.1:15098", false);
+        TEST_ASSERT(dtls_sdp_call != nullptr, "sip_call_make failed for dtls_sdp_call");
+
+        std::string dtls_offer_sdp;
+        TEST_ASSERT(dtls_sdp_peer.wait_for_client_invite(5, dtls_offer_sdp), "dtls_sdp_peer did not receive INVITE");
+        TEST_ASSERT(dtls_offer_sdp.find("UDP/TLS/RTP/SAVP") != std::string::npos,
+                    "DTLS-SRTP SDP offer missing UDP/TLS/RTP/SAVP(F)");
+        TEST_ASSERT(dtls_offer_sdp.find("a=fingerprint:") != std::string::npos,
+                    "DTLS-SRTP SDP offer missing a=fingerprint");
+        std::printf("PASS: DTLS-SRTP SDP offer contains UDP/TLS/RTP/SAVP(F) and a=fingerprint\n");
+
+        sip_call_hangup(dtls_sdp_call, 0, "Hangup");
+        CallEvent close_dtls_sdp;
+        wait_for_call_state(dtls_sdp_call, SIP_CALL_STATE_CLOSED, 5, close_dtls_sdp);
+        sip_call_destroy(dtls_sdp_call);
+        dtls_sdp_peer.stop();
+        sip_client_destroy(dtls_sdp_client);
+
+        // 2. Live DTLS-SRTP audio call against Asterisk DTLS endpoint (1005 -> 9001)
+        clear_call_events();
+        sip_client_t *dtls_client = sip_client_create(&callbacks, nullptr);
+        TEST_ASSERT(dtls_client != nullptr, "dtls_client creation failed");
+        TEST_ASSERT(sip_client_init(dtls_client, config_dir) == 0, "sip_client_init failed for dtls_client");
+
+        sip_account_config_t dtls_cfg{};
+        dtls_cfg.user = "1005";
+        dtls_cfg.domain = asterisk_host;
+        dtls_cfg.pwd = "test1005";
+        dtls_cfg.transport = "udp";
+        dtls_cfg.port = asterisk_port;
+        dtls_cfg.media_enc = "dtls_srtp";
+
+        TEST_ASSERT(sip_client_register_account(dtls_client, &dtls_cfg) == 0,
+                    "sip_client_register_account failed for DTLS client");
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+        std::string dtls_echo_uri = "sip:9001@" + std::string(asterisk_host) + ":" + std::to_string(asterisk_port);
+        sip_call_t *dtls_call = sip_call_make(dtls_client, dtls_echo_uri.c_str(), false);
+        TEST_ASSERT(dtls_call != nullptr, "sip_call_make failed for DTLS-SRTP echo call");
+
+        CallEvent estab_dtls;
+        TEST_ASSERT(wait_for_call_state(dtls_call, SIP_CALL_STATE_ESTABLISHED, 10, estab_dtls),
+                    "DTLS-SRTP call did not transition to ESTABLISHED");
+        std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+        TEST_ASSERT(sip_call_is_secure(dtls_call) == true, "sip_call_is_secure returned false for DTLS-SRTP call");
+
+        sip_call_stats_t dtls_stats{};
+        TEST_ASSERT(sip_call_get_stats(dtls_call, &dtls_stats) == 0, "sip_call_get_stats failed for DTLS-SRTP call");
+        TEST_ASSERT(dtls_stats.audio_bitrate_kbps > 0, "DTLS-SRTP call audio_bitrate_kbps is 0");
+        std::printf("PASS: DTLS-SRTP call established & exchanged audio (secure=true, bitrate=%u kbps)\n",
+                    dtls_stats.audio_bitrate_kbps);
+
+        sip_call_hangup(dtls_call, 0, "Hangup");
+        CallEvent close_dtls;
+        wait_for_call_state(dtls_call, SIP_CALL_STATE_CLOSED, 5, close_dtls);
+        sip_call_destroy(dtls_call);
+        sip_client_destroy(dtls_client);
+    }
+    return 0;
+}
+
+static int run_test_11_cap(const sip_callbacks_t &callbacks, const char *config_dir, const char *asterisk_host, int asterisk_port)
+{
+    std::printf("--- Test 11: max_calls cap (EBUSY on dial & 486 Busy Here on incoming) ---\n");
+    clear_call_events();
+    clear_incoming_events();
+    clear_busy_events();
+
+    sip_client_t *client = sip_client_create(&callbacks, nullptr);
+    TEST_ASSERT(client != nullptr, "cap client creation failed");
+    TEST_ASSERT(sip_client_init(client, config_dir) == 0, "sip_client_init failed");
+
+    sip_account_config_t cfg{};
+    cfg.user = "1001";
+    cfg.domain = asterisk_host;
+    cfg.pwd = "test1001";
+    cfg.transport = "udp";
+    cfg.port = asterisk_port;
+    cfg.max_calls = 1;
+    TEST_ASSERT(sip_client_register_account(client, &cfg) == 0, "sip_client_register_account failed");
+    std::this_thread::sleep_for(std::chrono::milliseconds(600));
+
+    // 1. Fill max_calls=1 with an active call to 9001, then assert second dial returns EBUSY.
+    std::string echo_uri = "sip:9001@" + std::string(asterisk_host) + ":" + std::to_string(asterisk_port);
+    sip_call_t *call1 = nullptr;
+    int rc = sip_call_dial(client, echo_uri.c_str(), false, &call1);
+    TEST_ASSERT(rc == 0 && call1 != nullptr, "First sip_call_dial to 9001 should succeed");
+
+    CallEvent estab1;
+    TEST_ASSERT(wait_for_call_state(call1, SIP_CALL_STATE_ESTABLISHED, 10, estab1),
+                "First call did not establish");
+
+    std::string music_uri = "sip:9002@" + std::string(asterisk_host) + ":" + std::to_string(asterisk_port);
+    sip_call_t *call2 = nullptr;
+    int rc_busy = sip_call_dial(client, music_uri.c_str(), false, &call2);
+    TEST_ASSERT(rc_busy == EBUSY && call2 == nullptr,
+                "Second sip_call_dial over max_calls=1 must return EBUSY and null out_call");
+
+    errno = 0;
+    sip_call_t *make_busy = sip_call_make(client, music_uri.c_str(), false);
+    TEST_ASSERT(make_busy == nullptr && errno == EBUSY,
+                "sip_call_make over max_calls=1 must return nullptr with errno == EBUSY");
+
+    TEST_ASSERT(sip_call_hangup(call1, 0, "Hangup") == 0, "hangup call1 failed");
+    CallEvent close1;
+    TEST_ASSERT(wait_for_call_state(call1, SIP_CALL_STATE_CLOSED, 5, close1), "call1 did not close");
+    sip_call_destroy(call1);
+
+    // 2. After call1 closes, dialing 9003 (delayed callback) succeeds, then filling cap triggers 486 + on_call_rejected_busy.
+    clear_incoming_events();
+    clear_busy_events();
+    std::string cb_uri = "sip:9003@" + std::string(asterisk_host) + ":" + std::to_string(asterisk_port);
+    sip_call_t *cb_call = nullptr;
+    TEST_ASSERT(sip_call_dial(client, cb_uri.c_str(), false, &cb_call) == 0 && cb_call != nullptr,
+                "sip_call_dial to 9003 after call1 closed should succeed");
+    CallEvent cb_estab;
+    TEST_ASSERT(wait_for_call_state(cb_call, SIP_CALL_STATE_ESTABLISHED, 8, cb_estab),
+                "9003 callback trigger call did not establish");
+    TEST_ASSERT(sip_call_hangup(cb_call, 0, "Hangup") == 0, "hangup 9003 trigger call failed");
+    CallEvent cb_closed;
+    TEST_ASSERT(wait_for_call_state(cb_call, SIP_CALL_STATE_CLOSED, 8, cb_closed),
+                "9003 callback trigger call did not close");
+    sip_call_destroy(cb_call);
+
+    sip_call_t *hold_cap_call = nullptr;
+    TEST_ASSERT(sip_call_dial(client, echo_uri.c_str(), false, &hold_cap_call) == 0 && hold_cap_call != nullptr,
+                "sip_call_dial to 9001 to fill cap failed");
+    CallEvent estab_cap;
+    TEST_ASSERT(wait_for_call_state(hold_cap_call, SIP_CALL_STATE_ESTABLISHED, 10, estab_cap),
+                "9001 cap-holding call did not establish");
+
+    std::string busy_caller_uri;
+    TEST_ASSERT(wait_for_busy_rejected(8, busy_caller_uri),
+                "Expected on_call_rejected_busy when Asterisk 9003 callback arrived over max_calls=1");
+    TEST_ASSERT(!busy_caller_uri.empty(), "Expected non-empty caller_uri in on_call_rejected_busy");
+    {
+        std::lock_guard<std::mutex> lock(g_incoming_mutex);
+        TEST_ASSERT(g_incoming_events.empty(), "on_incoming_call must not fire when max_calls cap is reached");
+    }
+    std::printf("PASS: Asterisk 9003 callback rejected at max_calls=1 (busy_caller_uri='%s')\n",
+                busy_caller_uri.c_str());
+
+    TEST_ASSERT(sip_call_hangup(hold_cap_call, 0, "Hangup") == 0, "hangup hold_cap_call failed");
+    CallEvent close_cap;
+    TEST_ASSERT(wait_for_call_state(hold_cap_call, SIP_CALL_STATE_CLOSED, 5, close_cap), "hold_cap_call did not close");
+    sip_call_destroy(hold_cap_call);
+
+    // 3. Assert 486 Busy Here on the wire via LoopbackCaller when max_calls=1 is occupied.
+    clear_incoming_events();
+    clear_busy_events();
+    LoopbackCaller busy_peer(15099);
+    busy_peer.start();
+    cfg.domain = "127.0.0.1";
+    cfg.port = 15099;
+    TEST_ASSERT(sip_client_register_account(client, &cfg) == 0, "register against LoopbackCaller failed");
+    TEST_ASSERT(busy_peer.wait_for_registration(5), "LoopbackCaller did not receive registration");
+
+    sip_call_t *active_lb = nullptr;
+    TEST_ASSERT(sip_call_dial(client, "sip:echo@127.0.0.1:15099", false, &active_lb) == 0 && active_lb != nullptr,
+                "dial to LoopbackCaller failed");
+    std::string unused_sdp;
+    TEST_ASSERT(busy_peer.wait_for_client_invite(5, unused_sdp), "LoopbackCaller did not receive INVITE");
+
+    busy_peer.send_invite("call-id-over-cap-486", 77, "Over Cap Caller", false);
+    int wire_resp = busy_peer.wait_for_response(5);
+    TEST_ASSERT(wire_resp == 486, "Expected 486 Busy Here on wire when max_calls=1 is full");
+    std::string wire_busy_uri;
+    TEST_ASSERT(wait_for_busy_rejected(5, wire_busy_uri), "Expected on_call_rejected_busy for LoopbackCaller INVITE");
+    TEST_ASSERT(wire_busy_uri.find("bob") != std::string::npos, "Expected caller URI in on_call_rejected_busy");
+
+    sip_call_hangup(active_lb, 0, "Hangup");
+    CallEvent close_lb;
+    wait_for_call_state(active_lb, SIP_CALL_STATE_CLOSED, 5, close_lb);
+    sip_call_destroy(active_lb);
+    busy_peer.stop();
+
+    sip_client_destroy(client);
+    std::printf("PASS: max_calls cap (EBUSY & 486 Busy Here) verified\n");
+    return 0;
+}
+
+static int run_test_12_multicall(const sip_callbacks_t &callbacks, const char *config_dir, const char *asterisk_host, int asterisk_port)
+{
+    std::printf("--- Test 12: Multi-call auto-hold, swap, call waiting & rejected hold fallback ---\n");
+    clear_call_events();
+    clear_incoming_events();
+
+    sip_client_t *client = sip_client_create(&callbacks, nullptr);
+    TEST_ASSERT(client != nullptr, "multicall client creation failed");
+    TEST_ASSERT(sip_client_init(client, config_dir) == 0, "sip_client_init failed");
+
+    sip_account_config_t cfg{};
+    cfg.user = "1001";
+    cfg.domain = asterisk_host;
+    cfg.pwd = "test1001";
+    cfg.transport = "udp";
+    cfg.port = asterisk_port;
+    cfg.max_calls = 4;
+    TEST_ASSERT(sip_client_register_account(client, &cfg) == 0, "register_account failed");
+    std::this_thread::sleep_for(std::chrono::milliseconds(600));
+
+    // 1. Dial call1 (9001 Echo), then dial call2 (9001 Echo) -> call1 auto-held.
+    std::string echo_uri = "sip:9001@" + std::string(asterisk_host) + ":" + std::to_string(asterisk_port);
+    sip_call_t *call1 = nullptr;
+    TEST_ASSERT(sip_call_dial(client, echo_uri.c_str(), false, &call1) == 0 && call1 != nullptr, "dial call1 failed");
+    CallEvent ev1;
+    TEST_ASSERT(wait_for_call_state(call1, SIP_CALL_STATE_ESTABLISHED, 10, ev1), "call1 did not establish");
+
+    sip_call_t *call2 = nullptr;
+    TEST_ASSERT(sip_call_dial(client, echo_uri.c_str(), false, &call2) == 0 && call2 != nullptr, "dial call2 failed");
+    CallEvent ev1_hold, ev2_estab;
+    TEST_ASSERT(wait_for_call_state(call1, SIP_CALL_STATE_HOLD, 5, ev1_hold),
+                "call1 did not auto-hold when dialing call2");
+    TEST_ASSERT(wait_for_call_state(call2, SIP_CALL_STATE_ESTABLISHED, 10, ev2_estab),
+                "call2 did not establish");
+    TEST_ASSERT(sip_call_is_on_hold(call1) == true, "call1 must be on hold");
+    TEST_ASSERT(sip_call_is_on_hold(call2) == false, "call2 must not be on hold");
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    {
+        std::lock_guard<std::mutex> lock(g_call_mutex);
+        for (const auto &cev : g_call_events) {
+            TEST_ASSERT(!(cev.call == call1 && cev.reason == "Hold Fallback"),
+                        "Asterisk 200 OK hold falsely triggered Hold Fallback");
+        }
+    }
+
+    // 2. Swap: resume call1 -> call2 auto-holds and call1 resumes.
+    clear_call_events();
+    TEST_ASSERT(sip_call_set_hold(call1, false) == 0, "sip_call_set_hold(call1, false) failed");
+    CallEvent ev2_hold, ev1_resumed;
+    TEST_ASSERT(wait_for_call_state(call2, SIP_CALL_STATE_HOLD, 5, ev2_hold),
+                "call2 did not auto-hold when resuming call1");
+    TEST_ASSERT(wait_for_call_state(call1, SIP_CALL_STATE_ESTABLISHED, 5, ev1_resumed),
+                "call1 did not return to ESTABLISHED on swap");
+    TEST_ASSERT(sip_call_is_on_hold(call1) == false, "call1 must be resumed");
+    TEST_ASSERT(sip_call_is_on_hold(call2) == true, "call2 must be held after swap");
+
+    // 3. Call waiting: trigger Asterisk 9003 delayed callback, close trigger, keep call1 active,
+    //    then receive incoming call3 and answer it -> call1 auto-holds.
+    clear_incoming_events();
+    std::string cb_uri = "sip:9003@" + std::string(asterisk_host) + ":" + std::to_string(asterisk_port);
+    sip_call_t *cb_trigger = nullptr;
+    TEST_ASSERT(sip_call_dial(client, cb_uri.c_str(), false, &cb_trigger) == 0 && cb_trigger != nullptr,
+                "dial 9003 callback trigger failed");
+    CallEvent cb_closed;
+    wait_for_call_state(cb_trigger, SIP_CALL_STATE_CLOSED, 5, cb_closed);
+    sip_call_destroy(cb_trigger);
+
+    // Resume call1 so it is the active audio call when call3 is answered.
+    TEST_ASSERT(sip_call_set_hold(call1, false) == 0, "resume call1 before call waiting failed");
+    CallEvent ev1_active;
+    TEST_ASSERT(wait_for_call_state(call1, SIP_CALL_STATE_ESTABLISHED, 5, ev1_active),
+                "call1 did not resume before incoming call waiting");
+
+    IncomingCallEvent inc_ev;
+    TEST_ASSERT(wait_for_incoming_call(12, inc_ev) && inc_ev.call != nullptr,
+                "did not receive incoming call waiting from 9003");
+    sip_call_t *call3 = inc_ev.call;
+
+    // Resuming call2 while call3 is unanswered INCOMING must not put unanswered call3 on hold.
+    TEST_ASSERT(sip_call_set_hold(call2, false) == 0, "resume call2 with unanswered call3 failed");
+    CallEvent ev2_unhold;
+    TEST_ASSERT(wait_for_call_state(call2, SIP_CALL_STATE_ESTABLISHED, 5, ev2_unhold),
+                "call2 did not resume");
+    TEST_ASSERT(sip_call_is_on_hold(call3) == false,
+                "unanswered incoming call3 must not be auto-held");
+
+    clear_call_events();
+    TEST_ASSERT(sip_call_answer(call3, false) == 0, "answer call3 failed");
+    CallEvent ev2_hold_cw, ev3_estab;
+    TEST_ASSERT(wait_for_call_state(call2, SIP_CALL_STATE_HOLD, 5, ev2_hold_cw),
+                "call2 did not auto-hold when answering call3");
+    TEST_ASSERT(wait_for_call_state(call3, SIP_CALL_STATE_ESTABLISHED, 10, ev3_estab),
+                "call3 did not establish");
+    TEST_ASSERT(sip_call_is_on_hold(call1) == true, "call1 must stay held after answering call3");
+    TEST_ASSERT(sip_call_is_on_hold(call2) == true, "call2 must be held after answering call3");
+    TEST_ASSERT(sip_call_is_on_hold(call3) == false, "call3 must be active");
+
+    sip_call_hangup(call1, 0, "Hangup");
+    sip_call_hangup(call2, 0, "Hangup");
+    sip_call_hangup(call3, 0, "Hangup");
+    CallEvent c1, c2, c3;
+    wait_for_call_state(call1, SIP_CALL_STATE_CLOSED, 5, c1);
+    wait_for_call_state(call2, SIP_CALL_STATE_CLOSED, 5, c2);
+    wait_for_call_state(call3, SIP_CALL_STATE_CLOSED, 5, c3);
+    sip_call_destroy(call1);
+    sip_call_destroy(call2);
+    sip_call_destroy(call3);
+
+    // 4. Rejected hold re-INVITE fallback (488 Not Acceptable Here):
+    //    LoopbackCaller answers initial INVITE, then rejects hold re-INVITE with 488.
+    //    Core must stop local audio (mute/hold fallback) on call_lb, fire on_call_media(on_hold=true),
+    //    and connect call_b.
+    LoopbackCaller lb;
+    lb.start();
+    std::string lb_uri = "sip:bob@127.0.0.1:" + std::to_string(lb.port());
+
+    sip_call_t *call_lb = nullptr;
+    TEST_ASSERT(sip_call_dial(client, lb_uri.c_str(), false, &call_lb) == 0 && call_lb != nullptr,
+                "dial loopback call failed");
+    CallEvent ev_lb;
+    TEST_ASSERT(wait_for_call_state(call_lb, SIP_CALL_STATE_ESTABLISHED, 10, ev_lb),
+                "call_lb did not establish");
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(150));
+    lb.set_reinvite_reject_code(488);
+    lb.clear_client_invite();
+    clear_call_events();
+
+    sip_call_t *call_b = nullptr;
+    TEST_ASSERT(sip_call_dial(client, echo_uri.c_str(), false, &call_b) == 0 && call_b != nullptr,
+                "dial call_b while call_lb rejects hold failed");
+
+    std::string reinvite_sdp;
+    TEST_ASSERT(lb.wait_for_client_invite(5, reinvite_sdp), "did not receive hold re-INVITE at loopback");
+    TEST_ASSERT(reinvite_sdp.find("a=sendonly") != std::string::npos ||
+                reinvite_sdp.find("a=inactive") != std::string::npos,
+                "re-INVITE SDP did not indicate hold direction");
+
+    CallEvent ev_b;
+    TEST_ASSERT(wait_for_call_state(call_b, SIP_CALL_STATE_ESTABLISHED, 10, ev_b),
+                "call_b did not establish after rejected hold");
+
+    // Allow asynchronous 488 response to arrive and trigger fallback handler.
+    {
+        auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+        bool saw_fallback_state = false;
+        bool saw_fallback_media = false;
+        std::unique_lock<std::mutex> lock(g_call_mutex);
+        while (std::chrono::steady_clock::now() < deadline) {
+            for (const auto &cev : g_call_events) {
+                if (cev.call == call_lb && cev.state == SIP_CALL_STATE_HOLD && cev.reason == "Hold Fallback") {
+                    saw_fallback_state = true;
+                    break;
+                }
+            }
+            for (const auto &mev : g_media_events) {
+                if (mev.call == call_lb && mev.on_hold && mev.is_muted) {
+                    saw_fallback_media = true;
+                    break;
+                }
+            }
+            if (saw_fallback_state && saw_fallback_media) break;
+            g_call_cv.wait_for(lock, std::chrono::milliseconds(50));
+        }
+        TEST_ASSERT(saw_fallback_state, "call_lb did not emit Hold Fallback after 488 hold rejection");
+        TEST_ASSERT(saw_fallback_media, "on_call_media(on_hold=true, is_muted=true) did not fire on fallback");
+    }
+    TEST_ASSERT(sip_call_is_on_hold(call_lb) == true, "call_lb must remain locally held after 488");
+    TEST_ASSERT(sip_call_is_muted(call_lb) == true, "call_lb must report is_muted=true on hold fallback");
+
+    sip_call_hangup(call_lb, 0, "Hangup");
+    sip_call_hangup(call_b, 0, "Hangup");
+    CallEvent clb, cb;
+    wait_for_call_state(call_lb, SIP_CALL_STATE_CLOSED, 5, clb);
+    wait_for_call_state(call_b, SIP_CALL_STATE_CLOSED, 5, cb);
+    sip_call_destroy(call_lb);
+    sip_call_destroy(call_b);
+    lb.stop();
+
+    sip_client_destroy(client);
+    std::printf("PASS: Multi-call auto-hold, swap, call waiting & rejected hold fallback verified\n");
     return 0;
 }

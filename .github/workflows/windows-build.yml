@@ -2,17 +2,20 @@ name: Windows Platform SDK (.NET & MSVC)
 
 on:
   push:
-    branches: [ main ]
+    branches: [ master ]
     paths:
       - 'core/**'
       - 'platforms/windows/**'
+      - 'scripts/build-baresip-windows.sh'
       - '.github/workflows/windows-build.yml'
   pull_request:
-    branches: [ main ]
+    branches: [ master ]
     paths:
       - 'core/**'
       - 'platforms/windows/**'
+      - 'scripts/build-baresip-windows.sh'
       - '.github/workflows/windows-build.yml'
+  workflow_dispatch:
 
 jobs:
   build-and-test:
@@ -34,6 +37,32 @@ jobs:
         uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: x64
+
+      - name: Locate or install OpenSSL 3.x for MSVC
+        shell: pwsh
+        run: |
+          $candidates = @(
+            "C:\Program Files\OpenSSL-Win64",
+            "C:\Program Files\OpenSSL",
+            "C:\OpenSSL-Win64"
+          )
+          $found = $candidates | Where-Object { Test-Path "$_\include\openssl\ssl.h" } | Select-Object -First 1
+          if (-not $found) {
+            choco install openssl --no-progress -y
+            $found = $candidates | Where-Object { Test-Path "$_\include\openssl\ssl.h" } | Select-Object -First 1
+          }
+          if (-not $found) {
+            Get-ChildItem "C:\Program Files" -Filter "*OpenSSL*" -ErrorAction SilentlyContinue | ForEach-Object {
+              Write-Host "Dir: $($_.FullName)"
+              Get-ChildItem $_.FullName -Depth 2 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName
+            }
+            throw "OpenSSL headers not found on Windows runner"
+          }
+          Write-Host "Using OPENSSL_ROOT_DIR=$found"
+          "OPENSSL_ROOT_DIR=$found" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          if (Test-Path "$found\bin") {
+            "$found\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          }
 
       - name: Prebuild libre & Baresip for Windows
         shell: bash
@@ -62,12 +91,17 @@ jobs:
 
       - name: Build .NET SDK Class Library
         run: |
-          dotnet build platforms/windows/dotnet/SipSdk.sln -c Release
+          Remove-Item Env:Platform -ErrorAction SilentlyContinue
+          dotnet build platforms/windows/dotnet/SipSdk.sln -c Release -p:Platform="Any CPU"
 
       - name: Run .NET Unit Tests
+        env:
+          SIP_CORE_LIB_DIR: ${{ github.workspace }}\build_win\Release
         run: |
-          dotnet test platforms/windows/dotnet/tests/SipSdk.Tests/SipSdk.Tests.csproj -c Release --verbosity normal
+          Remove-Item Env:Platform -ErrorAction SilentlyContinue
+          dotnet test platforms/windows/dotnet/tests/SipSdk.Tests/SipSdk.Tests.csproj -c Release -p:Platform=AnyCPU --verbosity normal
 
       - name: Build Sample Desktop WPF Application
         run: |
-          dotnet build platforms/windows/sample/SipSdk.WpfSample/SipSdk.WpfSample.csproj -c Release
+          Remove-Item Env:Platform -ErrorAction SilentlyContinue
+          dotnet build platforms/windows/sample/SipSdk.WpfSample/SipSdk.WpfSample.csproj -c Release -p:Platform=AnyCPU

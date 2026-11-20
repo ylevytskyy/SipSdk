@@ -52,11 +52,15 @@ namespace SipSdk
         public bool IsOnHold => _callHandle != IntPtr.Zero && SipNativeAbi.sip_call_is_on_hold(_callHandle);
         public bool IsMuted => _callHandle != IntPtr.Zero && SipNativeAbi.sip_call_is_muted(_callHandle);
         public bool IsClosed => _callHandle == IntPtr.Zero || SipNativeAbi.sip_call_is_closed(_callHandle);
+        public bool IsSecure => _callHandle != IntPtr.Zero && SipNativeAbi.sip_call_is_secure(_callHandle);
         public uint Duration => _callHandle != IntPtr.Zero ? SipNativeAbi.sip_call_get_duration(_callHandle) : 0;
 
         public event EventHandler<CallStateChangedEventArgs>? StateChanged;
         public event EventHandler<CallMediaChangedEventArgs>? MediaChanged;
         public event EventHandler<DtmfReceivedEventArgs>? DtmfReceived;
+        public event EventHandler<CallStatsEventArgs>? StatsUpdated;
+        public event EventHandler<TransferStatusEventArgs>? TransferStatusChanged;
+        public event EventHandler<TransferRequestEventArgs>? TransferRequested;
 
         internal SipCall(IntPtr callHandle, SipClient client)
         {
@@ -99,6 +103,71 @@ namespace SipSdk
         {
             ThrowIfDisposed();
             return SipNativeAbi.sip_call_request_keyframe(_callHandle);
+        }
+
+        public SipCallStats GetStats()
+        {
+            ThrowIfDisposed();
+            if (SipNativeAbi.sip_call_get_stats(_callHandle, out var raw) == 0)
+            {
+                return new SipCallStats(
+                    raw.AudioCodec ?? string.Empty,
+                    raw.AudioBitrateKbps,
+                    raw.AudioLossRate,
+                    raw.AudioJitterMs,
+                    raw.AudioRttMs,
+                    raw.VideoCodec ?? string.Empty,
+                    raw.VideoBitrateKbps,
+                    raw.VideoLossRate,
+                    raw.VideoJitterMs,
+                    raw.VideoFps);
+            }
+            return new SipCallStats(string.Empty, 0, 0f, 0, 0, string.Empty, 0, 0f, 0, 0);
+        }
+
+        public int Transfer(string targetUri)
+        {
+            ThrowIfDisposed();
+            if (string.IsNullOrEmpty(targetUri)) throw new ArgumentException("Target URI cannot be empty", nameof(targetUri));
+            return SipNativeAbi.sip_call_transfer(_callHandle, targetUri);
+        }
+
+        public int AttendedTransfer(SipCall consultCall)
+        {
+            ThrowIfDisposed();
+            if (consultCall == null) throw new ArgumentNullException(nameof(consultCall));
+            consultCall.ThrowIfDisposed();
+            return SipNativeAbi.sip_call_attended_transfer(_callHandle, consultCall._callHandle);
+        }
+
+        public int AcceptTransfer(bool accept)
+        {
+            ThrowIfDisposed();
+            return SipNativeAbi.sip_call_accept_transfer(_callHandle, accept);
+        }
+
+        internal void HandleStatsUpdate(SipCallStats stats)
+        {
+            _client.DispatchToUi(() =>
+            {
+                StatsUpdated?.Invoke(this, new CallStatsEventArgs(stats));
+            });
+        }
+
+        internal void HandleTransferStatus(int code, string reason)
+        {
+            _client.DispatchToUi(() =>
+            {
+                TransferStatusChanged?.Invoke(this, new TransferStatusEventArgs(code, reason));
+            });
+        }
+
+        internal void HandleTransferRequest(string referToUri, bool hasReplaces)
+        {
+            _client.DispatchToUi(() =>
+            {
+                TransferRequested?.Invoke(this, new TransferRequestEventArgs(referToUri, hasReplaces));
+            });
         }
 
         internal void HandleStateChange(SipCallState state, int code, string reason)

@@ -66,7 +66,22 @@ done
 REPOSITORY_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cat > "$REPOSITORY_ROOT/Package.swift" <<MANIFEST
 // swift-tools-version: 5.9
+import Foundation
 import PackageDescription
+
+let localXCFramework = ".build/baresip-xcframework/BaresipCore.xcframework"
+let useLocalXCFramework = FileManager.default.fileExists(atPath: localXCFramework)
+
+let baresipBinaryTarget: Target = useLocalXCFramework
+    ? .binaryTarget(
+        name: "BaresipCore",
+        path: localXCFramework
+    )
+    : .binaryTarget(
+        name: "BaresipCore",
+        url: "$BASE_URL/$ZIP_NAME",
+        checksum: "$EXPECTED_CHECKSUM"
+    )
 
 let package = Package(
     name: "SipSdk",
@@ -77,11 +92,7 @@ let package = Package(
         .library(name: "SipSdk", targets: ["SipSdk"])
     ],
     targets: [
-        .binaryTarget(
-            name: "BaresipCore",
-            url: "$BASE_URL/$ZIP_NAME",
-            checksum: "$EXPECTED_CHECKSUM"
-        ),
+        baresipBinaryTarget,
         .target(
             name: "SipCore",
             dependencies: ["BaresipCore"],
@@ -92,6 +103,9 @@ let package = Package(
             cxxSettings: [
                 .headerSearchPath("src"),
                 .define("USE_UNIXSOCK", to: "1"),
+                .define("USE_TLS", to: "1"),
+                .define("USE_DTLS", to: "1"),
+                .define("USE_OPENSSL", to: "1"),
                 .define("SIP_CORE_BUILDING_LIB", to: "1")
             ]
         ),
@@ -119,6 +133,7 @@ let package = Package(
                 .linkedFramework("QuartzCore"),
                 .linkedFramework("CallKit"),
                 .linkedFramework("PushKit"),
+                .linkedFramework("Security"),
                 .linkedLibrary("z"),
                 .linkedLibrary("m")
             ]
