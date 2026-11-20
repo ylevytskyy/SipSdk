@@ -1,8 +1,11 @@
 package com.sipsdk.sample.viewmodels
 
 import android.app.Application
+import android.content.Context
+import android.media.AudioManager
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.sipsdk.CoreTelecomCoordinator
 import com.sipsdk.SipBusyException
 import com.sipsdk.SipCall
 import com.sipsdk.SipCallState
@@ -11,6 +14,9 @@ import com.sipsdk.SipClient
 import com.sipsdk.SipClientListener
 import com.sipsdk.SipRegistrationState
 import com.sipsdk.SipSurfaceView
+import com.sipsdk.SipTelecomEndpoint
+import com.sipsdk.sample.SampleIncomingCallNotifier
+import com.sipsdk.sample.SampleSipPushService
 import com.sipsdk.sample.models.AccountStore
 import com.sipsdk.sample.models.CallDirection
 import com.sipsdk.sample.models.CallHistoryItem
@@ -83,6 +89,9 @@ class SipAppViewModel(application: Application) : AndroidViewModel(application),
     private val _isSpeakerEnabled = MutableStateFlow(false)
     val isSpeakerEnabled: StateFlow<Boolean> = _isSpeakerEnabled.asStateFlow()
 
+    private val _audioEndpoint = MutableStateFlow(SipTelecomEndpoint.EARPIECE)
+    val audioEndpoint: StateFlow<SipTelecomEndpoint> = _audioEndpoint.asStateFlow()
+
     private val _isLocalVideoEnabled = MutableStateFlow(true)
     val isLocalVideoEnabled: StateFlow<Boolean> = _isLocalVideoEnabled.asStateFlow()
 
@@ -139,15 +148,18 @@ class SipAppViewModel(application: Application) : AndroidViewModel(application),
 
     fun initClient() {
         val account = accountStore.account
-        val client = SipClient(account.username, account.domain, getApplication()).apply {
+        val appCtx = getApplication<Application>().applicationContext
+        val client = SipClient(account.username, account.domain, appCtx).apply {
             password = account.password
             displayName = account.displayName
             transport = account.transport
             port = account.port
+            telecomCoordinator = CoreTelecomCoordinator(appCtx)
             listener = this@SipAppViewModel
         }
         client.start()
         sipClient = client
+        SampleSipPushService.sharedClient = client
     }
 
     fun bindRemoteVideo(view: SipSurfaceView?) {
@@ -296,10 +308,49 @@ class SipAppViewModel(application: Application) : AndroidViewModel(application),
     }
 
     fun toggleSpeaker() {
-        val current = _isSpeakerEnabled.value
-        val next = !current
-        _isSpeakerEnabled.value = next
-        sipClient?.isSpeakerEnabled = next
+        val next = if (_audioEndpoint.value == SipTelecomEndpoint.SPEAKER) {
+            SipTelecomEndpoint.EARPIECE
+        } else {
+            SipTelecomEndpoint.SPEAKER
+        }
+        selectAudioEndpoint(next)
+    }
+
+    fun selectAudioEndpoint(endpoint: SipTelecomEndpoint) {
+        _audioEndpoint.value = endpoint
+        _isSpeakerEnabled.value = endpoint == SipTelecomEndpoint.SPEAKER
+        val callId = _activeCall.value?.callId
+        if (callId != null) {
+            sipClient?.telecomCoordinator?.requestEndpointChange(callId, endpoint)
+        }
+        val am = getApplication<Application>().getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+        when (endpoint) {
+            SipTelecomEndpoint.BLUETOOTH -> {
+                sipClient?.isSpeakerEnabled = false
+                @Suppress("DEPRECATION")
+                am?.startBluetoothSco()
+                @Suppress("DEPRECATION")
+                am?.isBluetoothScoOn = true
+            }
+            SipTelecomEndpoint.SPEAKER -> {
+                @Suppress("DEPRECATION")
+                am?.isBluetoothScoOn = false
+                @Suppress("DEPRECATION")
+                am?.stopBluetoothSco()
+                sipClient?.isSpeakerEnabled = true
+            }
+            SipTelecomEndpoint.EARPIECE, SipTelecomEndpoint.WIRED_HEADSET -> {
+                @Suppress("DEPRECATION")
+                am?.isBluetoothScoOn = false
+                @Suppress("DEPRECATION")
+                am?.stopBluetoothSco()
+                sipClient?.isSpeakerEnabled = false
+            }
+        }
+        android.util.Log.i(
+            "SipAppViewModel",
+            "AUDIO_ENDPOINT_SELECTED endpoint=$endpoint scoOn=${am?.isBluetoothScoOn} speakerOn=${am?.isSpeakerphoneOn} telecomEndpoint=${callId?.let { sipClient?.telecomCoordinator?.getEndpoint(it) }}"
+        )
     }
 
     fun toggleVideo() {
@@ -390,6 +441,13 @@ class SipAppViewModel(application: Application) : AndroidViewModel(application),
         viewModelScope.launch {
             _incomingCall.value = call
             refreshOpenCalls()
+            SampleIncomingCallNotifier.showIncomingCallNotification(
+                context = getApplication(),
+                callId = call.callId,
+                displayName = call.peerDisplayName ?: call.remoteUri,
+                callerUri = call.remoteUri,
+                hasVideo = call.hasVideo
+            )
             val item = CallHistoryItem(
                 remoteUri = call.remoteUri,
                 displayName = call.peerDisplayName,
