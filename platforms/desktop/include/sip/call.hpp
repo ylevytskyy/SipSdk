@@ -35,6 +35,8 @@ public:
     bool is_closed() const;
     bool is_secure() const;
     uint32_t get_duration() const;
+    /** Counts of what the call received; complete once the call is closed. */
+    CallMediaStats get_media_stats() const;
     CallStats get_stats() const;
 
     int answer(bool with_video = false);

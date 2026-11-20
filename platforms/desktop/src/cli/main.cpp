@@ -42,6 +42,7 @@ public:
     std::atomic<sip::CallState> call_state{sip::CallState::Closed};
     std::atomic<int> call_code{0};
     std::atomic<bool> has_media_rx{false};
+    bool call_established{false};  // a call reached Established at some time; guarded by mutex
     int media_width{0};
     int media_height{0};
 
@@ -84,6 +85,7 @@ public:
             active_call = call;
             call_state = state;
             call_code = code;
+            if (state == sip::CallState::Established) call_established = true;
         }
         cv.notify_all();
     }
@@ -109,6 +111,14 @@ public:
         return false;
     }
 
+    // Waits until the call is closed or the time is up, with the mutex free meanwhile.
+    // Returns true when the call closed.
+    bool wait_for_call_closed(int timeout_seconds) {
+        auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(timeout_seconds);
+        std::unique_lock<std::mutex> lock(mutex);
+        return cv.wait_until(lock, deadline, [this] { return call_state.load() == sip::CallState::Closed; });
+    }
+
     bool wait_for_call_state(sip::CallState expected, int timeout_seconds) {
         auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(timeout_seconds);
         std::unique_lock<std::mutex> lock(mutex);
@@ -119,6 +129,16 @@ public:
         return false;
     }
 };
+
+// One line at the end of a call, read after the call closed, so that the last frames are counted.
+static void print_media_stats(const std::shared_ptr<sip::Call> &call) {
+    sip::CallMediaStats stats = call->get_media_stats();
+    std::printf("[CLI] MEDIA_STATS: video_frames_decoded=%llu video_rtp_received=%llu audio_rtp_received=%llu\n",
+                static_cast<unsigned long long>(stats.video_frames_decoded),
+                static_cast<unsigned long long>(stats.video_rtp_received),
+                static_cast<unsigned long long>(stats.audio_rtp_received));
+    std::fflush(stdout);
+}
 
 static void print_usage(const char *prog) {
     std::printf("Usage: %s [options]\n", prog);
@@ -218,6 +238,8 @@ int main(int argc, char **argv) {
     }
     std::printf("[CLI] PASS: Registration successful (200 OK)\n");
 
+    int exit_code = 0;
+
     // Action execution
     if (!cfg.call_uri.empty()) {
         std::printf("[CLI] Placing outgoing call to %s (video=%d)...\n", cfg.call_uri.c_str(), cfg.with_video ? 1 : 0);
@@ -238,34 +260,42 @@ int main(int argc, char **argv) {
         }
 
         std::printf("[CLI] PASS: Call ESTABLISHED. Streaming for %d seconds...\n", cfg.duration_sec);
-        std::this_thread::sleep_for(std::chrono::seconds(cfg.duration_sec));
+        // The far end may hang up first; then there is nothing left to wait for.
+        bool closed_early = listener->wait_for_call_closed(cfg.duration_sec);
 
         uint32_t dur = call->get_duration();
         std::printf("[CLI] In-call duration recorded: %u seconds\n", dur);
 
-        std::printf("[CLI] Hanging up call...\n");
-        call->hangup(0, "Completed");
-        listener->wait_for_call_state(sip::CallState::Closed, 5);
+        if (!closed_early) {
+            std::printf("[CLI] Hanging up call...\n");
+            call->hangup(0, "Completed");
+            listener->wait_for_call_closed(5);
+        }
+        print_media_stats(call);
         std::printf("[CLI] PASS: Call terminated cleanly\n");
     } else if (cfg.listen) {
         std::printf("[CLI] Listening for incoming call (timeout=%d sec)...\n", cfg.timeout_sec);
         auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(cfg.timeout_sec);
-        std::unique_lock<std::mutex> lock(listener->mutex);
-        while (std::chrono::steady_clock::now() < deadline) {
-            if (listener->active_call && listener->call_state.load() == sip::CallState::Established) {
-                break;
-            }
-            listener->cv.wait_for(lock, std::chrono::milliseconds(100));
+        std::shared_ptr<sip::Call> call;
+        {
+            std::unique_lock<std::mutex> lock(listener->mutex);
+            listener->cv.wait_until(lock, deadline, [&] { return listener->call_established; });
+            if (listener->call_established) call = listener->active_call;
         }
 
-        if (listener->active_call && listener->call_state.load() == sip::CallState::Established) {
+        if (call) {
             std::printf("[CLI] Incoming call answered and ESTABLISHED. Holding for %d sec...\n", cfg.duration_sec);
-            std::this_thread::sleep_for(std::chrono::seconds(cfg.duration_sec));
-            listener->active_call->hangup(0, "Completed");
-            listener->wait_for_call_state(sip::CallState::Closed, 5);
+            // The hold ends at the far end's hangup or after --duration, whichever comes first.
+            bool closed_early = listener->wait_for_call_closed(cfg.duration_sec);
+            if (!closed_early) {
+                call->hangup(0, "Completed");
+                listener->wait_for_call_closed(5);
+            }
+            print_media_stats(call);
             std::printf("[CLI] PASS: Incoming call completed cleanly\n");
         } else {
-            std::fprintf(stderr, "[CLI] WARNING: No incoming call received within timeout\n");
+            std::fprintf(stderr, "[CLI] ERROR: No incoming call received within timeout\n");
+            exit_code = 1;
         }
     }
 
@@ -274,6 +304,7 @@ int main(int argc, char **argv) {
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
     client->stop();
 
+    if (exit_code != 0) return exit_code;
     std::printf("=================================================================\n");
     std::printf("[CLI] ALL_CLI_OPERATIONS_COMPLETED_SUCCESSFULLY\n");
     std::printf("=================================================================\n");

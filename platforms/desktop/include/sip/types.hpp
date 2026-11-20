@@ -37,6 +37,13 @@ struct CallMediaInfo {
     bool is_muted{false};
 };
 
+/** What a call has received. Complete once the call is closed. */
+struct CallMediaStats {
+    uint64_t video_frames_decoded{0};  // frames that left the video decoder (not frames sent)
+    uint64_t video_rtp_received{0};    // RTP packets received on the video stream
+    uint64_t audio_rtp_received{0};    // RTP packets received on the audio stream
+};
+
 struct CallStats {
     float audio_loss_rate{0.0f};
     uint32_t audio_jitter_ms{0};
