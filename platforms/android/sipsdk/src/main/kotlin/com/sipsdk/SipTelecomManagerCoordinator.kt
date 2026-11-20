@@ -78,11 +78,17 @@ interface SipTelecomManagerCoordinator {
 /**
  * Production Telecom coordinator backed by `androidx.core:core-telecom` (`CallsManager`).
  */
-class CoreTelecomCoordinator(
+class CoreTelecomCoordinator internal constructor(
     context: Context,
     private val callsManager: CallsManager = CallsManager(context.applicationContext),
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 ) : SipTelecomManagerCoordinator {
+
+    constructor(context: Context) : this(
+        context = context,
+        callsManager = CallsManager(context.applicationContext),
+        scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    )
 
     private companion object {
         const val TAG = "CoreTelecomCoordinator"

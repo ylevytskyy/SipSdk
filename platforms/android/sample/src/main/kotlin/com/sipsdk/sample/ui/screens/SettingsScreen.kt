@@ -1,5 +1,6 @@
 package com.sipsdk.sample.ui.screens
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -13,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -20,24 +22,21 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
@@ -52,6 +51,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -66,11 +66,10 @@ import com.sipsdk.sample.ui.theme.IosOrange
 import com.sipsdk.sample.ui.theme.IosRed
 import com.sipsdk.sample.viewmodels.SipAppViewModel
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
     viewModel: SipAppViewModel,
-    onDismiss: () -> Unit,
+    onDismiss: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val initialAccount = remember { viewModel.accountStore.account }
@@ -84,6 +83,7 @@ fun SettingsScreen(
     var stunServer by remember { mutableStateOf(initialAccount.stunServer ?: "") }
     var useIce by remember { mutableStateOf(initialAccount.useIce) }
     var regIntervalString by remember { mutableStateOf(initialAccount.regInterval.toString()) }
+    var savedToast by remember { mutableStateOf(false) }
 
     val regState by viewModel.registrationState.collectAsState()
     val regReason by viewModel.regReason.collectAsState()
@@ -109,13 +109,13 @@ fun SettingsScreen(
     }
 
     val statusDescription = when (regState) {
-        SipRegistrationState.REGISTERED -> "Registered"
-        SipRegistrationState.REGISTERING -> "Registering..."
+        SipRegistrationState.REGISTERED -> "Online · Registered"
+        SipRegistrationState.REGISTERING -> "Connecting..."
         SipRegistrationState.FAILED -> "Failed: $regReason"
-        SipRegistrationState.UNREGISTERED -> "Unregistered"
+        SipRegistrationState.UNREGISTERED -> "Offline"
     }
 
-    val saveAndApply = {
+    val saveAndApply: () -> Unit = {
         val p = portString.toIntOrNull() ?: 5060
         val interval = regIntervalString.toIntOrNull() ?: 3600
         val updated = SipAccount(
@@ -131,480 +131,444 @@ fun SettingsScreen(
             regInterval = interval
         )
         viewModel.saveAccountAndRegister(updated)
-        onDismiss()
+        savedToast = true
+        onDismiss?.invoke()
     }
 
-    Scaffold(
-        topBar = {
-            CenterAlignedTopAppBar(
-                title = {
-                    Text(
-                        text = "Settings",
-                        fontWeight = FontWeight.SemiBold,
-                        fontSize = 17.sp
-                    )
-                },
-                navigationIcon = {
-                    TextButton(onClick = onDismiss) {
-                        Text(
-                            text = "Cancel",
-                            color = IosBlue,
-                            fontSize = 16.sp
-                        )
-                    }
-                },
-                actions = {
-                    TextButton(onClick = saveAndApply) {
-                        Text(
-                            text = "Save",
-                            color = IosBlue,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 16.sp
-                        )
-                    }
-                },
-                colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.background
-                )
-            )
-        },
-        containerColor = MaterialTheme.colorScheme.background,
+    Column(
         modifier = modifier
-    ) { innerPadding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp, vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(20.dp)
-        ) {
-            // Section 1: SIP Account Status
-            SettingsSectionHeader(text = "SIP ACCOUNT STATUS")
-            Surface(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(12.dp)),
-                color = MaterialTheme.colorScheme.surface,
-                shape = RoundedCornerShape(12.dp)
-            ) {
-                Row(
-                    modifier = Modifier.padding(16.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(12.dp)
-                            .clip(CircleShape)
-                            .background(statusColor)
-                    )
-                    Column(
-                        modifier = Modifier.weight(1f),
-                        verticalArrangement = Arrangement.spacedBy(2.dp)
-                    ) {
-                        Text(
-                            text = statusDescription,
-                            fontSize = 15.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                        Text(
-                            text = viewModel.accountStore.account.aor,
-                            fontSize = 12.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
+            .statusBarsPadding()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 20.dp, vertical = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(18.dp)
+    ) {
+        // Clean Tab Header (no modal Cancel/Save clutter)
+        Text(
+            text = "Settings",
+            fontSize = 28.sp,
+            fontWeight = FontWeight.Bold,
+            letterSpacing = (-0.5).sp,
+            color = MaterialTheme.colorScheme.onBackground
+        )
 
-                    if (regState == SipRegistrationState.REGISTERED) {
-                        TextButton(onClick = { viewModel.unregister() }) {
-                            Text(
-                                text = "Unregister",
-                                color = IosRed,
-                                fontWeight = FontWeight.SemiBold,
-                                fontSize = 14.sp
-                            )
-                        }
-                    } else {
-                        TextButton(onClick = { viewModel.startAndRegister() }) {
-                            Text(
-                                text = "Register",
-                                color = IosBlue,
-                                fontWeight = FontWeight.SemiBold,
-                                fontSize = 14.sp
-                            )
-                        }
-                    }
-                }
-            }
-
-            // Section 2: Account Credentials
-            SettingsSectionHeader(text = "CREDENTIALS")
-            Surface(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(12.dp)),
-                color = MaterialTheme.colorScheme.surface,
-                shape = RoundedCornerShape(12.dp)
-            ) {
-                Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
-                    SettingsTextFieldRow(
-                        label = "Username",
-                        value = username,
-                        onValueChange = { username = it },
-                        placeholder = "e.g. 1001"
-                    )
-                    SettingsDivider()
-                    SettingsTextFieldRow(
-                        label = "Domain / Host",
-                        value = domain,
-                        onValueChange = { domain = it },
-                        placeholder = "e.g. 10.0.2.2"
-                    )
-                    SettingsDivider()
-                    SettingsTextFieldRow(
-                        label = "Password",
-                        value = password,
-                        onValueChange = { password = it },
-                        placeholder = "Required",
-                        isPassword = true
-                    )
-                    SettingsDivider()
-                    SettingsTextFieldRow(
-                        label = "Display Name",
-                        value = displayName,
-                        onValueChange = { displayName = it },
-                        placeholder = "Optional"
-                    )
-                }
-            }
-
-            // Section 3: Network & NAT
-            SettingsSectionHeader(text = "NETWORK & NAT")
-            Surface(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(12.dp)),
-                color = MaterialTheme.colorScheme.surface,
-                shape = RoundedCornerShape(12.dp)
-            ) {
-                Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
-                    // Transport picker
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Text(
-                            text = "Transport",
-                            fontSize = 15.sp,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            modifier = Modifier.width(110.dp)
-                        )
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            SegmentChip(
-                                title = "UDP",
-                                selected = transport.equals("udp", ignoreCase = true),
-                                onClick = { transport = "udp" }
-                            )
-                            SegmentChip(
-                                title = "TCP",
-                                selected = transport.equals("tcp", ignoreCase = true),
-                                onClick = { transport = "tcp" }
-                            )
-                        }
-                    }
-                    SettingsDivider()
-                    SettingsTextFieldRow(
-                        label = "Port",
-                        value = portString,
-                        onValueChange = { portString = it },
-                        placeholder = "5060",
-                        keyboardType = KeyboardType.Number
-                    )
-                    SettingsDivider()
-                    SettingsTextFieldRow(
-                        label = "Outbound Proxy",
-                        value = outboundProxy,
-                        onValueChange = { outboundProxy = it },
-                        placeholder = "Optional"
-                    )
-                    SettingsDivider()
-                    SettingsTextFieldRow(
-                        label = "STUN Server",
-                        value = stunServer,
-                        onValueChange = { stunServer = it },
-                        placeholder = "Optional"
-                    )
-                    SettingsDivider()
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Text(
-                            text = "Enable ICE NAT Traversal",
-                            fontSize = 15.sp,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                        Switch(
-                            checked = useIce,
-                            onCheckedChange = { useIce = it },
-                            colors = SwitchDefaults.colors(
-                                checkedThumbColor = Color.White,
-                                checkedTrackColor = IosGreen
-                            )
-                        )
-                    }
-                    SettingsDivider()
-                    SettingsTextFieldRow(
-                        label = "Reg Interval",
-                        value = regIntervalString,
-                        onValueChange = { regIntervalString = it },
-                        placeholder = "3600",
-                        keyboardType = KeyboardType.Number
-                    )
-                }
-            }
-
-            // Section 4: Enterprise Features
-            SettingsSectionHeader(text = "ENTERPRISE FEATURES")
-            Surface(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(12.dp)),
-                color = MaterialTheme.colorScheme.surface,
-                shape = RoundedCornerShape(12.dp)
-            ) {
-                Column(
-                    modifier = Modifier.padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    Text(
-                        text = "Reset Transports simulates seamless switching between Wi-Fi and Cellular by re-binding sockets and refreshing SIP registration without dropping the engine.",
-                        fontSize = 12.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-
-                    Button(
-                        onClick = { viewModel.performNetworkHandover() },
-                        enabled = !isHandoverInProgress,
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(10.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = IosBlue,
-                            contentColor = Color.White
-                        )
-                    ) {
-                        if (isHandoverInProgress) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(18.dp),
-                                color = Color.White,
-                                strokeWidth = 2.dp
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("Re-binding Transports...", fontWeight = FontWeight.SemiBold)
-                        } else {
-                            Icon(
-                                imageVector = Icons.Filled.Refresh,
-                                contentDescription = null,
-                                modifier = Modifier.size(18.dp)
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("Perform Network Handover", fontWeight = FontWeight.SemiBold)
-                        }
-                    }
-
-                    if (handoverMessage != null) {
-                        Text(
-                            text = handoverMessage ?: "",
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Medium,
-                            color = IosGreen
-                        )
-                    }
-                }
-            }
-
-            // Section 5: Media Hardware
-            SettingsSectionHeader(text = "MEDIA HARDWARE")
-            Surface(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(12.dp)),
-                color = MaterialTheme.colorScheme.surface,
-                shape = RoundedCornerShape(12.dp)
-            ) {
-                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Text(
-                            text = "Camera",
-                            fontSize = 15.sp,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            SegmentChip(
-                                title = "Front",
-                                selected = cameraPosition == SipCameraPosition.FRONT,
-                                onClick = { viewModel.setCameraPosition(SipCameraPosition.FRONT) }
-                            )
-                            SegmentChip(
-                                title = "Back",
-                                selected = cameraPosition == SipCameraPosition.BACK,
-                                onClick = { viewModel.setCameraPosition(SipCameraPosition.BACK) }
-                            )
-                        }
-                    }
-
-                    SettingsDivider()
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Text(
-                            text = "Speakerphone Default",
-                            fontSize = 15.sp,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                        Switch(
-                            checked = isSpeakerEnabled,
-                            onCheckedChange = { viewModel.toggleSpeaker() },
-                            colors = SwitchDefaults.colors(
-                                checkedThumbColor = Color.White,
-                                checkedTrackColor = IosGreen
-                            )
-                        )
-                    }
-
-                    SettingsDivider()
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Text(
-                            text = "Local Camera Preview Test",
-                            fontSize = 15.sp,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                        Switch(
-                            checked = isPreviewActive,
-                            onCheckedChange = { viewModel.setPreviewActive(it) },
-                            colors = SwitchDefaults.colors(
-                                checkedThumbColor = Color.White,
-                                checkedTrackColor = IosGreen
-                            )
-                        )
-                    }
-
-                    if (isPreviewActive) {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(top = 8.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(180.dp)
-                                    .clip(RoundedCornerShape(12.dp))
-                                    .border(
-                                        1.dp,
-                                        MaterialTheme.colorScheme.outline.copy(alpha = 0.5f),
-                                        RoundedCornerShape(12.dp)
-                                    )
-                                    .background(Color.Black)
-                            ) {
-                                AndroidView(
-                                    factory = { ctx ->
-                                        SipSurfaceView(ctx).also { view ->
-                                            viewModel.bindLocalVideo(view)
-                                        }
-                                    },
-                                    modifier = Modifier.fillMaxSize()
-                                )
-                            }
-                            Text(
-                                text = "Real-time Android Camera2 Local View",
-                                fontSize = 11.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-                }
-            }
-
-            // Section 6: Reset / Restore
-            Surface(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(12.dp))
-                    .clickable {
-                        viewModel.accountStore.resetToDefaults()
-                        val def = viewModel.accountStore.account
-                        username = def.username
-                        domain = def.domain
-                        password = def.password
-                        displayName = def.displayName ?: ""
-                        transport = def.transport
-                        portString = def.port.toString()
-                        outboundProxy = def.outboundProxy ?: ""
-                        stunServer = def.stunServer ?: ""
-                        useIce = def.useIce
-                        regIntervalString = def.regInterval.toString()
-                    },
-                color = MaterialTheme.colorScheme.surface,
-                shape = RoundedCornerShape(12.dp)
+        // Section 1: SIP Account Status
+        SettingsSectionHeader(text = "CONNECTION")
+        SettingsCard {
+            Row(
+                modifier = Modifier.padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 Box(
                     modifier = Modifier
+                        .size(10.dp)
+                        .clip(CircleShape)
+                        .background(statusColor)
+                )
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                ) {
+                    Text(
+                        text = statusDescription,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        text = "${viewModel.accountStore.account.username} · ${viewModel.accountStore.account.domain}:${viewModel.accountStore.account.port}",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
+                if (regState == SipRegistrationState.REGISTERED) {
+                    TextButton(onClick = { viewModel.unregister() }) {
+                        Text(
+                            text = "Disconnect",
+                            color = IosRed,
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 13.sp
+                        )
+                    }
+                } else {
+                    TextButton(onClick = { viewModel.startAndRegister() }) {
+                        Text(
+                            text = "Connect",
+                            color = IosBlue,
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 13.sp
+                        )
+                    }
+                }
+            }
+        }
+
+        // Section 2: Account Credentials
+        SettingsSectionHeader(text = "SIP ACCOUNT")
+        SettingsCard {
+            Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
+                SettingsTextFieldRow(
+                    label = "Username",
+                    value = username,
+                    onValueChange = { username = it; savedToast = false },
+                    placeholder = "e.g. 1001"
+                )
+                SettingsDivider()
+                SettingsTextFieldRow(
+                    label = "Server",
+                    value = domain,
+                    onValueChange = { domain = it; savedToast = false },
+                    placeholder = "e.g. 192.168.0.161"
+                )
+                SettingsDivider()
+                SettingsTextFieldRow(
+                    label = "Password",
+                    value = password,
+                    onValueChange = { password = it; savedToast = false },
+                    placeholder = "Required",
+                    isPassword = true
+                )
+                SettingsDivider()
+                SettingsTextFieldRow(
+                    label = "Display Name",
+                    value = displayName,
+                    onValueChange = { displayName = it; savedToast = false },
+                    placeholder = "Optional"
+                )
+            }
+        }
+
+        // Section 3: Network & Transport
+        SettingsSectionHeader(text = "NETWORK & TRANSPORT")
+        SettingsCard {
+            Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
+                Row(
+                    modifier = Modifier
                         .fillMaxWidth()
-                        .padding(16.dp),
+                        .padding(vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        text = "Transport",
+                        fontSize = 14.sp,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        SegmentChip(
+                            title = "UDP",
+                            selected = transport.equals("udp", ignoreCase = true),
+                            onClick = { transport = "udp"; savedToast = false }
+                        )
+                        SegmentChip(
+                            title = "TCP",
+                            selected = transport.equals("tcp", ignoreCase = true),
+                            onClick = { transport = "tcp"; savedToast = false }
+                        )
+                        SegmentChip(
+                            title = "TLS",
+                            selected = transport.equals("tls", ignoreCase = true),
+                            onClick = { transport = "tls"; savedToast = false }
+                        )
+                    }
+                }
+                SettingsDivider()
+                SettingsTextFieldRow(
+                    label = "Port",
+                    value = portString,
+                    onValueChange = { portString = it; savedToast = false },
+                    placeholder = "5060",
+                    keyboardType = KeyboardType.Number
+                )
+                SettingsDivider()
+                SettingsTextFieldRow(
+                    label = "Outbound Proxy",
+                    value = outboundProxy,
+                    onValueChange = { outboundProxy = it; savedToast = false },
+                    placeholder = "Optional"
+                )
+                SettingsDivider()
+                SettingsTextFieldRow(
+                    label = "STUN Server",
+                    value = stunServer,
+                    onValueChange = { stunServer = it; savedToast = false },
+                    placeholder = "Optional"
+                )
+                SettingsDivider()
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        text = "ICE NAT Traversal",
+                        fontSize = 14.sp,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Switch(
+                        checked = useIce,
+                        onCheckedChange = { useIce = it; savedToast = false },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = Color.White,
+                            checkedTrackColor = IosGreen
+                        )
+                    )
+                }
+                SettingsDivider()
+                SettingsTextFieldRow(
+                    label = "Reg Interval",
+                    value = regIntervalString,
+                    onValueChange = { regIntervalString = it; savedToast = false },
+                    placeholder = "3600",
+                    keyboardType = KeyboardType.Number
+                )
+            }
+        }
+
+        // Primary Save & Reconnect CTA
+        Button(
+            onClick = saveAndApply,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(50.dp),
+            shape = RoundedCornerShape(14.dp),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = IosBlue,
+                contentColor = Color.White
+            )
+        ) {
+            Icon(
+                imageVector = Icons.Filled.Check,
+                contentDescription = null,
+                modifier = Modifier.size(18.dp)
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                text = if (savedToast) "Saved & Reconnecting" else "Save & Reconnect",
+                fontSize = 15.sp,
+                fontWeight = FontWeight.SemiBold
+            )
+        }
+
+        // Section 4: Media Hardware (instant apply)
+        SettingsSectionHeader(text = "AUDIO & VIDEO")
+        SettingsCard {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        text = "Camera",
+                        fontSize = 14.sp,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        SegmentChip(
+                            title = "Front",
+                            selected = cameraPosition == SipCameraPosition.FRONT,
+                            onClick = { viewModel.setCameraPosition(SipCameraPosition.FRONT) }
+                        )
+                        SegmentChip(
+                            title = "Back",
+                            selected = cameraPosition == SipCameraPosition.BACK,
+                            onClick = { viewModel.setCameraPosition(SipCameraPosition.BACK) }
+                        )
+                    }
+                }
+
+                SettingsDivider()
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        text = "Speakerphone Default",
+                        fontSize = 14.sp,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Switch(
+                        checked = isSpeakerEnabled,
+                        onCheckedChange = { viewModel.toggleSpeaker() },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = Color.White,
+                            checkedTrackColor = IosGreen
+                        )
+                    )
+                }
+
+                SettingsDivider()
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        text = "Camera Preview",
+                        fontSize = 14.sp,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Switch(
+                        checked = isPreviewActive,
+                        onCheckedChange = { viewModel.setPreviewActive(it) },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = Color.White,
+                            checkedTrackColor = IosGreen
+                        )
+                    )
+                }
+
+                if (isPreviewActive) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(180.dp)
+                            .clip(RoundedCornerShape(14.dp))
+                            .border(
+                                1.dp,
+                                MaterialTheme.colorScheme.outline,
+                                RoundedCornerShape(14.dp)
+                            )
+                            .background(Color.Black)
+                    ) {
+                        AndroidView(
+                            factory = { ctx ->
+                                SipSurfaceView(ctx).also { view ->
+                                    viewModel.bindLocalVideo(view)
+                                }
+                            },
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
+                }
+            }
+        }
+
+        // Section 5: Network Handover & Reset
+        SettingsSectionHeader(text = "DIAGNOSTICS")
+        SettingsCard {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Button(
+                    onClick = { viewModel.performNetworkHandover() },
+                    enabled = !isHandoverInProgress,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(46.dp),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = IosBlue.copy(alpha = 0.12f),
+                        contentColor = IosBlue
+                    )
+                ) {
+                    if (isHandoverInProgress) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            color = IosBlue,
+                            strokeWidth = 2.dp
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Re-binding Transports...", fontWeight = FontWeight.SemiBold)
+                    } else {
+                        Icon(
+                            imageVector = Icons.Filled.Refresh,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Reset Transports (Handover)", fontWeight = FontWeight.SemiBold)
+                    }
+                }
+
+                if (handoverMessage != null) {
+                    Text(
+                        text = handoverMessage ?: "",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = IosGreen
+                    )
+                }
+
+                SettingsDivider()
+
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(10.dp))
+                        .clickable {
+                            viewModel.accountStore.resetToDefaults()
+                            val def = viewModel.accountStore.account
+                            username = def.username
+                            domain = def.domain
+                            password = def.password
+                            displayName = def.displayName ?: ""
+                            transport = def.transport
+                            portString = def.port.toString()
+                            outboundProxy = def.outboundProxy ?: ""
+                            stunServer = def.stunServer ?: ""
+                            useIce = def.useIce
+                            regIntervalString = def.regInterval.toString()
+                            savedToast = false
+                        }
+                        .padding(vertical = 8.dp),
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
-                        text = "Reset to Defaults",
+                        text = "Reset Account to Defaults",
                         color = IosRed,
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Medium
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.SemiBold
                     )
                 }
             }
-
-            Spacer(modifier = Modifier.height(24.dp))
         }
+
+        Spacer(modifier = Modifier.height(12.dp))
     }
+}
+
+@Composable
+private fun SettingsCard(content: @Composable () -> Unit) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(18.dp),
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+        content = content
+    )
 }
 
 @Composable
 private fun SettingsSectionHeader(text: String) {
     Text(
         text = text,
-        fontSize = 12.sp,
+        fontSize = 11.sp,
         fontWeight = FontWeight.SemiBold,
-        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-        modifier = Modifier.padding(start = 12.dp)
+        letterSpacing = 0.8.sp,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(start = 6.dp)
     )
 }
 
 @Composable
 private fun SettingsDivider() {
     HorizontalDivider(
-        color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f),
-        thickness = 0.5.dp
+        color = MaterialTheme.colorScheme.outline.copy(alpha = 0.6f),
+        thickness = 0.75.dp
     )
 }
 
@@ -620,22 +584,28 @@ private fun SettingsTextFieldRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 4.dp),
+            .padding(vertical = 2.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(
             text = label,
-            fontSize = 15.sp,
+            fontSize = 14.sp,
             color = MaterialTheme.colorScheme.onSurface,
-            modifier = Modifier.width(110.dp)
+            modifier = Modifier.width(114.dp)
         )
         OutlinedTextField(
             value = value,
             onValueChange = onValueChange,
             modifier = Modifier.weight(1f),
-            placeholder = { Text(placeholder, fontSize = 14.sp) },
+            placeholder = {
+                Text(
+                    text = placeholder,
+                    fontSize = 14.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f)
+                )
+            },
             singleLine = true,
-            visualTransformation = if (isPassword) PasswordVisualTransformation() else androidx.compose.ui.text.input.VisualTransformation.None,
+            visualTransformation = if (isPassword) PasswordVisualTransformation() else VisualTransformation.None,
             keyboardOptions = KeyboardOptions(keyboardType = keyboardType),
             colors = OutlinedTextFieldDefaults.colors(
                 focusedBorderColor = Color.Transparent,
@@ -653,19 +623,19 @@ private fun SegmentChip(
     selected: Boolean,
     onClick: () -> Unit
 ) {
-    Box(
+    Surface(
         modifier = Modifier
-            .clip(RoundedCornerShape(8.dp))
-            .background(if (selected) IosBlue else MaterialTheme.colorScheme.surfaceVariant)
-            .clickable(onClick = onClick)
-            .padding(horizontal = 14.dp, vertical = 6.dp),
-        contentAlignment = Alignment.Center
+            .clip(RoundedCornerShape(10.dp))
+            .clickable(onClick = onClick),
+        shape = RoundedCornerShape(10.dp),
+        color = if (selected) IosBlue else MaterialTheme.colorScheme.surfaceVariant
     ) {
         Text(
             text = title,
-            fontSize = 13.sp,
+            fontSize = 12.sp,
             fontWeight = FontWeight.SemiBold,
-            color = if (selected) Color.White else MaterialTheme.colorScheme.onSurface
+            color = if (selected) Color.White else MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
         )
     }
 }

@@ -99,6 +99,137 @@ p.write_text(p.read_text().replace("dtls.c srtp.c", "dtls.c dtls_srtp_stream.c")
 '
 fi
 
+# Enable Android Voice Communication preset + hardware AEC / NS / AGC on OpenSL ES recorder
+# and STREAM_VOICE_CALL on OpenSL ES player so speakerphone calls do not howl/echo.
+if [[ -f "$SOURCE_DIR/baresip/modules/opensles/recorder.c" && -f "$SOURCE_DIR/baresip/modules/opensles/player.c" ]]; then
+  python3 - <<'PY' "$SOURCE_DIR/baresip/modules/opensles/recorder.c" "$SOURCE_DIR/baresip/modules/opensles/player.c"
+import sys
+from pathlib import Path
+
+rec_path = Path(sys.argv[1])
+rec = rec_path.read_text()
+
+old_rec_ifaces = """\tconst SLInterfaceID id[1] = {SL_IID_ANDROIDSIMPLEBUFFERQUEUE};
+\tconst SLboolean req[1] = {SL_BOOLEAN_TRUE};
+\tSLresult r;
+
+\tr = (*engineEngine)->CreateAudioRecorder(engineEngine,
+\t\t\t\t\t\t &st->recObject,
+\t\t\t\t\t\t &audioSrc,
+\t\t\t\t\t\t &audioSnk, 1, id, req);"""
+
+new_rec_ifaces = """\tconst SLInterfaceID id[5] = {
+\t\tSL_IID_ANDROIDSIMPLEBUFFERQUEUE,
+\t\tSL_IID_ANDROIDCONFIGURATION,
+\t\tSL_IID_ANDROIDACOUSTICECHOCANCELLATION,
+\t\tSL_IID_ANDROIDNOISESUPPRESSION,
+\t\tSL_IID_ANDROIDAUTOMATICGAINCONTROL
+\t};
+\tconst SLboolean req[5] = {
+\t\tSL_BOOLEAN_TRUE,
+\t\tSL_BOOLEAN_FALSE,
+\t\tSL_BOOLEAN_FALSE,
+\t\tSL_BOOLEAN_FALSE,
+\t\tSL_BOOLEAN_FALSE
+\t};
+\tSLresult r;
+
+\tr = (*engineEngine)->CreateAudioRecorder(engineEngine,
+\t\t\t\t\t\t &st->recObject,
+\t\t\t\t\t\t &audioSrc,
+\t\t\t\t\t\t &audioSnk, 5, id, req);"""
+
+assert old_rec_ifaces in rec, "Expected CreateAudioRecorder block in opensles/recorder.c"
+rec = rec.replace(old_rec_ifaces, new_rec_ifaces, 1)
+
+old_rec_realize = """\tr = (*st->recObject)->Realize(st->recObject, SL_BOOLEAN_FALSE);
+\tif (SL_RESULT_SUCCESS != r)
+\t\treturn ENODEV;"""
+
+new_rec_realize = """\t{
+\t\tSLAndroidConfigurationItf recConfig;
+\t\tif (SL_RESULT_SUCCESS == (*st->recObject)->GetInterface(
+\t\t\t    st->recObject, SL_IID_ANDROIDCONFIGURATION, &recConfig)) {
+\t\t\tSLuint32 preset = SL_ANDROID_RECORDING_PRESET_VOICE_COMMUNICATION;
+\t\t\t(*recConfig)->SetConfiguration(recConfig,
+\t\t\t\t\t\t       SL_ANDROID_KEY_RECORDING_PRESET,
+\t\t\t\t\t\t       &preset, sizeof(preset));
+\t\t}
+\t}
+
+\tr = (*st->recObject)->Realize(st->recObject, SL_BOOLEAN_FALSE);
+\tif (SL_RESULT_SUCCESS != r)
+\t\treturn ENODEV;
+
+\t{
+\t\tSLAndroidAcousticEchoCancellationItf aecItf;
+\t\tSLAndroidNoiseSuppressionItf nsItf;
+\t\tSLAndroidAutomaticGainControlItf agcItf;
+\t\tint aec_ok = 0, ns_ok = 0, agc_ok = 0;
+
+\t\tif (SL_RESULT_SUCCESS == (*st->recObject)->GetInterface(
+\t\t\t    st->recObject, SL_IID_ANDROIDACOUSTICECHOCANCELLATION, &aecItf)) {
+\t\t\taec_ok = (SL_RESULT_SUCCESS == (*aecItf)->SetEnabled(aecItf, SL_BOOLEAN_TRUE));
+\t\t}
+\t\tif (SL_RESULT_SUCCESS == (*st->recObject)->GetInterface(
+\t\t\t    st->recObject, SL_IID_ANDROIDNOISESUPPRESSION, &nsItf)) {
+\t\t\tns_ok = (SL_RESULT_SUCCESS == (*nsItf)->SetEnabled(nsItf, SL_BOOLEAN_TRUE));
+\t\t}
+\t\tif (SL_RESULT_SUCCESS == (*st->recObject)->GetInterface(
+\t\t\t    st->recObject, SL_IID_ANDROIDAUTOMATICGAINCONTROL, &agcItf)) {
+\t\t\tagc_ok = (SL_RESULT_SUCCESS == (*agcItf)->SetEnabled(agcItf, SL_BOOLEAN_TRUE));
+\t\t}
+\t\tinfo("opensles: voice_comm preset enabled (AEC=%d NS=%d AGC=%d)\\n",
+\t\t     aec_ok, ns_ok, agc_ok);
+\t}"""
+
+assert old_rec_realize in rec, "Expected Realize block in opensles/recorder.c"
+rec = rec.replace(old_rec_realize, new_rec_realize, 1)
+rec_path.write_text(rec)
+
+play_path = Path(sys.argv[2])
+play = play_path.read_text()
+
+old_play_ifaces = """\tconst SLInterfaceID ids[2] = {SL_IID_BUFFERQUEUE, SL_IID_EFFECTSEND};
+\tconst SLboolean req[2] = {SL_BOOLEAN_TRUE, SL_BOOLEAN_TRUE};"""
+
+new_play_ifaces = """\tconst SLInterfaceID ids[3] = {
+\t\tSL_IID_BUFFERQUEUE,
+\t\tSL_IID_EFFECTSEND,
+\t\tSL_IID_ANDROIDCONFIGURATION
+\t};
+\tconst SLboolean req[3] = {
+\t\tSL_BOOLEAN_TRUE,
+\t\tSL_BOOLEAN_TRUE,
+\t\tSL_BOOLEAN_FALSE
+\t};"""
+
+assert old_play_ifaces in play, "Expected CreateAudioPlayer ids block in opensles/player.c"
+play = play.replace(old_play_ifaces, new_play_ifaces, 1)
+
+old_play_realize = """\tr = (*st->bqPlayerObject)->Realize(st->bqPlayerObject,
+\t\t\t\t\t   SL_BOOLEAN_FALSE);"""
+
+new_play_realize = """\t{
+\t\tSLAndroidConfigurationItf playConfig;
+\t\tif (SL_RESULT_SUCCESS == (*st->bqPlayerObject)->GetInterface(
+\t\t\t    st->bqPlayerObject, SL_IID_ANDROIDCONFIGURATION, &playConfig)) {
+\t\t\tSLint32 streamType = SL_ANDROID_STREAM_VOICE;
+\t\t\t(*playConfig)->SetConfiguration(playConfig,
+\t\t\t\t\t\t        SL_ANDROID_KEY_STREAM_TYPE,
+\t\t\t\t\t\t        &streamType, sizeof(streamType));
+\t\t}
+\t}
+
+\tr = (*st->bqPlayerObject)->Realize(st->bqPlayerObject,
+\t\t\t\t\t   SL_BOOLEAN_FALSE);"""
+
+assert old_play_realize in play, "Expected Realize block in opensles/player.c"
+play = play.replace(old_play_realize, new_play_realize, 1)
+play_path.write_text(play)
+PY
+fi
+
 rm -rf "$OUTPUT_DIR/include"
 
 build_slice() {
