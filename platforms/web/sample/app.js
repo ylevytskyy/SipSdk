@@ -21,7 +21,71 @@ client.start();
 window.sipClient = client; // exposed for automated checks
 
 let call = null;
+let incomingCall = null;
 let durationTimer = null;
+let busyTimer = null;
+const boundCallIds = new Set();
+
+function showBusyBanner(msg) {
+  const el = $('busyBanner');
+  el.textContent = msg;
+  el.hidden = false;
+  clearTimeout(busyTimer);
+  busyTimer = setTimeout(() => { el.hidden = true; }, 4000);
+}
+
+function updateCallButtonState() {
+  $('btnCall').disabled = !client.isRegistered || client.calls.length >= client.maxCalls;
+}
+
+function renderLines() {
+  const container = $('callLines');
+  const open = client.calls.filter((c) => c.state !== SipCallState.Closed);
+  const swapBtn = $('btnSwap');
+  container.innerHTML = '';
+  if (open.length <= 1) {
+    container.hidden = true;
+    swapBtn.hidden = true;
+    return;
+  }
+  container.hidden = false;
+  swapBtn.hidden = false;
+  for (const line of open) {
+    const btn = document.createElement('button');
+    btn.className = line === call ? '' : 'secondary';
+    btn.textContent = `${line.peerDisplayName || line.remoteUri} · ${line.isOnHold ? 'On Hold' : 'Active'}`;
+    btn.onclick = () => switchToCall(line);
+    container.appendChild(btn);
+  }
+}
+
+function focusCall(c) {
+  call = c;
+  $('callPeer').textContent = c.peerDisplayName || c.remoteUri;
+  $('dtmfReceived').textContent = '—';
+  c.attachMedia({ localVideo: $('localVideo'), remoteVideo: $('remoteVideo'), remoteAudio: $('remoteAudio') });
+  showState(c.state, 0, '');
+  $('btnMute').textContent = c.isMuted ? 'Unmute' : 'Mute';
+  $('btnHold').textContent = (c.isOnHold || c.state === SipCallState.Hold) ? 'Resume' : 'Hold';
+  $('btnVideo').textContent = c.isLocalVideoEnabled ? 'Video off' : 'Video on';
+  clearInterval(durationTimer);
+  durationTimer = setInterval(() => {
+    if (!call) return;
+    const d = call.duration;
+    $('callDuration').textContent = `${Math.floor(d / 60)}:${String(d % 60).padStart(2, '0')}`;
+  }, 500);
+  renderLines();
+}
+
+function switchToCall(target) {
+  if (!target || target.state === SipCallState.Closed) return;
+  try {
+    if (target.isOnHold) target.setHold(false);
+    focusCall(target);
+  } catch (err) {
+    log(err.message);
+  }
+}
 
 client.on('registrationStateChanged', ({ state, code, reason }) => {
   const el = $('regStatus');
@@ -29,18 +93,20 @@ client.on('registrationStateChanged', ({ state, code, reason }) => {
   el.className = 'status' + (state === SipRegistrationState.Registered ? ' ok' : state === SipRegistrationState.Failed ? ' err' : '');
   el.textContent = REG_NAMES[state] + (code ? ` (${code} ${reason})` : reason ? ` (${reason})` : '');
   const registered = state === SipRegistrationState.Registered;
-  $('btnCall').disabled = !registered || !!call;
+  updateCallButtonState();
   $('btnUnregister').disabled = !registered;
   $('btnRegister').disabled = registered || state === SipRegistrationState.Registering;
   log(`Registration: ${el.textContent}`);
 });
 
+client.on('callRejectedBusy', ({ callerUri }) => {
+  const msg = `Busy: rejected incoming call from ${callerUri}`;
+  log(msg);
+  showBusyBanner(msg);
+});
+
 client.on('incomingCall', ({ call: incoming }) => {
-  if (call) {
-    log(`Busy: declining ${incoming.remoteUri}`);
-    incoming.hangup(486, 'Busy Here');
-    return;
-  }
+  incomingCall = incoming;
   log(`Incoming call from ${incoming.peerDisplayName || ''} ${incoming.remoteUri}${incoming.hasVideo ? ' (video)' : ''}`);
   $('incomingFrom').textContent = `From: ${incoming.peerDisplayName ? incoming.peerDisplayName + ' ' : ''}<${incoming.remoteUri}>`;
   $('incoming').hidden = false;
@@ -48,51 +114,76 @@ client.on('incomingCall', ({ call: incoming }) => {
 });
 
 function bindCall(c) {
-  call = c;
-  $('btnCall').disabled = true;
-  $('callPeer').textContent = c.peerDisplayName || c.remoteUri;
-  $('dtmfReceived').textContent = '—';
-  c.attachMedia({ localVideo: $('localVideo'), remoteVideo: $('remoteVideo'), remoteAudio: $('remoteAudio') });
-  showState(c.state, 0, '');
+  if (!boundCallIds.has(c.id)) {
+    boundCallIds.add(c.id);
+    c.on('stateChanged', ({ state, code, reason }) => {
+      if (c === call) showState(state, code, reason);
+      log(`Call ${CALL_NAMES[state]}${code ? ` ${code}` : ''}${reason ? ` ${reason}` : ''}`);
+      if (state === SipCallState.Established || state === SipCallState.Hold) {
+        if (incomingCall === c) {
+          incomingCall = null;
+          $('incoming').hidden = true;
+        }
+        if (state === SipCallState.Established) {
+          focusCall(c);
+        }
+        $('incall').hidden = false;
+        if (c === call) $('btnHold').textContent = state === SipCallState.Hold ? 'Resume' : 'Hold';
+        renderLines();
+      }
+      if (state === SipCallState.Closed) {
+        if (incomingCall === c) {
+          incomingCall = null;
+          $('incoming').hidden = true;
+        }
+        const remaining = client.calls.filter((x) => x !== c && x.state !== SipCallState.Closed);
+        if (remaining.length > 0) {
+          if (c === call) {
+            focusCall(remaining.find((x) => !x.isOnHold) || remaining[0]);
+          } else {
+            renderLines();
+          }
+          updateCallButtonState();
+        } else {
+          endCall();
+        }
+      }
+    });
+    c.on('mediaChanged', ({ width, height, isOnHold, isMuted }) => {
+      if (width && height) log(`Remote video ${width}x${height}`);
+      if (c === call) {
+        $('btnMute').textContent = isMuted ? 'Unmute' : 'Mute';
+        $('btnHold').textContent = isOnHold ? 'Resume' : 'Hold';
+      }
+      renderLines();
+    });
+    c.on('dtmfReceived', ({ digit }) => {
+      if (c === call) $('dtmfReceived').textContent = digit;
+      log(`DTMF received: ${digit}`);
+    });
+    c.on('stats', (s) => {
+      if (c !== call) return;
+      const lock = c.isSecure ? 'SRTP/DTLS' : 'Unencrypted';
+      const codec = s.audioCodec || '—';
+      const vCodec = s.videoCodec ? ` · ${s.videoCodec} ${s.videoBitrateKbps} kbps ${s.videoFps} fps` : '';
+      $('callStats').textContent = `${lock} · ${codec} ${s.audioBitrateKbps} kbps · RTT ${s.audioRttMs} ms · Jitter ${s.audioJitterMs} ms · Loss ${(s.audioLossRate * 100).toFixed(1)}%${vCodec}`;
+    });
+    c.on('transferStatus', ({ code, reason }) => {
+      log(`Transfer status: ${code} ${reason}`);
+    });
+    c.on('transferRequest', ({ target }) => {
+      log(`Incoming transfer request to ${target} (accepting)`);
+      try { c.acceptTransfer(true); } catch (err) { log(err.message); }
+    });
+  }
 
-  c.on('stateChanged', ({ state, code, reason }) => {
-    showState(state, code, reason);
-    log(`Call ${CALL_NAMES[state]}${code ? ` ${code}` : ''}${reason ? ` ${reason}` : ''}`);
-    if (state === SipCallState.Established || state === SipCallState.Hold) {
-      $('incoming').hidden = true;
-      $('incall').hidden = false;
-      $('btnHold').textContent = state === SipCallState.Hold ? 'Resume' : 'Hold';
-    }
-    if (state === SipCallState.Closed) endCall();
-  });
-  c.on('mediaChanged', ({ width, height, isOnHold, isMuted }) => {
-    if (width && height) log(`Remote video ${width}x${height}`);
-    $('btnMute').textContent = isMuted ? 'Unmute' : 'Mute';
-    $('btnHold').textContent = isOnHold ? 'Resume' : 'Hold';
-  });
-  c.on('dtmfReceived', ({ digit }) => {
-    $('dtmfReceived').textContent = digit;
-    log(`DTMF received: ${digit}`);
-  });
-  c.on('stats', (s) => {
-    const lock = c.isSecure ? 'SRTP/DTLS' : 'Unencrypted';
-    const codec = s.audioCodec || '—';
-    const vCodec = s.videoCodec ? ` · ${s.videoCodec} ${s.videoBitrateKbps} kbps ${s.videoFps} fps` : '';
-    $('callStats').textContent = `${lock} · ${codec} ${s.audioBitrateKbps} kbps · RTT ${s.audioRttMs} ms · Jitter ${s.audioJitterMs} ms · Loss ${(s.audioLossRate * 100).toFixed(1)}%${vCodec}`;
-  });
-  c.on('transferStatus', ({ code, reason }) => {
-    log(`Transfer status: ${code} ${reason}`);
-  });
-  c.on('transferRequest', ({ target }) => {
-    log(`Incoming transfer request to ${target} (accepting)`);
-    try { c.acceptTransfer(true); } catch (err) { log(err.message); }
-  });
-
-  if (c.isOutgoing) $('incall').hidden = false;
-  durationTimer = setInterval(() => {
-    const d = c.duration;
-    $('callDuration').textContent = `${Math.floor(d / 60)}:${String(d % 60).padStart(2, '0')}`;
-  }, 500);
+  if (c.isOutgoing || !call) {
+    focusCall(c);
+    if (c.isOutgoing) $('incall').hidden = false;
+  } else {
+    renderLines();
+  }
+  updateCallButtonState();
 }
 
 function showState(state, code, reason) {
@@ -104,9 +195,12 @@ function showState(state, code, reason) {
 function endCall() {
   clearInterval(durationTimer);
   call = null;
+  incomingCall = null;
   $('incoming').hidden = true;
   $('incall').hidden = true;
-  $('btnCall').disabled = !client.isRegistered;
+  $('callLines').hidden = true;
+  $('btnSwap').hidden = true;
+  updateCallButtonState();
   $('btnMute').textContent = 'Mute';
   $('btnVideo').textContent = 'Video off';
   $('btnHold').textContent = 'Hold';
@@ -115,7 +209,10 @@ function endCall() {
 }
 
 const guard = (fn) => () => {
-  try { fn(); } catch (err) { log(err.message); }
+  try { fn(); } catch (err) {
+    log(err.message);
+    if (err.code === 'EBUSY') showBusyBanner(err.message);
+  }
 };
 
 $('btnRegister').onclick = guard(() => client.register({
@@ -132,9 +229,28 @@ $('btnCall').onclick = guard(() => {
   log(`Calling ${target}${video ? ' with video' : ''}`);
   bindCall(client.makeCall(target, { video }));
 });
-$('btnAnswer').onclick = guard(() => call.answer({ video: $('withVideo').checked }));
-$('btnAnswerAudio').onclick = guard(() => call.answer({ video: false }));
-$('btnDecline').onclick = guard(() => call.hangup(603, 'Decline'));
+$('btnAnswer').onclick = guard(() => {
+  const target = incomingCall || call;
+  incomingCall = null;
+  target.answer({ video: $('withVideo').checked });
+  focusCall(target);
+});
+$('btnAnswerAudio').onclick = guard(() => {
+  const target = incomingCall || call;
+  incomingCall = null;
+  target.answer({ video: false });
+  focusCall(target);
+});
+$('btnDecline').onclick = guard(() => {
+  const target = incomingCall || call;
+  incomingCall = null;
+  $('incoming').hidden = true;
+  target.hangup(603, 'Decline');
+});
+$('btnSwap').onclick = guard(() => {
+  const other = client.calls.find((c) => c !== call && c.state !== SipCallState.Closed);
+  if (other) switchToCall(other);
+});
 $('btnHangup').onclick = guard(() => call.hangup());
 $('btnMute').onclick = guard(() => call.setMuted(!call.isMuted));
 $('btnHold').onclick = guard(() => call.setHold(!call.isOnHold));

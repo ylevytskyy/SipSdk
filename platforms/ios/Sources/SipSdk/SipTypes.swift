@@ -90,6 +90,7 @@ public struct SipAccount: Sendable, Codable, Hashable {
     public var tlsCaFile: String?
     public var verifyTlsCert: Bool
     public var mediaEnc: String?
+    public var maxCalls: Int
 
     public init(
         username: String,
@@ -106,7 +107,8 @@ public struct SipAccount: Sendable, Codable, Hashable {
         regInterval: UInt32 = 0,
         tlsCaFile: String? = nil,
         verifyTlsCert: Bool = true,
-        mediaEnc: String? = nil
+        mediaEnc: String? = nil,
+        maxCalls: Int = 4
     ) {
         self.username = username
         self.domain = domain
@@ -123,6 +125,7 @@ public struct SipAccount: Sendable, Codable, Hashable {
         self.tlsCaFile = tlsCaFile
         self.verifyTlsCert = verifyTlsCert
         self.mediaEnc = mediaEnc
+        self.maxCalls = max(1, min(8, maxCalls))
     }
 
     /// Canonical Address of Record (AOR).
@@ -223,6 +226,7 @@ public enum SipEvent: Sendable {
     case transferRequested(SipCall, referToUri: String, hasReplaces: Bool)
     case messageReceived(SipIncomingMessage)
     case messageStatusChanged(id: UInt64, status: SipMessageStatus, code: Int, reason: String)
+    case callRejectedBusy(String)
 }
 
 /// Strongly typed SIP error domain.
@@ -231,6 +235,7 @@ public enum SipError: LocalizedError, Sendable {
     case alreadyStarted
     case registrationFailed(Int, String)
     case callCreationFailed(String)
+    case busy
     case messageSendFailed(Int, String)
     case invalidParameter(String)
     case audioSessionFailed(String)
@@ -246,6 +251,8 @@ public enum SipError: LocalizedError, Sendable {
             return "SIP registration failed (\(code)): \(reason)"
         case .callCreationFailed(let detail):
             return "Failed to create SIP call: \(detail)"
+        case .busy:
+            return "Maximum concurrent calls reached (Busy)"
         case .messageSendFailed(let code, let detail):
             return "Failed to send SIP message (\(code)): \(detail)"
         case .invalidParameter(let detail):

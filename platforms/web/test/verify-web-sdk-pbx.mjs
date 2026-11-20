@@ -86,6 +86,42 @@ async function main() {
     expect('hangup closes the call', await page.locator('#incall').isHidden());
     expect('Closed is logged', /Call Closed/.test(await page.locator('#log').innerText()));
 
+    // Multi-call auto-hold and swap against Asterisk 9001
+    const multi = await page.evaluate(async () => {
+      const c = window.sipClient;
+      const waitEstab = (call) => new Promise((res) => {
+        if (call.state === 3) return res(true);
+        const timer = setTimeout(() => res(false), 12000);
+        const off = call.on('stateChanged', ({ state }) => {
+          if (state === 3) { clearTimeout(timer); off(); res(true); }
+        });
+      });
+      const waitHold = (call) => new Promise((res) => {
+        if (call.state === 4) return res(true);
+        const timer = setTimeout(() => res(false), 8000);
+        const off = call.on('stateChanged', ({ state }) => {
+          if (state === 4) { clearTimeout(timer); off(); res(true); }
+        });
+      });
+      const c1 = c.makeCall('9001', { video: false });
+      const e1 = await waitEstab(c1);
+      const c2 = c.makeCall('9001', { video: false });
+      const h1 = await waitHold(c1);
+      const e2 = await waitEstab(c2);
+      c1.setHold(false);
+      const h2 = await waitHold(c2);
+      const r1 = await waitEstab(c1);
+      const c1HeldFinal = c1.isOnHold;
+      const c2HeldFinal = c2.isOnHold;
+      c1.hangup();
+      c2.hangup();
+      await new Promise((r) => setTimeout(r, 400));
+      return { e1, h1, e2, h2, r1, c1HeldFinal, c2HeldFinal };
+    });
+    expect('live Asterisk multi-call auto-hold and swap',
+      multi.e1 && multi.h1 && multi.e2 && multi.h2 && multi.r1 && !multi.c1HeldFinal && multi.c2HeldFinal,
+      JSON.stringify(multi));
+
     await page.click('#btnUnregister');
     expect('unregister reaches Unregistered (state 0)', await waitState('#regStatus', 0));
     expect('no console errors', consoleErrors.length === 0, consoleErrors.join(' | '));

@@ -31,17 +31,29 @@ struct MainTabView: View {
             }
             .tag(2)
         }
+        .overlay(alignment: .top) {
+            if let message = model.busyBannerMessage {
+                Text(message)
+                    .font(.caption.weight(.semibold))
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .background(Color.red.opacity(0.9))
+                    .clipShape(Capsule())
+                    .padding(.top, 8)
+            }
+        }
         .sheet(isPresented: $model.isShowingAccountSheet) {
             SettingsView(model: model)
         }
         .fullScreenCover(item: Binding<SipCall?>(
-            get: { model.incomingCall },
+            get: { model.isShowingInCallView ? nil : model.incomingCall },
             set: { model.incomingCall = $0 }
         )) { call in
             IncomingCallView(model: model, call: call)
         }
         .fullScreenCover(isPresented: $model.isShowingInCallView) {
-            if let call = model.client.activeCall {
+            if let call = model.focusedCall {
                 InCallView(model: model, call: call)
             } else {
                 VStack {

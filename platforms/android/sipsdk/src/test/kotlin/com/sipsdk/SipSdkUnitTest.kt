@@ -147,4 +147,170 @@ class SipSdkUnitTest {
         assertEquals(-1, call.attendedTransfer(call))
         assertEquals(-1, call.acceptTransfer(true))
     }
+
+    @Test
+    fun testMultiCallConfigBusyListenerAndTelecomContract() {
+        val client = SipClient("1001", "10.0.2.2")
+        assertEquals(4, client.maxCalls)
+        client.maxCalls = 2
+        assertEquals(2, client.maxCalls)
+
+        var busyUri: String? = null
+        val listener = object : SipClientListener {
+            override fun onCallRejectedBusy(callerUri: String) {
+                busyUri = callerUri
+            }
+        }
+        listener.onCallRejectedBusy("sip:1002@pbx")
+        assertEquals("sip:1002@pbx", busyUri)
+
+        val err: Throwable = SipBusyException("Max concurrent calls reached")
+        assertTrue(err is IllegalStateException)
+
+        val fakeTelecom: SipTelecomManagerCoordinator = InMemoryTelecomCoordinator()
+        val callId1 = "call-out-1"
+        val callId2 = "call-in-2"
+        fakeTelecom.addCall(
+            callId = callId1,
+            displayName = "Alice",
+            address = "sip:1002@pbx",
+            isOutgoing = true,
+            isVideo = false,
+            callbacks = object : SipTelecomCallCallbacks {
+                override fun onAnswer(isVideo: Boolean) {}
+                override fun onDisconnect() {}
+                override fun onSetActive() {}
+                override fun onSetInactive() {}
+            }
+        )
+        fakeTelecom.addCall(
+            callId = callId2,
+            displayName = "Bob",
+            address = "sip:1003@pbx",
+            isOutgoing = false,
+            isVideo = false,
+            callbacks = object : SipTelecomCallCallbacks {
+                override fun onAnswer(isVideo: Boolean) {}
+                override fun onDisconnect() {}
+                override fun onSetActive() {}
+                override fun onSetInactive() {}
+            }
+        )
+        fakeTelecom.setActive(callId1)
+        fakeTelecom.setInactive(callId1)
+        fakeTelecom.setActive(callId2)
+        fakeTelecom.requestEndpointChange(callId2, SipTelecomEndpoint.SPEAKER)
+        fakeTelecom.disconnect(callId1, SipDisconnectReason.LOCAL)
+        fakeTelecom.disconnect(callId2, SipDisconnectReason.REMOTE)
+        assertEquals(SipTelecomCallState.DISCONNECTED, fakeTelecom.getCallState(callId1))
+        assertEquals(SipTelecomCallState.DISCONNECTED, fakeTelecom.getCallState(callId2))
+        assertEquals(SipTelecomEndpoint.SPEAKER, fakeTelecom.getEndpoint(callId2))
+    }
+
+    @Test
+    fun testPushPayloadUnifiedKeysAndMissedTimeout() {
+        val unified = SipPushCallPayload.parse(
+            mapOf(
+                "sip_call_id" to "call-xyz@pbx",
+                "from_uri" to "sip:alice@pbx.local",
+                "display_name" to "Alice",
+                "has_video" to "true"
+            )
+        )
+        assertEquals("call-xyz@pbx", unified.sipCallId)
+        assertEquals("sip:alice@pbx.local", unified.callerUri)
+        assertEquals("Alice", unified.displayName)
+        assertTrue(unified.hasVideo)
+
+        val aliases = SipPushCallPayload.parse(
+            mapOf(
+                "call_id" to "legacy-id",
+                "caller_uri" to "sip:bob@pbx.local",
+                "caller_name" to "Bob",
+                "video" to "0"
+            )
+        )
+        assertEquals("legacy-id", aliases.sipCallId)
+        assertEquals("sip:bob@pbx.local", aliases.callerUri)
+        assertEquals("Bob", aliases.displayName)
+        assertFalse(aliases.hasVideo)
+
+        val missedLatch = java.util.concurrent.CountDownLatch(1)
+        var missedId = ""
+        var missedUri = ""
+        val telecom = InMemoryTelecomCoordinator()
+        val client = SipClient("1001", "10.0.2.2").apply {
+            telecomCoordinator = telecom
+            listener = object : SipClientListener {
+                override fun onPushCallMissed(callId: String, callerUri: String) {
+                    missedId = callId
+                    missedUri = callerUri
+                    missedLatch.countDown()
+                }
+            }
+        }
+
+        val handle = SipPushHandler.handleIncomingCallPush(
+            context = null,
+            client = client,
+            data = mapOf(
+                "sip_call_id" to "missing-invite-123",
+                "caller_uri" to "sip:carol@pbx.local",
+                "display_name" to "Carol",
+                "has_video" to "false"
+            ),
+            timeoutMs = 200L,
+            autoRegister = false
+        )
+        assertEquals(SipTelecomCallState.RINGING, telecom.getCallState("missing-invite-123"))
+        assertTrue("Expected missed push timeout", missedLatch.await(2, java.util.concurrent.TimeUnit.SECONDS))
+        assertEquals("missing-invite-123", missedId)
+        assertEquals("sip:carol@pbx.local", missedUri)
+        assertEquals(SipTelecomCallState.DISCONNECTED, telecom.getCallState("missing-invite-123"))
+        assertTrue(handle.isMissed)
+
+        // Pre-INVITE decline removes handle cleanly and rejects late INVITE without firing onIncomingCall
+        var lateIncomingFired = false
+        val declineClient = SipClient("1001", "10.0.2.2").apply {
+            telecomCoordinator = telecom
+            listener = object : SipClientListener {
+                override fun onIncomingCall(call: SipCall) {
+                    lateIncomingFired = true
+                }
+            }
+        }
+        val declinedHandle = SipPushHandler.handleIncomingCallPush(
+            context = null,
+            client = declineClient,
+            data = mapOf("sip_call_id" to "declined-before-invite", "caller_uri" to "sip:dave@pbx.local"),
+            timeoutMs = 2_000L,
+            autoRegister = false
+        )
+        declinedHandle.buildTelecomCallbacks().onDisconnect()
+        assertTrue(declinedHandle.isDeclined)
+        assertEquals(SipTelecomCallState.DISCONNECTED, telecom.getCallState("declined-before-invite"))
+        assertFalse(declineClient.attachPendingPushCall("declined-before-invite", SipCall(0L, "declined-before-invite", "sip:dave@pbx.local")))
+        assertFalse(lateIncomingFired)
+
+        // Duplicate push with same sip_call_id replaces prior timer safely
+        val dupFirst = SipPushHandler.handleIncomingCallPush(
+            context = null,
+            client = declineClient,
+            data = mapOf("sip_call_id" to "dup-call-id", "caller_uri" to "sip:eve@pbx.local"),
+            timeoutMs = 100L,
+            autoRegister = false
+        )
+        val dupSecond = SipPushHandler.handleIncomingCallPush(
+            context = null,
+            client = declineClient,
+            data = mapOf("sip_call_id" to "dup-call-id", "caller_uri" to "sip:eve@pbx.local"),
+            timeoutMs = 2_000L,
+            autoRegister = false
+        )
+        Thread.sleep(200)
+        assertTrue(declineClient.attachPendingPushCall("dup-call-id", SipCall(0L, "dup-call-id", "sip:eve@pbx.local")))
+        assertTrue(dupSecond.isAttached)
+        assertFalse(dupSecond.isMissed)
+        assertTrue(dupFirst.isMissed)
+    }
 }

@@ -176,6 +176,48 @@ namespace SipSdk.Tests
             }
         }
 
+        [Fact]
+        public void Client_MultiCallMaxCallsAndBusyEvent_ConfiguredCleanly()
+        {
+            using var client = new SipClient();
+            Assert.Equal(4, client.MaxCalls);
+            client.MaxCalls = 0;
+            Assert.Equal(1, client.MaxCalls);
+            client.MaxCalls = 99;
+            Assert.Equal(8, client.MaxCalls);
+            client.MaxCalls = 1;
+            Assert.Equal(1, client.MaxCalls);
+
+            bool busySubscribed = false;
+            client.CallRejectedBusy += (sender, args) =>
+            {
+                busySubscribed = !string.IsNullOrEmpty(args.CallerUri);
+            };
+            Assert.False(busySubscribed);
+
+            // Validate ABI P/Invoke dial entrypoint rejects empty/null arguments cleanly.
+            Assert.Throws<ArgumentException>(() => client.Dial("", false));
+
+            string configDir = Path.Combine(Path.GetTempPath(), "sipsdk-dotnet-cap-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(configDir);
+            File.WriteAllText(Path.Combine(configDir, "config"), "sip_listen 127.0.0.1:0\n");
+            try
+            {
+                Assert.Equal(0, client.Start(configDir));
+                client.Register("1001", "127.0.0.1", "test1001", "udp", 5060);
+                var call1 = client.Dial("sip:9001@127.0.0.1:5060", false);
+                Assert.NotNull(call1);
+
+                // Second dial over MaxCalls=1 must throw InvalidOperationException / SipBusyException
+                Assert.Throws<SipBusyException>(() => client.Dial("sip:9001@127.0.0.1:5060", false));
+                call1.Hangup();
+            }
+            finally
+            {
+                Directory.Delete(configDir, true);
+            }
+        }
+
         private class TrackingSyncContext : SynchronizationContext
         {
             public bool PostCalled { get; private set; }

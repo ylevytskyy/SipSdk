@@ -209,4 +209,19 @@ namespace SipSdk
             HasReplaces = hasReplaces;
         }
     }
+
+    public class CallRejectedBusyEventArgs : EventArgs
+    {
+        public string CallerUri { get; }
+
+        public CallRejectedBusyEventArgs(string callerUri)
+        {
+            CallerUri = callerUri ?? string.Empty;
+        }
+    }
+
+    public class SipBusyException : InvalidOperationException
+    {
+        public SipBusyException(string message) : base(message) { }
+    }
 }

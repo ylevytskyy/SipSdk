@@ -33,6 +33,7 @@ typedef NS_ENUM(NSInteger, SipMacMessageStatus) {
 - (void)client:(SipMacClient *)client call:(SipMacCall *)call didUpdateStatsCodec:(NSString *)codec bitrateKbps:(uint32_t)bitrateKbps lossRate:(float)lossRate jitterMs:(uint32_t)jitterMs rttMs:(uint32_t)rttMs;
 - (void)client:(SipMacClient *)client call:(SipMacCall *)call didChangeTransferStatus:(NSInteger)code reason:(NSString *)reason;
 - (void)client:(SipMacClient *)client call:(SipMacCall *)call didReceiveTransferRequest:(NSString *)referToUri hasReplaces:(BOOL)hasReplaces;
+- (void)client:(SipMacClient *)client didRejectIncomingCallBusyFrom:(NSString *)callerUri;
 @end
 
 @interface SipMacClient : NSObject
@@ -41,6 +42,7 @@ typedef NS_ENUM(NSInteger, SipMacMessageStatus) {
 @property (nonatomic, readonly) BOOL isStarted;
 @property (nonatomic, readonly) BOOL isRegistered;
 @property (nonatomic, assign) BOOL isMicMuted;
+@property (nonatomic, assign) int maxCalls;
 @property (nonatomic, readonly, copy) NSString *username;
 @property (nonatomic, readonly, copy) NSString *domain;
 @property (nonatomic, readonly, copy) NSString *aor;

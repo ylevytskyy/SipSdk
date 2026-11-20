@@ -13,20 +13,33 @@ public final class SipCallKitCoordinator: NSObject, CXProviderDelegate {
     public let provider: CXProvider
     public let callController: CXCallController
     public weak var client: SipClient?
+    private var reportedCallUUIDs: Set<UUID> = []
 
-    public init(localizedName: String = "SipSdk", client: SipClient? = nil) {
+    public init(localizedName: String = "SipSdk", client: SipClient? = nil, maxCalls: Int = 4) {
+        _ = localizedName
         self.client = client
         self.callController = CXCallController()
 
-        let config = CXProviderConfiguration()
-        config.supportsVideo = true
-        config.maximumCallsPerCallGroup = 1
-        config.supportedHandleTypes = [.generic]
-        config.includesCallsInRecents = true
-
+        let config = Self.makeConfiguration(maxCalls: maxCalls)
         self.provider = CXProvider(configuration: config)
         super.init()
         self.provider.setDelegate(self, queue: nil)
+    }
+
+    /// Updates CallKit multi-call capacity to match account `maxCalls`.
+    public func updateConfiguration(maxCalls: Int) {
+        provider.configuration = Self.makeConfiguration(maxCalls: maxCalls)
+    }
+
+    private static func makeConfiguration(maxCalls: Int) -> CXProviderConfiguration {
+        let clamped = max(1, min(8, maxCalls))
+        let config = CXProviderConfiguration()
+        config.supportsVideo = true
+        config.maximumCallGroups = clamped
+        config.maximumCallsPerCallGroup = 1
+        config.supportedHandleTypes = [.generic]
+        config.includesCallsInRecents = true
+        return config
     }
 
     deinit {
@@ -46,10 +59,13 @@ public final class SipCallKitCoordinator: NSObject, CXProviderDelegate {
         update.supportsDTMF = true
 
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            provider.reportNewIncomingCall(with: call.id, update: update) { error in
+            provider.reportNewIncomingCall(with: call.id, update: update) { [weak self] error in
                 if let error = error {
                     continuation.resume(throwing: error)
                 } else {
+                    Task { @MainActor [weak self] in
+                        self?.reportedCallUUIDs.insert(call.id)
+                    }
                     continuation.resume()
                 }
             }
@@ -69,7 +85,19 @@ public final class SipCallKitCoordinator: NSObject, CXProviderDelegate {
 
         let transaction = CXTransaction(action: startAction)
         try await callController.request(transaction)
+        reportedCallUUIDs.insert(call.id)
         return call
+    }
+
+    /// Records a call UUID already reported to CallKit (for example, by a VoIP push handler).
+    public func markCallReported(_ uuid: UUID) {
+        reportedCallUUIDs.insert(uuid)
+    }
+
+    /// Reports call termination to CallKit when a previously reported CallKit session closes.
+    public func reportCallEnded(uuid: UUID, reason: CXCallEndedReason = .remoteEnded) {
+        guard reportedCallUUIDs.remove(uuid) != nil else { return }
+        provider.reportCall(with: uuid, endedAt: Date(), reason: reason)
     }
 
     /// Ends CallKit call session.
@@ -83,6 +111,7 @@ public final class SipCallKitCoordinator: NSObject, CXProviderDelegate {
 
     nonisolated public func providerDidReset(_ provider: CXProvider) {
         Task { @MainActor in
+            reportedCallUUIDs.removeAll()
             guard let client = self.client else { return }
             for call in client.calls {
                 await call.hangup(statusCode: 487, reason: "CallKit Reset")
@@ -124,17 +153,24 @@ public final class SipCallKitCoordinator: NSObject, CXProviderDelegate {
         }
     }
 
+    @discardableResult
+    internal func applyHoldAction(callUUID: UUID, onHold: Bool) async throws -> Bool {
+        guard let client = self.client,
+              let call = client.calls.first(where: { $0.id == callUUID }) else {
+            return false
+        }
+        try await call.setHold(onHold)
+        return true
+    }
+
     nonisolated public func provider(_ provider: CXProvider, perform action: CXSetHeldCallAction) {
         Task { @MainActor in
-            guard let client = self.client,
-                  let call = client.calls.first(where: { $0.id == action.callUUID }) else {
-                action.fail()
-                return
-            }
-
             do {
-                try await call.setHold(action.isOnHold)
-                action.fulfill()
+                if try await applyHoldAction(callUUID: action.callUUID, onHold: action.isOnHold) {
+                    action.fulfill()
+                } else {
+                    action.fail()
+                }
             } catch {
                 action.fail()
             }

@@ -52,6 +52,10 @@ public:
     virtual void on_transfer_request(std::shared_ptr<Call> call, const std::string &refer_to_uri, bool has_replaces) {
         (void)call; (void)refer_to_uri; (void)has_replaces;
     }
+
+    virtual void on_call_rejected_busy(const std::string &caller_uri) {
+        (void)caller_uri;
+    }
 };
 
 } // namespace sip

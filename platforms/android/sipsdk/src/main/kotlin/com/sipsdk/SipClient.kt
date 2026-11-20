@@ -4,6 +4,9 @@ import android.content.Context
 import android.os.Handler
 import android.os.Looper
 import java.io.File
+import java.util.concurrent.ConcurrentHashMap
+
+class SipBusyException(message: String) : IllegalStateException(message)
 
 class SipClient(
     val username: String,
@@ -29,7 +32,19 @@ class SipClient(
     var tlsCaFile: String? = null
     var verifyTlsCert: Boolean = true
     var mediaEnc: String = ""
+    var maxCalls: Int = 4
+        set(value) {
+            field = value.coerceIn(1, 8)
+        }
+    var lastDialErrorCode: Int = 0
+        private set
     var listener: SipClientListener? = null
+    var telecomCoordinator: SipTelecomManagerCoordinator? = null
+
+    private val activeCallsMap = ConcurrentHashMap<Long, SipCall>()
+    private val pendingPushHandles = ConcurrentHashMap<String, SipPushCallHandle>()
+    val activeCalls: List<SipCall>
+        get() = activeCallsMap.values.filter { !it.isClosed }
 
     val audioManager: SipAudioManager? = context?.let { SipAudioManager(it) }
 
@@ -208,6 +223,7 @@ class SipClient(
 
     fun stop() {
         if (nativeHandle != 0L) {
+            activeCallsMap.clear()
             cameraCapture?.stop()
             cameraCapture = null
             audioManager?.releaseAudioSession()
@@ -272,7 +288,8 @@ class SipClient(
             port,
             tlsCaFile ?: "",
             verifyTlsCert,
-            mediaEnc
+            mediaEnc,
+            maxCalls
         )
     }
 
@@ -285,11 +302,27 @@ class SipClient(
         return if (nativeHandle != 0L) nativeResetTransports(nativeHandle, reRegister) else -1
     }
 
+    fun dial(uri: String, withVideo: Boolean = false): SipCall {
+        val call = makeCall(uri, withVideo)
+        if (call != null) return call
+        if (lastDialErrorCode == 16) {
+            throw SipBusyException("Maximum concurrent calls reached ($maxCalls)")
+        }
+        throw IllegalStateException("Failed to dial $uri (error $lastDialErrorCode)")
+    }
+
     fun makeCall(uri: String, withVideo: Boolean = false): SipCall? {
         if (nativeHandle == 0L) {
             val rc = start()
-            if (rc != 0) return null
+            if (rc != 0) {
+                lastDialErrorCode = rc
+                return null
+            }
         }
+        val statusOut = IntArray(1)
+        val callHandle = nativeDialCall(nativeHandle, uri, withVideo, statusOut)
+        lastDialErrorCode = statusOut[0]
+        if (callHandle == 0L) return null
         if (withVideo && cameraCapture == null) {
             cameraCapture = SipCameraCapture(context, nativeHandle)
             val cur = localVideoView?.currentSurface
@@ -298,17 +331,55 @@ class SipClient(
             }
             cameraCapture?.start()
         }
-        val callHandle = nativeMakeCall(nativeHandle, uri, withVideo)
-        if (callHandle == 0L) return null
+        activeCallsMap.values.filter { !it.isClosed && !it.isOnHold }.forEach { existing ->
+            telecomCoordinator?.setInactive(existing.callId)
+        }
         audioManager?.prepareAudioSession()
-        return SipCall(
-            nativeHandle = callHandle,
-            callId = nativeCallGetId(callHandle),
-            remoteUri = nativeCallGetRemoteUri(callHandle),
-            peerDisplayName = nativeCallGetPeerDisplayName(callHandle),
-            hasVideo = withVideo,
-            isOutgoing = true
+        val call = activeCallsMap.getOrPut(callHandle) {
+            SipCall(
+                nativeHandle = callHandle,
+                callId = nativeCallGetId(callHandle),
+                remoteUri = nativeCallGetRemoteUri(callHandle),
+                peerDisplayName = nativeCallGetPeerDisplayName(callHandle),
+                hasVideo = withVideo,
+                isOutgoing = true
+            )
+        }
+        telecomCoordinator?.addCall(
+            callId = call.callId,
+            displayName = call.peerDisplayName ?: uri,
+            address = call.remoteUri,
+            isOutgoing = true,
+            isVideo = withVideo,
+            callbacks = createTelecomCallbacks(call)
         )
+        return call
+    }
+
+    private fun createTelecomCallbacks(call: SipCall): SipTelecomCallCallbacks = object : SipTelecomCallCallbacks {
+        override fun onAnswer(isVideo: Boolean) {
+            call.answer(isVideo)
+        }
+
+        override fun onDisconnect() {
+            call.hangup(0, "Hangup")
+        }
+
+        override fun onSetActive() {
+            if (call.isOnHold && !call.isClosed) {
+                call.setHold(false)
+            }
+        }
+
+        override fun onSetInactive() {
+            if (!call.isOnHold && !call.isClosed) {
+                call.setHold(true)
+            }
+        }
+
+        override fun onMuteChanged(isMuted: Boolean) {
+            isMicrophoneMuted = isMuted
+        }
     }
 
     /**
@@ -374,32 +445,92 @@ class SipClient(
 
     @JvmSynthetic
     fun onNativeCallState(callHandle: Long, state: Int, code: Int, reason: String) {
-        val call = SipCall(
-            nativeHandle = callHandle,
-            callId = nativeCallGetId(callHandle),
-            remoteUri = nativeCallGetRemoteUri(callHandle),
-            peerDisplayName = nativeCallGetPeerDisplayName(callHandle),
-            hasVideo = nativeCallHasVideo(callHandle),
-            isOutgoing = nativeCallIsOutgoing(callHandle)
-        )
+        val call = activeCallsMap.getOrPut(callHandle) {
+            SipCall(
+                nativeHandle = callHandle,
+                callId = nativeCallGetId(callHandle),
+                remoteUri = nativeCallGetRemoteUri(callHandle),
+                peerDisplayName = nativeCallGetPeerDisplayName(callHandle),
+                hasVideo = nativeCallHasVideo(callHandle),
+                isOutgoing = nativeCallIsOutgoing(callHandle)
+            )
+        }
         val callState = SipCallState.fromInt(state)
-        if (callState == SipCallState.CLOSED) {
-            audioManager?.releaseAudioSession()
+        when (callState) {
+            SipCallState.ESTABLISHED -> telecomCoordinator?.setActive(call.callId)
+            SipCallState.HOLD -> telecomCoordinator?.setInactive(call.callId)
+            SipCallState.CLOSED -> {
+                activeCallsMap.remove(callHandle)
+                val disconnectReason = when (code) {
+                    486 -> SipDisconnectReason.BUSY
+                    487, 603 -> SipDisconnectReason.REJECTED
+                    else -> SipDisconnectReason.REMOTE
+                }
+                telecomCoordinator?.disconnect(call.callId, disconnectReason)
+                if (activeCallsMap.isEmpty()) {
+                    audioManager?.releaseAudioSession()
+                }
+            }
+            else -> {}
         }
         listener?.onCallStateChanged(call, callState, code, reason)
     }
 
+    internal fun registerPendingPushHandle(callId: String, handle: SipPushCallHandle) {
+        pendingPushHandles.put(callId, handle)?.cancelReplaced()
+    }
+
+    internal fun removePendingPushHandle(callId: String, handle: SipPushCallHandle? = null) {
+        if (handle == null) {
+            pendingPushHandles.remove(callId)
+        } else {
+            pendingPushHandles.remove(callId, handle)
+        }
+    }
+
+    internal fun notifyPushCallMissed(callId: String, callerUri: String) {
+        val dispatch = Runnable {
+            listener?.onPushCallMissed(callId, callerUri)
+        }
+        if (mainHandler != null && Looper.myLooper() != Looper.getMainLooper()) {
+            mainHandler.post(dispatch)
+        } else {
+            dispatch.run()
+        }
+    }
+
+    fun attachPendingPushCall(sipCallId: String, call: SipCall): Boolean {
+        val handle = pendingPushHandles.remove(sipCallId) ?: return false
+        return handle.onMatchingInviteArrived(call)
+    }
+
     @JvmSynthetic
     fun onNativeIncomingCall(callHandle: Long) {
-        val call = SipCall(
-            nativeHandle = callHandle,
-            callId = nativeCallGetId(callHandle),
-            remoteUri = nativeCallGetRemoteUri(callHandle),
-            peerDisplayName = nativeCallGetPeerDisplayName(callHandle),
-            hasVideo = nativeCallHasVideo(callHandle),
-            isOutgoing = false
-        )
-        listener?.onIncomingCall(call)
+        val call = activeCallsMap.getOrPut(callHandle) {
+            SipCall(
+                nativeHandle = callHandle,
+                callId = nativeCallGetId(callHandle),
+                remoteUri = nativeCallGetRemoteUri(callHandle),
+                peerDisplayName = nativeCallGetPeerDisplayName(callHandle),
+                hasVideo = nativeCallHasVideo(callHandle),
+                isOutgoing = false
+            )
+        }
+        val handle = pendingPushHandles.remove(call.callId)
+        val attachedToPush = handle?.onMatchingInviteArrived(call) == true
+        if (!attachedToPush) {
+            telecomCoordinator?.addCall(
+                callId = call.callId,
+                displayName = call.peerDisplayName ?: call.remoteUri,
+                address = call.remoteUri,
+                isOutgoing = false,
+                isVideo = call.hasVideo,
+                callbacks = createTelecomCallbacks(call)
+            )
+        }
+        if (handle?.isDeclined != true) {
+            listener?.onIncomingCall(call)
+        }
     }
 
     @JvmSynthetic
@@ -518,6 +649,11 @@ class SipClient(
     }
 
     @JvmSynthetic
+    fun onNativeCallRejectedBusy(callerUri: ByteArray) {
+        listener?.onCallRejectedBusy(String(callerUri, Charsets.UTF_8))
+    }
+
+    @JvmSynthetic
     fun onNativePrepareAudioSession(): Boolean {
         return audioManager?.prepareAudioSession() ?: true
     }
@@ -541,13 +677,15 @@ class SipClient(
         port: Int,
         tlsCaFile: String,
         verifyTlsCert: Boolean,
-        mediaEnc: String
+        mediaEnc: String,
+        maxCalls: Int
     ): Int
     private external fun nativeUnregister(handle: Long): Int
     private external fun nativeResetTransports(handle: Long, reRegister: Boolean): Int
     private external fun nativeIsRegistered(handle: Long): Boolean
     private external fun nativeSetMicMuted(handle: Long, muted: Boolean)
     private external fun nativeMakeCall(handle: Long, uri: String, withVideo: Boolean): Long
+    private external fun nativeDialCall(handle: Long, uri: String, withVideo: Boolean, outStatus: IntArray): Long
     /** Returns the message id (> 0) or a negative errno-style code. */
     private external fun nativeSendMessage(handle: Long, uri: String, contentType: String, body: ByteArray): Long
     private external fun nativeDestroy(handle: Long)

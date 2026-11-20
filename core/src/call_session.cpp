@@ -39,16 +39,22 @@ sip_call_t::sip_call_t(sip_client_t *owner, sip_core::Engine *engine, struct cal
     if (m_stats_tmr) {
         tmr_init(m_stats_tmr);
     }
+    m_hold_check_tmr = static_cast<struct tmr *>(mem_zalloc(sizeof(struct tmr), nullptr));
+    if (m_hold_check_tmr) {
+        tmr_init(m_hold_check_tmr);
+    }
 }
 
 sip_call_t::~sip_call_t()
 {
     stop_stats_timer();
+    stop_hold_check_timer();
     if (m_consult_call) {
         m_consult_call->release();
         m_consult_call = nullptr;
     }
     m_stats_tmr = static_cast<struct tmr *>(mem_deref(m_stats_tmr));
+    m_hold_check_tmr = static_cast<struct tmr *>(mem_deref(m_hold_check_tmr));
     m_raw_call = nullptr;
 }
 
@@ -292,6 +298,43 @@ void sip_call_t::stats_timer_handler(void *arg)
     }
 }
 
+void sip_call_t::start_hold_check_timer()
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (!m_hold_check_tmr || m_closed.load()) {
+        return;
+    }
+    m_hold_check_ticks.store(0);
+    m_hold_reinvite_pending.store(true);
+    tmr_start(m_hold_check_tmr, 60, hold_check_timer_handler, this);
+}
+
+void sip_call_t::stop_hold_check_timer()
+{
+    m_hold_reinvite_pending.store(false);
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (m_hold_check_tmr) {
+        tmr_cancel(m_hold_check_tmr);
+    }
+}
+
+void sip_call_t::hold_check_timer_handler(void *arg)
+{
+    auto *call = static_cast<sip_call_t *>(arg);
+    if (!call || call->is_closed() || !call->m_hold_reinvite_pending.load()) {
+        return;
+    }
+    if (call->m_engine) {
+        call->m_engine->evaluate_pending_hold_on_loop(call);
+    }
+    if (!call->is_closed() && call->m_hold_reinvite_pending.load()) {
+        std::lock_guard<std::mutex> lock(call->m_mutex);
+        if (call->m_hold_check_tmr) {
+            tmr_start(call->m_hold_check_tmr, 60, hold_check_timer_handler, call);
+        }
+    }
+}
+
 uint32_t sip_call_t::get_duration() const
 {
     if (m_closed.load()) {
@@ -344,6 +387,7 @@ void sip_call_t::set_established()
 void sip_call_t::set_closed(uint32_t dur)
 {
     m_closed.store(true);
+    stop_hold_check_timer();
     if (dur > 0) {
         m_duration.store(dur);
     } else {
@@ -357,7 +401,7 @@ void sip_call_t::attach_raw_call(struct call *c)
     m_raw_call = c;
     if (c != nullptr) {
         const char *cid = call_id(c);
-        if (cid && std::strlen(cid) > 0) {
+        if (m_id.empty() && cid && std::strlen(cid) > 0) {
             m_id = cid;
         }
         const char *peer_name = call_peername(c);

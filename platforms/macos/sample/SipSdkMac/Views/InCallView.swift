@@ -141,6 +141,35 @@ public struct InCallView: View {
                                    endPoint: .bottom)
                 )
 
+                // Multi-line switcher chips (when 2+ calls are open)
+                if appModel.calls.count > 1 {
+                    HStack(spacing: 8) {
+                        ForEach(appModel.calls, id: \.callId) { line in
+                            Button(action: {
+                                appModel.swapToCall(line)
+                            }) {
+                                HStack(spacing: 5) {
+                                    Image(systemName: line.isOnHold ? "pause.circle.fill" : "phone.fill")
+                                        .font(.caption)
+                                    Text(line.remoteUri)
+                                        .font(.caption.weight(.semibold))
+                                        .lineLimit(1)
+                                    Text(line.isOnHold ? "Hold" : "Active")
+                                        .font(.caption2)
+                                        .opacity(0.8)
+                                }
+                                .foregroundColor(.white)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 5)
+                                .background(line === appModel.activeCall ? Color.blue : Color.black.opacity(0.65))
+                                .cornerRadius(12)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .padding(.top, 6)
+                }
+
                 Spacer()
 
                 // In-Call DTMF Keypad Popover
@@ -360,6 +389,28 @@ public struct InCallView: View {
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+
+                    // Swap Lines
+                    if let other = appModel.calls.first(where: { $0 !== appModel.activeCall && !$0.isClosed }) {
+                        Button(action: {
+                            appModel.swapToCall(other)
+                        }) {
+                            VStack(spacing: 4) {
+                                Image(systemName: "arrow.left.arrow.right")
+                                    .font(.title2)
+                                    .frame(width: 50, height: 50)
+                                    .background(Color.white.opacity(0.25))
+                                    .foregroundColor(.white)
+                                    .clipShape(Circle())
+                                Text("Swap")
+                                    .font(.caption)
+                                    .foregroundColor(.white)
+                            }
+                            .frame(minWidth: 54, minHeight: 64)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    }
 
                     // In-Call Media Device Selection Toggle
                     Button(action: {

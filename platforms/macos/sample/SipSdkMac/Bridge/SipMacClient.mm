@@ -673,6 +673,20 @@ struct ClientCallbacks {
         });
     }
 
+    static void on_call_rejected_busy(sip_client_t *c, const char *caller_uri, void *user_data)
+    {
+        (void)c;
+        auto *self = (__bridge SipMacClient *)user_data;
+        if (!self) return;
+
+        NSString *callerStr = caller_uri ? ([NSString stringWithUTF8String:caller_uri] ?: @"Unknown") : @"Unknown";
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if ([self.delegate respondsToSelector:@selector(client:didRejectIncomingCallBusyFrom:)]) {
+                [self.delegate client:self didRejectIncomingCallBusyFrom:callerStr];
+            }
+        });
+    }
+
     static void on_transfer_request(sip_call_t *call, const char *refer_to_uri, bool has_replaces, void *user_data)
     {
         auto *self = (__bridge SipMacClient *)user_data;
@@ -789,6 +803,7 @@ static bool set_default_audio_device_by_name(NSString *targetName, bool is_input
         _domain = [domain copy];
         _port = 5060;
         _transport = @"udp";
+        _maxCalls = 4;
         _useSyntheticCamera = NO;
         _cameraDriver = [[SipMacCameraDriver alloc] init];
 
@@ -852,6 +867,7 @@ static bool set_default_audio_device_by_name(NSString *targetName, bool is_input
     cb.on_call_stats = ClientCallbacks::on_call_stats;
     cb.on_transfer_status = ClientCallbacks::on_transfer_status;
     cb.on_transfer_request = ClientCallbacks::on_transfer_request;
+    cb.on_call_rejected_busy = ClientCallbacks::on_call_rejected_busy;
 
     _client = sip_client_create(&cb, (__bridge void *)self);
     if (!_client) return -1;
@@ -1008,6 +1024,7 @@ static bool set_default_audio_device_by_name(NSString *targetName, bool is_input
     cfg.tls_ca_file = tlsCaFile.length > 0 ? [tlsCaFile UTF8String] : nullptr;
     cfg.verify_tls_cert = verifyTlsCert;
     cfg.media_enc = mediaEnc.length > 0 ? [mediaEnc UTF8String] : nullptr;
+    cfg.max_calls = _maxCalls > 0 ? _maxCalls : 4;
 
     return sip_client_register_account(_client, &cfg);
 }
