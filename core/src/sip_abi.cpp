@@ -41,7 +41,7 @@ SIP_ABI_EXPORT int sip_client_register_account(sip_client_t *client, const sip_a
     cfg.domain = config->domain ? config->domain : "";
     cfg.pwd = config->pwd ? config->pwd : "";
     cfg.transport = config->transport ? config->transport : "udp";
-    cfg.port = config->port > 0 ? config->port : 5060;
+    cfg.port = config->port > 0 ? config->port : 0;
     cfg.display_name = config->display_name ? config->display_name : "";
     cfg.outbound_proxy = config->outbound_proxy ? config->outbound_proxy : "";
     cfg.stun_server = config->stun_server ? config->stun_server : "";

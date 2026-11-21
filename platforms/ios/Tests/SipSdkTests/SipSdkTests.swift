@@ -34,6 +34,12 @@ final class SipSdkTests: XCTestCase {
         let tcpAccount = SipAccount(username: "1002", domain: "sip.example.com", transport: .tcp, port: 5061)
         XCTAssertEqual(tcpAccount.aor, "sip:1002@sip.example.com:5061;transport=tcp")
 
+        let wsAccount = SipAccount(username: "1002", domain: "sip.example.com", transport: .ws, port: 8088)
+        XCTAssertEqual(wsAccount.aor, "sip:1002@sip.example.com:8088;transport=ws")
+
+        let wssAccount = SipAccount(username: "1002", domain: "sip.example.com", transport: .wss, port: 8089)
+        XCTAssertEqual(wssAccount.aor, "sip:1002@sip.example.com:8089;transport=wss")
+
         let fullAccount = SipAccount(
             username: "alice",
             domain: "sip.provider.com",

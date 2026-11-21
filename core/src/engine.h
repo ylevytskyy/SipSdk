@@ -19,6 +19,7 @@ struct bevent;
 struct call;
 struct sip_lsnr;
 struct sip_msg;
+struct tls;
 
 namespace sip_core {
 
@@ -135,6 +136,8 @@ private:
     int init_on_loop_thread(const char *config_path);
     void run_loop(std::string config_path);
     void cleanup_on_loop_thread();
+    int configure_wss_tls_on_loop(bool verify_tls_cert, const std::string &ca_file);
+    int add_wss_transport_on_loop();
     void auto_hold_other_calls(sip_call_t *except_call);
     void hold_call_on_loop(sip_call_t *call, bool hold);
 
@@ -160,6 +163,8 @@ private:
 
     struct mqueue *m_mq{nullptr};
     struct ua *m_ua{nullptr};
+    struct tls *m_wss_tls{nullptr};
+    std::string m_active_transport;
     bool m_events_registered{false};
     int m_start_result{0};
     bool m_start_signaled{false};

@@ -273,6 +273,16 @@ fun SettingsScreen(
                             selected = transport.equals("tls", ignoreCase = true),
                             onClick = { transport = "tls"; savedToast = false }
                         )
+                        SegmentChip(
+                            title = "WS",
+                            selected = transport.equals("ws", ignoreCase = true),
+                            onClick = { transport = "ws"; savedToast = false }
+                        )
+                        SegmentChip(
+                            title = "WSS",
+                            selected = transport.equals("wss", ignoreCase = true),
+                            onClick = { transport = "wss"; savedToast = false }
+                        )
                     }
                 }
                 SettingsDivider()
