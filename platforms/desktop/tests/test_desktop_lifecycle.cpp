@@ -308,6 +308,19 @@ int main(int argc, char **argv) {
         TEST_ASSERT(mc_listener->wait_for_call_state(mc2, sip::CallState::Established, 8), "mc2 establish failed");
         TEST_ASSERT(mc1->set_hold(false) == 0, "swap mc1 failed");
         TEST_ASSERT(mc_listener->wait_for_call_state(mc2, sip::CallState::Hold, 5), "mc2 hold on swap failed");
+
+        // Merge mc1 + mc2 into local conference, then split mc2 back to hold
+        TEST_ASSERT(mc_client->merge_calls(mc1, mc2) == 0, "merge_calls failed");
+        for (int i = 0; i < 50 && !(mc1->is_in_conference() && mc2->is_in_conference()); ++i) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
+        TEST_ASSERT(mc1->is_in_conference() && mc2->is_in_conference(), "both calls must be in conference");
+        TEST_ASSERT(mc_client->split_call(mc2) == 0, "split_call failed");
+        for (int i = 0; i < 50 && (mc1->is_in_conference() || mc2->is_in_conference()); ++i) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
+        TEST_ASSERT(!mc1->is_in_conference() && !mc2->is_in_conference(), "conference must dissolve on split");
+
         mc1->hangup();
         mc2->hangup();
         std::this_thread::sleep_for(std::chrono::milliseconds(300));

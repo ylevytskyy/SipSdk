@@ -191,6 +191,36 @@ SIP_ABI_EXPORT bool sip_client_is_mic_muted(const sip_client_t *client)
     return client->engine->is_client_mic_muted();
 }
 
+SIP_ABI_EXPORT int sip_client_merge_calls(sip_client_t *client, sip_call_t *call_a, sip_call_t *call_b)
+{
+    if (!client || !client->engine || !call_a || !call_b) return EINVAL;
+    return client->engine->merge_calls(call_a, call_b);
+}
+
+SIP_ABI_EXPORT int sip_client_add_to_conference(sip_client_t *client, sip_call_t *call)
+{
+    if (!client || !client->engine || !call) return EINVAL;
+    return client->engine->add_to_conference(call);
+}
+
+SIP_ABI_EXPORT int sip_client_split_call(sip_client_t *client, sip_call_t *call)
+{
+    if (!client || !client->engine || !call) return EINVAL;
+    return client->engine->split_call(call);
+}
+
+SIP_ABI_EXPORT int sip_client_leave_conference(sip_client_t *client)
+{
+    if (!client || !client->engine) return EINVAL;
+    return client->engine->leave_conference();
+}
+
+SIP_ABI_EXPORT bool sip_call_is_in_conference(const sip_call_t *call)
+{
+    if (!call) return false;
+    return call->is_in_conference();
+}
+
 SIP_ABI_EXPORT int sip_client_set_audio_driver(sip_client_t *client, const char *src_mod, const char *src_dev, const char *play_mod, const char *play_dev)
 {
     if (!client || !client->engine) return EINVAL;

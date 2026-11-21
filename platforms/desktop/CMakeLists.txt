@@ -211,6 +211,11 @@ if(TARGET sip_core_display_frames_test)
     add_test(NAME core_display_frames COMMAND sip_core_display_frames_test)
 endif()
 
+# Mix-minus PCM conference mixer unit tests (needs no PBX).
+if(TARGET sip_core_conference_mixer_test)
+    add_test(NAME core_conference_mixer COMMAND sip_core_conference_mixer_test)
+endif()
+
 # sip_cli against a scripted SIP peer on loopback (needs no PBX).
 add_executable(test_cli_media
     tests/test_cli_media.cpp

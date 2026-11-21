@@ -32,6 +32,7 @@ namespace SipSdk.Native
         public IntPtr OnTransferStatus;
         public IntPtr OnTransferRequest;
         public IntPtr OnCallRejectedBusy;
+        public IntPtr OnConferenceChanged;
     }
 
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Ansi)]
@@ -62,6 +63,9 @@ namespace SipSdk.Native
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     public delegate void NativeCallRejectedBusyCallback(IntPtr client, [MarshalAs(UnmanagedType.LPStr)] string callerUri, IntPtr userData);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    public delegate void NativeConferenceChangedCallback(IntPtr client, IntPtr calls, UIntPtr count, IntPtr userData);
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     public delegate void NativeRegStateCallback(IntPtr client, int state, int code, [MarshalAs(UnmanagedType.LPStr)] string reason, IntPtr userData);
@@ -192,6 +196,22 @@ namespace SipSdk.Native
         [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
         [return: MarshalAs(UnmanagedType.I1)]
         public static extern bool sip_client_is_mic_muted(IntPtr client);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int sip_client_merge_calls(IntPtr client, IntPtr callA, IntPtr callB);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int sip_client_add_to_conference(IntPtr client, IntPtr call);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int sip_client_split_call(IntPtr client, IntPtr call);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int sip_client_leave_conference(IntPtr client);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        [return: MarshalAs(UnmanagedType.I1)]
+        public static extern bool sip_call_is_in_conference(IntPtr call);
 
         [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
         public static extern IntPtr sip_call_get_id(IntPtr call);

@@ -808,6 +808,9 @@ void Engine::handle_ua_event(int ev, struct bevent *event)
                             consult->release();
                         }
                     }
+                    if (sess->is_in_conference()) {
+                        remove_from_conference_on_loop(sess, false);
+                    }
                     remove_call_session(bcall);
                     dispatch_call_state(sess, SIP_CALL_STATE_CLOSED, scode, extract_reason("Call Closed").c_str());
                 }
@@ -1097,13 +1100,16 @@ int Engine::hangup_call(sip_call_t *call, int code, const char *reason)
     return 0;
 }
 
-void Engine::auto_hold_other_calls(sip_call_t *except_call)
+void Engine::auto_hold_calls_outside_set(const std::vector<sip_call_t *> &exempt_calls)
 {
     std::vector<sip_call_t *> to_hold;
     {
         std::lock_guard<std::mutex> lock(m_calls_mutex);
         for (auto *sess : m_all_calls) {
-            if (!sess || sess == except_call || sess->is_closed() || sess->is_on_hold()) {
+            if (!sess || sess->is_closed() || sess->is_on_hold()) {
+                continue;
+            }
+            if (std::find(exempt_calls.begin(), exempt_calls.end(), sess) != exempt_calls.end()) {
                 continue;
             }
             struct call *c = sess->raw_call();
@@ -1117,9 +1123,19 @@ void Engine::auto_hold_other_calls(sip_call_t *except_call)
         }
     }
     for (auto *sess : to_hold) {
-        hold_call_on_loop(sess, true);
+        hold_single_call_on_loop(sess, true);
         sess->release();
     }
+    sync_conference_mixer_on_loop();
+}
+
+void Engine::auto_hold_other_calls(sip_call_t *except_call)
+{
+    std::vector<sip_call_t *> exempt;
+    if (except_call) {
+        exempt.push_back(except_call);
+    }
+    auto_hold_calls_outside_set(exempt);
 }
 
 void Engine::trigger_hold_fallback_on_loop(sip_call_t *call, int code)
@@ -1169,7 +1185,7 @@ void Engine::evaluate_pending_hold_on_loop(sip_call_t *call)
     }
 }
 
-void Engine::hold_call_on_loop(sip_call_t *call, bool hold)
+void Engine::hold_single_call_on_loop(sip_call_t *call, bool hold)
 {
     if (!call || call->is_closed()) return;
     struct call *c = call->raw_call();
@@ -1178,7 +1194,6 @@ void Engine::hold_call_on_loop(sip_call_t *call, bool hold)
     if (!hold) {
         call->stop_hold_check_timer();
         call->set_hold_confirmed(false);
-        auto_hold_other_calls(call);
         if (call->consume_hold_fallback_muted()) {
             call->set_muted(false);
         }
@@ -1186,7 +1201,8 @@ void Engine::hold_call_on_loop(sip_call_t *call, bool hold)
         (void)rc;
         struct audio *au = call_audio(c);
         if (au != nullptr) {
-            audio_mute(au, call->is_muted());
+            bool effective_au_mute = call->is_in_conference() ? false : call->is_muted();
+            audio_mute(au, effective_au_mute);
             if (!audio_started(au)) {
                 (void)audio_update(au);
             }
@@ -1210,6 +1226,43 @@ void Engine::hold_call_on_loop(sip_call_t *call, bool hold)
     }
     dispatch_call_state(call, SIP_CALL_STATE_HOLD, 200, "Hold");
     dispatch_call_media(call, 0, 0, true, call->is_muted());
+}
+
+void Engine::hold_call_on_loop(sip_call_t *call, bool hold)
+{
+    if (!call || call->is_closed()) return;
+
+    if (call->is_in_conference()) {
+        std::vector<sip_call_t *> group;
+        {
+            std::lock_guard<std::mutex> lock(m_calls_mutex);
+            for (auto *sess : m_conference_calls) {
+                if (sess && !sess->is_closed()) {
+                    sess->retain();
+                    group.push_back(sess);
+                }
+            }
+        }
+        if (!hold) {
+            auto_hold_calls_outside_set(group);
+            for (auto *sess : group) {
+                hold_single_call_on_loop(sess, false);
+                sess->release();
+            }
+        } else {
+            for (auto *sess : group) {
+                hold_single_call_on_loop(sess, true);
+                sess->release();
+            }
+        }
+        sync_conference_mixer_on_loop();
+        return;
+    }
+
+    if (!hold) {
+        auto_hold_other_calls(call);
+    }
+    hold_single_call_on_loop(call, hold);
 }
 
 int Engine::hold_call(sip_call_t *call, bool hold)
@@ -1236,6 +1289,36 @@ int Engine::mute_call(sip_call_t *call, bool muted)
 
     call->retain();
     bool posted = post_task([this, call, muted]() {
+        if (call->is_in_conference()) {
+            if (m_media_manager) {
+                m_media_manager->conference_mixer().set_local_muted(muted);
+            }
+            std::vector<sip_call_t *> group;
+            {
+                std::lock_guard<std::mutex> lock(m_calls_mutex);
+                for (auto *sess : m_conference_calls) {
+                    if (sess && !sess->is_closed()) {
+                        sess->retain();
+                        group.push_back(sess);
+                    }
+                }
+            }
+            for (auto *sess : group) {
+                struct call *c = sess->raw_call();
+                if (c != nullptr) {
+                    struct audio *au = call_audio(c);
+                    if (au != nullptr) {
+                        audio_mute(au, false);
+                    }
+                }
+                sess->set_hold_fallback_muted(false);
+                sess->set_muted(muted);
+                dispatch_call_media(sess, 0, 0, sess->is_on_hold(), muted);
+                sess->release();
+            }
+            call->release();
+            return;
+        }
         struct call *c = call->raw_call();
         if (c != nullptr) {
             struct audio *au = call_audio(c);
@@ -1396,12 +1479,16 @@ int Engine::set_client_mic_muted(bool muted)
 {
     m_mic_muted = muted;
     post_task([this, muted]() {
+        if (m_media_manager) {
+            m_media_manager->conference_mixer().set_local_muted(muted);
+        }
         std::lock_guard<std::mutex> lock(m_calls_mutex);
         for (auto *sess : m_all_calls) {
             if (sess && sess->raw_call() != nullptr) {
                 struct audio *au = call_audio(sess->raw_call());
                 if (au != nullptr) {
-                    audio_mute(au, muted);
+                    bool effective_au_mute = sess->is_in_conference() ? false : muted;
+                    audio_mute(au, effective_au_mute);
                 }
                 sess->set_muted(muted);
                 dispatch_call_media(sess, 0, 0, sess->is_on_hold(), muted);
@@ -1409,6 +1496,289 @@ int Engine::set_client_mic_muted(bool muted)
         }
     });
     return 0;
+}
+
+void Engine::sync_conference_mixer_on_loop()
+{
+    if (!m_media_manager) return;
+    auto &mixer = m_media_manager->conference_mixer();
+
+    std::vector<sip_call_t *> active_legs;
+    bool any_muted = m_mic_muted.load();
+    {
+        std::lock_guard<std::mutex> lock(m_calls_mutex);
+        for (auto *sess : m_conference_calls) {
+            if (sess && !sess->is_closed() && !sess->is_on_hold() && sess->raw_call() != nullptr) {
+                active_legs.push_back(sess);
+                if (sess->is_muted()) {
+                    any_muted = true;
+                }
+            }
+        }
+    }
+
+    if (active_legs.size() < 2) {
+        mixer.clear();
+        return;
+    }
+
+    mixer.set_local_muted(any_muted);
+    for (auto *sess : active_legs) {
+        struct call *c = sess->raw_call();
+        if (!c) continue;
+        struct audio *au = call_audio(c);
+        if (au) {
+            audio_set_conference(au, true);
+            audio_mute(au, false);
+            mixer.add_leg(reinterpret_cast<uint64_t>(au));
+        }
+        struct video *vid = call_video(c);
+        if (vid) {
+            video_stop(vid);
+        }
+    }
+}
+
+void Engine::remove_from_conference_on_loop(sip_call_t *call, bool hold_removed)
+{
+    if (!call) return;
+
+    std::vector<sip_call_t *> snapshot;
+    sip_call_t *dissolved_rem = nullptr;
+    bool changed = false;
+
+    {
+        std::lock_guard<std::mutex> lock(m_calls_mutex);
+        auto it = std::find(m_conference_calls.begin(), m_conference_calls.end(), call);
+        if (it != m_conference_calls.end()) {
+            m_conference_calls.erase(it);
+            call->set_in_conference(false);
+            changed = true;
+        }
+        if (m_conference_calls.size() == 1) {
+            dissolved_rem = m_conference_calls.front();
+            m_conference_calls.clear();
+            if (dissolved_rem) {
+                dissolved_rem->set_in_conference(false);
+                dissolved_rem->retain();
+            }
+            changed = true;
+        }
+        snapshot = m_conference_calls;
+    }
+
+    if (!changed) return;
+
+    if (m_media_manager) {
+        struct call *c = call->raw_call();
+        if (c) {
+            struct audio *au = call_audio(c);
+            if (au) {
+                m_media_manager->conference_mixer().remove_leg(reinterpret_cast<uint64_t>(au));
+                audio_set_conference(au, false);
+                audio_mute(au, call->is_muted());
+            }
+        }
+    }
+
+    if (dissolved_rem) {
+        if (m_media_manager) {
+            m_media_manager->conference_mixer().clear();
+        }
+        struct call *rc = dissolved_rem->raw_call();
+        if (rc) {
+            struct audio *au = call_audio(rc);
+            if (au) {
+                audio_set_conference(au, false);
+                audio_mute(au, dissolved_rem->is_muted());
+            }
+        }
+        dissolved_rem->release();
+    } else {
+        sync_conference_mixer_on_loop();
+    }
+
+    if (hold_removed && !call->is_closed()) {
+        hold_single_call_on_loop(call, true);
+    }
+
+    dispatch_conference_changed(snapshot);
+}
+
+int Engine::merge_calls(sip_call_t *call_a, sip_call_t *call_b)
+{
+    if (!call_a || !call_b || call_a == call_b) return EINVAL;
+    if (call_a->is_closed() || call_b->is_closed()) return EINVAL;
+    if (call_a->engine() != this || call_b->engine() != this) return EINVAL;
+
+    call_a->retain();
+    call_b->retain();
+    bool posted = post_task([this, call_a, call_b]() {
+        if (!call_a->is_closed() && !call_b->is_closed() &&
+            call_a->raw_call() != nullptr && call_b->raw_call() != nullptr) {
+            std::vector<sip_call_t *> group;
+            {
+                std::lock_guard<std::mutex> lock(m_calls_mutex);
+                auto add_unique = [&](sip_call_t *c) {
+                    if (std::find(m_conference_calls.begin(), m_conference_calls.end(), c) == m_conference_calls.end()) {
+                        m_conference_calls.push_back(c);
+                    }
+                    c->set_in_conference(true);
+                };
+                add_unique(call_a);
+                add_unique(call_b);
+                for (auto *sess : m_conference_calls) {
+                    if (sess && !sess->is_closed()) {
+                        sess->retain();
+                        group.push_back(sess);
+                    }
+                }
+            }
+
+            auto_hold_calls_outside_set(group);
+            for (auto *sess : group) {
+                if (sess->is_on_hold()) {
+                    hold_single_call_on_loop(sess, false);
+                }
+            }
+            sync_conference_mixer_on_loop();
+
+            std::vector<sip_call_t *> snapshot;
+            {
+                std::lock_guard<std::mutex> lock(m_calls_mutex);
+                snapshot = m_conference_calls;
+            }
+            dispatch_conference_changed(snapshot);
+
+            for (auto *sess : group) {
+                sess->release();
+            }
+        }
+        call_a->release();
+        call_b->release();
+    });
+
+    if (!posted) {
+        call_a->release();
+        call_b->release();
+        return EIO;
+    }
+    return 0;
+}
+
+int Engine::add_to_conference(sip_call_t *call)
+{
+    if (!call || call->is_closed() || call->engine() != this) return EINVAL;
+    {
+        std::lock_guard<std::mutex> lock(m_calls_mutex);
+        if (m_conference_calls.size() < 2) {
+            return EINVAL;
+        }
+    }
+
+    call->retain();
+    bool posted = post_task([this, call]() {
+        if (!call->is_closed() && call->raw_call() != nullptr) {
+            std::vector<sip_call_t *> group;
+            {
+                std::lock_guard<std::mutex> lock(m_calls_mutex);
+                if (m_conference_calls.size() < 2) {
+                    call->release();
+                    return;
+                }
+                if (std::find(m_conference_calls.begin(), m_conference_calls.end(), call) == m_conference_calls.end()) {
+                    m_conference_calls.push_back(call);
+                }
+                call->set_in_conference(true);
+                for (auto *sess : m_conference_calls) {
+                    if (sess && !sess->is_closed()) {
+                        sess->retain();
+                        group.push_back(sess);
+                    }
+                }
+            }
+
+            auto_hold_calls_outside_set(group);
+            for (auto *sess : group) {
+                if (sess->is_on_hold()) {
+                    hold_single_call_on_loop(sess, false);
+                }
+            }
+            sync_conference_mixer_on_loop();
+
+            std::vector<sip_call_t *> snapshot;
+            {
+                std::lock_guard<std::mutex> lock(m_calls_mutex);
+                snapshot = m_conference_calls;
+            }
+            dispatch_conference_changed(snapshot);
+
+            for (auto *sess : group) {
+                sess->release();
+            }
+        }
+        call->release();
+    });
+
+    if (!posted) {
+        call->release();
+        return EIO;
+    }
+    return 0;
+}
+
+int Engine::split_call(sip_call_t *call)
+{
+    if (!call || call->engine() != this || !call->is_in_conference()) return EINVAL;
+
+    call->retain();
+    bool posted = post_task([this, call]() {
+        remove_from_conference_on_loop(call, true);
+        call->release();
+    });
+
+    if (!posted) {
+        call->release();
+        return EIO;
+    }
+    return 0;
+}
+
+int Engine::leave_conference()
+{
+    bool posted = post_task([this]() {
+        std::vector<sip_call_t *> group;
+        {
+            std::lock_guard<std::mutex> lock(m_calls_mutex);
+            for (auto *sess : m_conference_calls) {
+                if (sess) {
+                    sess->set_in_conference(false);
+                    sess->retain();
+                    group.push_back(sess);
+                }
+            }
+            m_conference_calls.clear();
+        }
+        if (m_media_manager) {
+            m_media_manager->conference_mixer().clear();
+        }
+        for (auto *sess : group) {
+            struct call *c = sess->raw_call();
+            if (c) {
+                struct audio *au = call_audio(c);
+                if (au) {
+                    audio_set_conference(au, false);
+                }
+                if (m_ua && !sess->is_closed()) {
+                    sess->latch_media_stats();
+                    ua_hangup(m_ua, c, 0, "Conference Ended");
+                }
+            }
+            sess->release();
+        }
+        dispatch_conference_changed({});
+    });
+    return posted ? 0 : EIO;
 }
 
 bool Engine::is_client_mic_muted() const
@@ -1741,6 +2111,56 @@ void Engine::dispatch_call_rejected_busy(const char *caller_uri)
     dispatch_async_f(dispatch_get_main_queue(), args, run_call_rejected_busy_task);
 #else
     run_call_rejected_busy_task(args);
+#endif
+}
+
+struct ConferenceChangedTaskArgs {
+    sip_client_t *client{nullptr};
+    std::vector<sip_call_t *> calls;
+    void (*cb)(sip_client_t *, sip_call_t *const *, size_t, void *){nullptr};
+    void *user_data{nullptr};
+};
+
+static void run_conference_changed_task(void *arg)
+{
+    auto *args = static_cast<ConferenceChangedTaskArgs *>(arg);
+    if (args->cb) {
+        args->cb(args->client,
+                 args->calls.empty() ? nullptr : args->calls.data(),
+                 args->calls.size(),
+                 args->user_data);
+    }
+    for (auto *c : args->calls) {
+        if (c) c->release();
+    }
+    delete args;
+}
+
+void Engine::dispatch_conference_changed(const std::vector<sip_call_t *> &calls)
+{
+    if (!m_callbacks.on_conference_changed) return;
+
+    auto *args = new ConferenceChangedTaskArgs{};
+    args->client = m_owner;
+    args->cb = m_callbacks.on_conference_changed;
+    args->user_data = m_user_data;
+    args->calls.reserve(calls.size());
+    for (auto *c : calls) {
+        if (c) {
+            c->retain();
+            args->calls.push_back(c);
+        }
+    }
+
+    if (m_callbacks.dispatch_to_main) {
+        m_callbacks.dispatch_to_main(run_conference_changed_task, args, m_user_data);
+        return;
+    }
+
+#if defined(__APPLE__)
+    dispatch_async_f(dispatch_get_main_queue(), args, run_conference_changed_task);
+#else
+    run_conference_changed_task(args);
 #endif
 }
 

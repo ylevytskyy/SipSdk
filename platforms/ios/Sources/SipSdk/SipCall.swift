@@ -38,6 +38,9 @@ public final class SipCall: Identifiable {
     /// True if local microphone is muted for this call.
     public private(set) var isMuted: Bool
 
+    /// True if this call is currently part of the local audio conference.
+    public internal(set) var isInConference: Bool = false
+
     /// Active call duration in seconds.
     public private(set) var durationSeconds: UInt32 = 0
 

@@ -285,6 +285,30 @@ struct Client::Callbacks {
             task(arg);
         }
     }
+
+    static void on_conference_changed(sip_client_t *client, sip_call_t *const *calls, size_t count, void *user_data)
+    {
+        (void)client;
+        auto *self = static_cast<Client *>(user_data);
+        if (!self) return;
+
+        std::vector<std::shared_ptr<Call>> members;
+        members.reserve(count);
+        for (size_t i = 0; i < count; ++i) {
+            if (calls[i]) {
+                auto c = self->get_or_create_call(calls[i]);
+                if (c) members.push_back(std::move(c));
+            }
+        }
+        std::shared_ptr<IClientListener> listener;
+        {
+            std::lock_guard<std::mutex> lock(self->m_mutex);
+            listener = self->m_listener;
+        }
+        if (listener) {
+            listener->on_conference_changed(members);
+        }
+    }
 };
 
 Client::Client(std::string username, std::string domain)
@@ -328,6 +352,7 @@ int Client::start(const std::string &config_path)
     cb.on_dtmf_digit = Callbacks::on_dtmf_digit;
     cb.on_call_stats = Callbacks::on_call_stats;
     cb.on_transfer_status = Callbacks::on_transfer_status;
+    cb.on_conference_changed = Callbacks::on_conference_changed;
     cb.on_transfer_request = Callbacks::on_transfer_request;
     cb.on_call_rejected_busy = Callbacks::on_call_rejected_busy;
 
@@ -438,6 +463,50 @@ int Client::dial(const std::string &target_uri, bool with_video, std::shared_ptr
 
     out_call = get_or_create_call(handle);
     return 0;
+}
+
+int Client::merge_calls(const std::shared_ptr<Call> &call_a, const std::shared_ptr<Call> &call_b)
+{
+    sip_client_t *cli = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        cli = m_client;
+    }
+    if (!cli || !call_a || !call_b || !call_a->raw_handle() || !call_b->raw_handle()) return EINVAL;
+    return sip_client_merge_calls(cli, call_a->raw_handle(), call_b->raw_handle());
+}
+
+int Client::add_to_conference(const std::shared_ptr<Call> &call)
+{
+    sip_client_t *cli = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        cli = m_client;
+    }
+    if (!cli || !call || !call->raw_handle()) return EINVAL;
+    return sip_client_add_to_conference(cli, call->raw_handle());
+}
+
+int Client::split_call(const std::shared_ptr<Call> &call)
+{
+    sip_client_t *cli = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        cli = m_client;
+    }
+    if (!cli || !call || !call->raw_handle()) return EINVAL;
+    return sip_client_split_call(cli, call->raw_handle());
+}
+
+int Client::leave_conference()
+{
+    sip_client_t *cli = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        cli = m_client;
+    }
+    if (!cli) return EINVAL;
+    return sip_client_leave_conference(cli);
 }
 
 int Client::send_message(const std::string &target_uri,

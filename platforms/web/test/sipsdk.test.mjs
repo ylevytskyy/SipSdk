@@ -574,3 +574,75 @@ test('multi-call auto-hold, swap, and maxCalls cap (EBUSY / 486)', () => {
   active.hangup();
   ua2.outgoing[0].emit('ended', {});
 });
+
+test('local audio conference: merge, group hold/resume, mute, split dissolve, and leave', () => {
+  const ctx = registered();
+  const { client, ua } = ctx;
+  const confEvents = [];
+  client.on('conferenceChanged', (e) => confEvents.push(e.calls.length));
+
+  const c1 = client.makeCall('9001');
+  const s1 = ua.outgoing[0];
+  s1.established = true;
+  s1.emit('accepted', {});
+
+  const c2 = client.makeCall('9001');
+  const s2 = ua.outgoing[1];
+  s1.emit('hold', { originator: 'local' });
+  s2.established = true;
+  s2.emit('accepted', {});
+  assert.equal(c1.isOnHold, true);
+
+  // Merge c1 + c2 -> c1 unholds, both in conference
+  client.mergeCalls(c1, c2);
+  s1.emit('unhold', { originator: 'local' });
+  assert.equal(c1.isInConference, true);
+  assert.equal(c2.isInConference, true);
+  assert.equal(c1.isOnHold, false);
+  assert.equal(c2.isOnHold, false);
+  assert.equal(client.conferenceCalls.length, 2);
+  assert.equal(confEvents.at(-1), 2);
+
+  // Local mute on conference leg sets muted flag on both legs without tearing down peer mix
+  c1.setMuted(true);
+  assert.equal(c1.isMuted, true);
+  assert.equal(c2.isMuted, true);
+
+  // Dialing 3rd call auto-holds BOTH conference legs; resuming c1 resumes BOTH and holds c3
+  const c3 = client.makeCall('9001');
+  const s3 = ua.outgoing[2];
+  s1.emit('hold', { originator: 'local' });
+  s2.emit('hold', { originator: 'local' });
+  s3.established = true;
+  s3.emit('accepted', {});
+  assert.equal(c1.isOnHold, true);
+  assert.equal(c2.isOnHold, true);
+  assert.equal(c3.isInConference, false);
+
+  c1.setHold(false);
+  s3.emit('hold', { originator: 'local' });
+  s1.emit('unhold', { originator: 'local' });
+  s2.emit('unhold', { originator: 'local' });
+  assert.equal(c1.isOnHold, false);
+  assert.equal(c2.isOnHold, false);
+  assert.equal(c3.isOnHold, true);
+
+  // Split c2 -> c2 holds, conference dissolves, c1 remains active
+  client.splitCall(c2);
+  s2.emit('hold', { originator: 'local' });
+  assert.equal(c1.isInConference, false);
+  assert.equal(c2.isInConference, false);
+  assert.equal(c2.isOnHold, true);
+  assert.equal(client.conferenceCalls.length, 0);
+  assert.equal(confEvents.at(-1), 0);
+
+  // Re-merge and leaveConference terminates both
+  client.mergeCalls(c1, c2);
+  s2.emit('unhold', { originator: 'local' });
+  client.leaveConference();
+  assert.equal(client.conferenceCalls.length, 0);
+  assert.ok(s1.terminated);
+  assert.ok(s2.terminated);
+  c3.hangup();
+  s3.emit('ended', {});
+});

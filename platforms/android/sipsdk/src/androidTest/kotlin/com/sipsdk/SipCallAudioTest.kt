@@ -317,6 +317,25 @@ class SipCallAudioTest {
             assertFalse(call1.isOnHold)
             assertTrue(call2.isOnHold)
 
+            // Merge call1 + call2 into local audio conference, then split call2 back to hold
+            assertEquals(0, client.mergeCalls(call1, call2))
+            val mergeDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+            while (System.nanoTime() < mergeDeadline && !(call1.isInConference && call2.isInConference)) {
+                Thread.sleep(50)
+            }
+            assertTrue("call1 must be in conference", call1.isInConference)
+            assertTrue("call2 must be in conference", call2.isInConference)
+            assertFalse("call1 must not be on hold in conference", call1.isOnHold)
+            assertFalse("call2 must not be on hold in conference", call2.isOnHold)
+
+            assertEquals(0, client.splitCall(call2))
+            val splitDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+            while (System.nanoTime() < splitDeadline && (call1.isInConference || call2.isInConference)) {
+                Thread.sleep(50)
+            }
+            assertFalse("call1 must exit conference on dissolve", call1.isInConference)
+            assertFalse("call2 must exit conference on split", call2.isInConference)
+
             telecom.requestEndpointChange(call1.callId, SipTelecomEndpoint.SPEAKER)
             assertEquals(SipTelecomEndpoint.SPEAKER, telecom.getEndpoint(call1.callId))
             telecom.requestEndpointChange(call1.callId, SipTelecomEndpoint.EARPIECE)

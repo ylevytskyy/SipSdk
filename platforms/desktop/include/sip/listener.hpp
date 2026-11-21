@@ -4,6 +4,7 @@
 #include "types.hpp"
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace sip {
 
@@ -55,6 +56,10 @@ public:
 
     virtual void on_call_rejected_busy(const std::string &caller_uri) {
         (void)caller_uri;
+    }
+
+    virtual void on_conference_changed(const std::vector<std::shared_ptr<Call>> &calls) {
+        (void)calls;
     }
 };
 

@@ -53,6 +53,8 @@ namespace SipSdk
         public bool IsMuted => _callHandle != IntPtr.Zero && SipNativeAbi.sip_call_is_muted(_callHandle);
         public bool IsClosed => _callHandle == IntPtr.Zero || SipNativeAbi.sip_call_is_closed(_callHandle);
         public bool IsSecure => _callHandle != IntPtr.Zero && SipNativeAbi.sip_call_is_secure(_callHandle);
+        public bool IsInConference => _callHandle != IntPtr.Zero && SipNativeAbi.sip_call_is_in_conference(_callHandle);
+        internal IntPtr NativeHandle => _callHandle;
         public uint Duration => _callHandle != IntPtr.Zero ? SipNativeAbi.sip_call_get_duration(_callHandle) : 0;
 
         public event EventHandler<CallStateChangedEventArgs>? StateChanged;

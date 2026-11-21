@@ -22,6 +22,9 @@ class SipCall internal constructor(
     val isSecure: Boolean
         get() = if (nativeHandle != 0L) nativeIsSecure(nativeHandle) else false
 
+    val isInConference: Boolean
+        get() = if (nativeHandle != 0L) nativeIsInConference(nativeHandle) else false
+
     fun answer(withVideo: Boolean = false): Int =
         if (nativeHandle != 0L) nativeAnswer(nativeHandle, withVideo) else -1
 
@@ -58,6 +61,7 @@ class SipCall internal constructor(
     private external fun nativeHasVideo(handle: Long): Boolean
     private external fun nativeRequestKeyframe(handle: Long): Int
     private external fun nativeIsSecure(handle: Long): Boolean
+    private external fun nativeIsInConference(handle: Long): Boolean
     private external fun nativeGetStats(handle: Long): SipCallStats?
     private external fun nativeTransfer(handle: Long, target: String): Int
     private external fun nativeAttendedTransfer(handle: Long, consultHandle: Long): Int

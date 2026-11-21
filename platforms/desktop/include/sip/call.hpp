@@ -34,6 +34,7 @@ public:
     bool is_muted() const;
     bool is_closed() const;
     bool is_secure() const;
+    bool is_in_conference() const;
     uint32_t get_duration() const;
     /** Counts of what the call received; complete once the call is closed. */
     CallMediaStats get_media_stats() const;

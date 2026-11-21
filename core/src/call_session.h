@@ -41,6 +41,8 @@ public:
     bool is_muted() const;
     bool is_closed() const;
     bool is_secure() const;
+    bool is_in_conference() const { return m_in_conference.load(); }
+    void set_in_conference(bool in_conf) { m_in_conference.store(in_conf); }
     uint32_t get_duration() const;
     int get_stats(sip_call_stats_t *stats) const;
 
@@ -109,6 +111,7 @@ private:
     std::atomic<bool> m_on_hold{false};
     std::atomic<bool> m_is_muted{false};
     std::atomic<bool> m_closed{false};
+    std::atomic<bool> m_in_conference{false};
     std::atomic<uint32_t> m_duration{0};
     std::atomic<int> m_ref_count{1};
 

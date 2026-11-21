@@ -224,4 +224,14 @@ namespace SipSdk
     {
         public SipBusyException(string message) : base(message) { }
     }
+
+    public class ConferenceChangedEventArgs : EventArgs
+    {
+        public System.Collections.Generic.IReadOnlyList<SipCall> Calls { get; }
+
+        public ConferenceChangedEventArgs(System.Collections.Generic.IReadOnlyList<SipCall> calls)
+        {
+            Calls = calls ?? Array.Empty<SipCall>();
+        }
+    }
 }

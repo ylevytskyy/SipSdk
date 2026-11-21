@@ -23,6 +23,7 @@ struct sip_call_t;
 @property (nonatomic, readonly) BOOL isMuted;
 @property (nonatomic, readonly) BOOL isClosed;
 @property (nonatomic, readonly) BOOL isSecure;
+@property (nonatomic, readonly) BOOL isInConference;
 @property (nonatomic, readonly) uint32_t duration;
 @property (nonatomic, readonly, copy) NSString *audioCodec;
 @property (nonatomic, readonly) uint32_t audioBitrateKbps;

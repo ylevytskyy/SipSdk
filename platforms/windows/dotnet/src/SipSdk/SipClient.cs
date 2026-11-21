@@ -26,6 +26,7 @@ namespace SipSdk
         private readonly NativeTransferStatusCallback _transferStatusCallback;
         private readonly NativeTransferRequestCallback _transferRequestCallback;
         private readonly NativeCallRejectedBusyCallback _callRejectedBusyCallback;
+        private readonly NativeConferenceChangedCallback _conferenceChangedCallback;
         private readonly NativeMessageReceivedCallback _messageReceivedCallback;
         private readonly NativeMessageStatusCallback _messageStatusCallback;
 
@@ -46,6 +47,7 @@ namespace SipSdk
         public event EventHandler<RegistrationStateChangedEventArgs>? RegistrationStateChanged;
         public event EventHandler<IncomingCallEventArgs>? IncomingCall;
         public event EventHandler<CallRejectedBusyEventArgs>? CallRejectedBusy;
+        public event EventHandler<ConferenceChangedEventArgs>? ConferenceChanged;
         public event EventHandler<MessageReceivedEventArgs>? MessageReceived;
         public event EventHandler<MessageStatusChangedEventArgs>? MessageStatusChanged;
 
@@ -62,6 +64,7 @@ namespace SipSdk
             _transferStatusCallback = HandleNativeTransferStatus;
             _transferRequestCallback = HandleNativeTransferRequest;
             _callRejectedBusyCallback = HandleNativeCallRejectedBusy;
+            _conferenceChangedCallback = HandleNativeConferenceChanged;
             _messageReceivedCallback = HandleNativeMessageReceived;
             _messageStatusCallback = HandleNativeMessageStatus;
 
@@ -78,7 +81,8 @@ namespace SipSdk
                 OnCallStats = Marshal.GetFunctionPointerForDelegate(_callStatsCallback),
                 OnTransferStatus = Marshal.GetFunctionPointerForDelegate(_transferStatusCallback),
                 OnTransferRequest = Marshal.GetFunctionPointerForDelegate(_transferRequestCallback),
-                OnCallRejectedBusy = Marshal.GetFunctionPointerForDelegate(_callRejectedBusyCallback)
+                OnCallRejectedBusy = Marshal.GetFunctionPointerForDelegate(_callRejectedBusyCallback),
+                OnConferenceChanged = Marshal.GetFunctionPointerForDelegate(_conferenceChangedCallback)
             };
 
             _clientHandle = SipNativeAbi.sip_client_create(ref callbacks, userData);
@@ -173,6 +177,37 @@ namespace SipSdk
         }
 
         public SipCall MakeCall(string targetUri, bool withVideo = false) => Dial(targetUri, withVideo);
+
+        public void MergeCalls(SipCall callA, SipCall callB)
+        {
+            ThrowIfDisposed();
+            if (callA == null || callB == null) throw new ArgumentNullException(callA == null ? nameof(callA) : nameof(callB));
+            int rc = SipNativeAbi.sip_client_merge_calls(_clientHandle, callA.NativeHandle, callB.NativeHandle);
+            if (rc != 0) throw new InvalidOperationException($"sip_client_merge_calls failed with code {rc}");
+        }
+
+        public void AddToConference(SipCall call)
+        {
+            ThrowIfDisposed();
+            if (call == null) throw new ArgumentNullException(nameof(call));
+            int rc = SipNativeAbi.sip_client_add_to_conference(_clientHandle, call.NativeHandle);
+            if (rc != 0) throw new InvalidOperationException($"sip_client_add_to_conference failed with code {rc}");
+        }
+
+        public void SplitCall(SipCall call)
+        {
+            ThrowIfDisposed();
+            if (call == null) throw new ArgumentNullException(nameof(call));
+            int rc = SipNativeAbi.sip_client_split_call(_clientHandle, call.NativeHandle);
+            if (rc != 0) throw new InvalidOperationException($"sip_client_split_call failed with code {rc}");
+        }
+
+        public void LeaveConference()
+        {
+            ThrowIfDisposed();
+            int rc = SipNativeAbi.sip_client_leave_conference(_clientHandle);
+            if (rc != 0) throw new InvalidOperationException($"sip_client_leave_conference failed with code {rc}");
+        }
 
         /// <summary>
         /// Sends a UTF-8 text message (SIP MESSAGE, text/plain).
@@ -377,6 +412,27 @@ namespace SipSdk
             DispatchToUi(() =>
             {
                 CallRejectedBusy?.Invoke(this, new CallRejectedBusyEventArgs(callerUri ?? string.Empty));
+            });
+        }
+
+        private void HandleNativeConferenceChanged(IntPtr client, IntPtr callsPtr, UIntPtr count, IntPtr userData)
+        {
+            var members = new System.Collections.Generic.List<SipCall>();
+            int n = (int)count;
+            if (callsPtr != IntPtr.Zero && n > 0)
+            {
+                for (int i = 0; i < n; i++)
+                {
+                    IntPtr h = Marshal.ReadIntPtr(callsPtr, i * IntPtr.Size);
+                    if (h != IntPtr.Zero && _activeCalls.TryGetValue(h, out var call))
+                    {
+                        members.Add(call);
+                    }
+                }
+            }
+            DispatchToUi(() =>
+            {
+                ConferenceChanged?.Invoke(this, new ConferenceChangedEventArgs(members));
             });
         }
 
