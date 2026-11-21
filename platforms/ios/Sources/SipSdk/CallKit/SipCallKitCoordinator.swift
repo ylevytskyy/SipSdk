@@ -36,7 +36,7 @@ public final class SipCallKitCoordinator: NSObject, CXProviderDelegate {
         let config = CXProviderConfiguration()
         config.supportsVideo = true
         config.maximumCallGroups = clamped
-        config.maximumCallsPerCallGroup = 1
+        config.maximumCallsPerCallGroup = clamped
         config.supportedHandleTypes = [.generic]
         config.includesCallsInRecents = true
         return config
@@ -54,8 +54,8 @@ public final class SipCallKitCoordinator: NSObject, CXProviderDelegate {
         update.localizedCallerName = call.peerDisplayName ?? call.remoteUri
         update.hasVideo = call.hasVideo
         update.supportsHolding = true
-        update.supportsGrouping = false
-        update.supportsUngrouping = false
+        update.supportsGrouping = true
+        update.supportsUngrouping = true
         update.supportsDTMF = true
 
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
@@ -167,6 +167,38 @@ public final class SipCallKitCoordinator: NSObject, CXProviderDelegate {
         Task { @MainActor in
             do {
                 if try await applyHoldAction(callUUID: action.callUUID, onHold: action.isOnHold) {
+                    action.fulfill()
+                } else {
+                    action.fail()
+                }
+            } catch {
+                action.fail()
+            }
+        }
+    }
+
+    @discardableResult
+    internal func applyGroupAction(callUUID: UUID, callUUIDToGroupWith: UUID?) throws -> Bool {
+        guard let client = self.client,
+              let call = client.calls.first(where: { $0.id == callUUID }) else {
+            return false
+        }
+        if let targetUUID = callUUIDToGroupWith {
+            guard let otherCall = client.calls.first(where: { $0.id == targetUUID }) else {
+                return false
+            }
+            try client.mergeCalls(call, otherCall)
+            return true
+        } else {
+            try client.splitCall(call)
+            return true
+        }
+    }
+
+    nonisolated public func provider(_ provider: CXProvider, perform action: CXSetGroupCallAction) {
+        Task { @MainActor in
+            do {
+                if try applyGroupAction(callUUID: action.callUUID, callUUIDToGroupWith: action.callUUIDToGroupWith) {
                     action.fulfill()
                 } else {
                     action.fail()

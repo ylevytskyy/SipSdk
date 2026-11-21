@@ -67,6 +67,12 @@
     return _handle ? sip_call_is_on_hold(_handle) : NO;
 }
 
+- (BOOL)isInConference
+{
+    std::lock_guard<std::mutex> lock(_mutex);
+    return _handle ? sip_call_is_in_conference(_handle) : NO;
+}
+
 - (BOOL)isMuted
 {
     std::lock_guard<std::mutex> lock(_mutex);

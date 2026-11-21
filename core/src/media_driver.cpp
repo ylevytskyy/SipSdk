@@ -2065,12 +2065,26 @@ static void unregister_builtin_nil_audio()
 struct ConfFiltEncSt {
     struct aufilt_enc_st af;
     const struct audio *au{nullptr};
+    std::shared_ptr<ConferenceMixer> mixer;
 };
+
+static void conf_filt_enc_dtor(void *data)
+{
+    auto *st = static_cast<ConfFiltEncSt *>(data);
+    st->~ConfFiltEncSt();
+}
 
 struct ConfFiltDecSt {
     struct aufilt_dec_st af;
     const struct audio *au{nullptr};
+    std::shared_ptr<ConferenceMixer> mixer;
 };
+
+static void conf_filt_dec_dtor(void *data)
+{
+    auto *st = static_cast<ConfFiltDecSt *>(data);
+    st->~ConfFiltDecSt();
+}
 
 static int conf_aufilt_encupd(struct aufilt_enc_st **stp, void **ctx,
                               const struct aufilt *af, struct aufilt_prm *prm,
@@ -2083,11 +2097,18 @@ static int conf_aufilt_encupd(struct aufilt_enc_st **stp, void **ctx,
     if (*stp) {
         auto *st = reinterpret_cast<ConfFiltEncSt *>(*stp);
         st->au = au;
+        if (s_active_manager) {
+            st->mixer = s_active_manager->conference_mixer_shared();
+        }
         return 0;
     }
-    auto *st = static_cast<ConfFiltEncSt *>(mem_zalloc(sizeof(ConfFiltEncSt), nullptr));
-    if (!st) return ENOMEM;
+    void *raw = mem_zalloc(sizeof(ConfFiltEncSt), conf_filt_enc_dtor);
+    if (!raw) return ENOMEM;
+    auto *st = new (raw) ConfFiltEncSt();
     st->au = au;
+    if (s_active_manager) {
+        st->mixer = s_active_manager->conference_mixer_shared();
+    }
     *stp = &st->af;
     return 0;
 }
@@ -2097,10 +2118,9 @@ static int conf_aufilt_encode(struct aufilt_enc_st *st_base, struct auframe *af)
     if (!st_base || !af || af->fmt != AUFMT_S16LE || !af->sampv || af->sampc == 0) {
         return 0;
     }
-    MediaDriverManager *mgr = s_active_manager;
-    if (!mgr) return 0;
     auto *st = reinterpret_cast<ConfFiltEncSt *>(st_base);
-    mgr->conference_mixer().on_encode(
+    if (!st->mixer) return 0;
+    st->mixer->on_encode(
         reinterpret_cast<uint64_t>(st->au),
         static_cast<int16_t *>(af->sampv),
         af->sampc,
@@ -2120,11 +2140,18 @@ static int conf_aufilt_decupd(struct aufilt_dec_st **stp, void **ctx,
     if (*stp) {
         auto *st = reinterpret_cast<ConfFiltDecSt *>(*stp);
         st->au = au;
+        if (s_active_manager) {
+            st->mixer = s_active_manager->conference_mixer_shared();
+        }
         return 0;
     }
-    auto *st = static_cast<ConfFiltDecSt *>(mem_zalloc(sizeof(ConfFiltDecSt), nullptr));
-    if (!st) return ENOMEM;
+    void *raw = mem_zalloc(sizeof(ConfFiltDecSt), conf_filt_dec_dtor);
+    if (!raw) return ENOMEM;
+    auto *st = new (raw) ConfFiltDecSt();
     st->au = au;
+    if (s_active_manager) {
+        st->mixer = s_active_manager->conference_mixer_shared();
+    }
     *stp = &st->af;
     return 0;
 }
@@ -2134,10 +2161,9 @@ static int conf_aufilt_decode(struct aufilt_dec_st *st_base, struct auframe *af)
     if (!st_base || !af || af->fmt != AUFMT_S16LE || !af->sampv || af->sampc == 0) {
         return 0;
     }
-    MediaDriverManager *mgr = s_active_manager;
-    if (!mgr) return 0;
     auto *st = reinterpret_cast<ConfFiltDecSt *>(st_base);
-    mgr->conference_mixer().on_decode(
+    if (!st->mixer) return 0;
+    st->mixer->on_decode(
         reinterpret_cast<uint64_t>(st->au),
         static_cast<const int16_t *>(af->sampv),
         af->sampc,
@@ -2243,7 +2269,7 @@ void MediaDriverManager::unregister_baresip_plugins()
         aufilt_unregister(&s_conf_aufilt);
         s_conf_aufilt_registered = false;
     }
-    m_conference_mixer.clear();
+    m_conference_mixer->clear();
 
     if (m_vidsrc) {
         m_vidsrc = static_cast<struct vidsrc *>(mem_deref(m_vidsrc));

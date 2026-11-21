@@ -654,6 +654,33 @@ class SipClient(
     }
 
     @JvmSynthetic
+    fun onNativeConferenceChanged(callHandles: LongArray) {
+        val handleSet = callHandles.toHashSet()
+        val members = activeCalls.filter { it.nativeHandle in handleSet }
+        listener?.onConferenceChanged(members)
+    }
+
+    fun mergeCalls(callA: SipCall, callB: SipCall): Int {
+        if (nativeHandle == 0L || callA.nativeHandle == 0L || callB.nativeHandle == 0L) return -1
+        return nativeMergeCalls(nativeHandle, callA.nativeHandle, callB.nativeHandle)
+    }
+
+    fun addToConference(call: SipCall): Int {
+        if (nativeHandle == 0L || call.nativeHandle == 0L) return -1
+        return nativeAddToConference(nativeHandle, call.nativeHandle)
+    }
+
+    fun splitCall(call: SipCall): Int {
+        if (nativeHandle == 0L || call.nativeHandle == 0L) return -1
+        return nativeSplitCall(nativeHandle, call.nativeHandle)
+    }
+
+    fun leaveConference(): Int {
+        if (nativeHandle == 0L) return -1
+        return nativeLeaveConference(nativeHandle)
+    }
+
+    @JvmSynthetic
     fun onNativePrepareAudioSession(): Boolean {
         return audioManager?.prepareAudioSession() ?: true
     }
@@ -686,6 +713,10 @@ class SipClient(
     private external fun nativeSetMicMuted(handle: Long, muted: Boolean)
     private external fun nativeMakeCall(handle: Long, uri: String, withVideo: Boolean): Long
     private external fun nativeDialCall(handle: Long, uri: String, withVideo: Boolean, outStatus: IntArray): Long
+    private external fun nativeMergeCalls(handle: Long, callAHandle: Long, callBHandle: Long): Int
+    private external fun nativeAddToConference(handle: Long, callHandle: Long): Int
+    private external fun nativeSplitCall(handle: Long, callHandle: Long): Int
+    private external fun nativeLeaveConference(handle: Long): Int
     /** Returns the message id (> 0) or a negative errno-style code. */
     private external fun nativeSendMessage(handle: Long, uri: String, contentType: String, body: ByteArray): Long
     private external fun nativeDestroy(handle: Long)

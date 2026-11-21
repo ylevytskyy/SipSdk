@@ -140,7 +140,7 @@ final class SipSdkTests: XCTestCase {
         XCTAssertNotNil(coordinator.provider)
         XCTAssertNotNil(coordinator.callController)
         XCTAssertTrue(coordinator.provider.configuration.supportsVideo)
-        XCTAssertEqual(coordinator.provider.configuration.maximumCallsPerCallGroup, 1)
+        XCTAssertEqual(coordinator.provider.configuration.maximumCallsPerCallGroup, 4)
 
         let fakeCall = SipCall(
             coreCall: nil,
@@ -515,7 +515,7 @@ final class SipSdkTests: XCTestCase {
 
         let coordinator = SipCallKitCoordinator(localizedName: "SipSdkTest", client: nil, maxCalls: 3)
         XCTAssertEqual(coordinator.provider.configuration.maximumCallGroups, 3)
-        XCTAssertEqual(coordinator.provider.configuration.maximumCallsPerCallGroup, 1)
+        XCTAssertEqual(coordinator.provider.configuration.maximumCallsPerCallGroup, 3)
 
         let unified = SipIncomingPushPayload(dictionary: [
             "sip_call_id": "abc-123@pbx",
@@ -544,6 +544,57 @@ final class SipSdkTests: XCTestCase {
         XCTAssertEqual(alias.callerUri, "sip:bob@pbx.local")
         XCTAssertEqual(alias.callerName, "Bob")
         XCTAssertFalse(alias.hasVideo)
+    }
+
+    @MainActor
+    func testLocalAudioConferenceAndCallKitGrouping() async throws {
+        let client = SipClient()
+        try await client.start()
+
+        let account = SipAccount(
+            username: "1001",
+            domain: "127.0.0.1",
+            password: "test1001",
+            transport: .udp,
+            port: 5060,
+            maxCalls: 4
+        )
+        try await client.register(account)
+        try await Task.sleep(for: .milliseconds(800))
+
+        let call1 = try await client.makeCall(to: "sip:9001@127.0.0.1:5060", withVideo: false)
+        try await Task.sleep(for: .milliseconds(800))
+        XCTAssertEqual(call1.state, .established)
+
+        let call2 = try await client.makeCall(to: "sip:9001@127.0.0.1:5060", withVideo: false)
+        try await Task.sleep(for: .milliseconds(800))
+        XCTAssertEqual(call2.state, .established)
+        XCTAssertTrue(call1.isOnHold)
+
+        // Merge via CallKit CXSetGroupCallAction path
+        let merged = try client.callKit.applyGroupAction(callUUID: call1.id, callUUIDToGroupWith: call2.id)
+        XCTAssertTrue(merged)
+        try await Task.sleep(for: .milliseconds(800))
+        XCTAssertEqual(client.conferenceCalls.count, 2)
+        XCTAssertTrue(call1.isInConference)
+        XCTAssertTrue(call2.isInConference)
+        XCTAssertFalse(call1.isOnHold)
+        XCTAssertFalse(call2.isOnHold)
+
+        // Split via CallKit ungroup path (callUUIDToGroupWith == nil)
+        let split = try client.callKit.applyGroupAction(callUUID: call2.id, callUUIDToGroupWith: nil)
+        XCTAssertTrue(split)
+        try await Task.sleep(for: .milliseconds(800))
+        XCTAssertEqual(client.conferenceCalls.count, 0)
+        XCTAssertFalse(call1.isInConference)
+        XCTAssertFalse(call2.isInConference)
+        XCTAssertTrue(call2.isOnHold)
+        XCTAssertFalse(call1.isOnHold)
+
+        await call1.hangup()
+        await call2.hangup()
+        try await Task.sleep(for: .milliseconds(400))
+        await client.stop()
     }
 
     @MainActor

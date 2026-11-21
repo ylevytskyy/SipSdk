@@ -34,6 +34,7 @@ typedef NS_ENUM(NSInteger, SipMacMessageStatus) {
 - (void)client:(SipMacClient *)client call:(SipMacCall *)call didChangeTransferStatus:(NSInteger)code reason:(NSString *)reason;
 - (void)client:(SipMacClient *)client call:(SipMacCall *)call didReceiveTransferRequest:(NSString *)referToUri hasReplaces:(BOOL)hasReplaces;
 - (void)client:(SipMacClient *)client didRejectIncomingCallBusyFrom:(NSString *)callerUri;
+- (void)client:(SipMacClient *)client didUpdateConferenceCalls:(NSArray<SipMacCall *> *)calls;
 @end
 
 @interface SipMacClient : NSObject
@@ -80,6 +81,10 @@ typedef NS_ENUM(NSInteger, SipMacMessageStatus) {
 - (int)resetTransports:(BOOL)reRegister;
 
 - (nullable SipMacCall *)makeCallToUri:(NSString *)uri withVideo:(BOOL)withVideo;
+- (int)mergeCall:(SipMacCall *)callA withCall:(SipMacCall *)callB;
+- (int)addCallToConference:(SipMacCall *)call;
+- (int)splitCallFromConference:(SipMacCall *)call;
+- (int)leaveConference;
 
 // Messaging (SIP MESSAGE). Return the local message id, or 0 when the message was not queued.
 - (uint64_t)sendMessageToUri:(NSString *)uri text:(NSString *)text;

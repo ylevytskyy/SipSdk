@@ -127,6 +127,8 @@ export class SipCall extends Emitter {
   #onHold = false;
   #holdFallback = false;
   #muted = false;
+  #inConference = false;
+  #originalAudioTrack = null;
   #localVideoEnabled = true;
   #establishedAt = 0;
   #closedAt = 0;
@@ -155,6 +157,7 @@ export class SipCall extends Emitter {
   get hasVideo() { return this.#hasVideo; }
   get isOnHold() { return this.#onHold; }
   get isMuted() { return this.#muted; }
+  get isInConference() { return this.#inConference; }
   get isLocalVideoEnabled() { return this.#localVideoEnabled; }
   get isClosed() { return this.#state === SipCallState.Closed; }
   get isSecure() {
@@ -164,6 +167,31 @@ export class SipCall extends Emitter {
   get remoteStream() { return this.#remoteStream; }
   /** @internal */
   get _session() { return this.#session; }
+  /** @internal */
+  _setInConference(inConf) { this.#inConference = !!inConf; }
+  /** @internal */
+  _getAudioSender() {
+    const pc = this.#session?.connection || this.#wiredConnection;
+    const sender = pc?.getSenders?.()?.find((s) => s.track?.kind === 'audio') || null;
+    if (sender?.track && !this.#originalAudioTrack) {
+      this.#originalAudioTrack = sender.track;
+    }
+    return sender;
+  }
+  /** @internal */
+  _getOriginalAudioTrack() {
+    this._getAudioSender();
+    return this.#originalAudioTrack;
+  }
+  /** @internal */
+  _restoreOriginalAudioTrack() {
+    if (!this.#originalAudioTrack) return;
+    const pc = this.#session?.connection || this.#wiredConnection;
+    const sender = pc?.getSenders?.()?.find((s) => s.track?.kind === 'audio' || s.track === null);
+    if (sender?.replaceTrack) {
+      Promise.resolve(sender.replaceTrack(this.#originalAudioTrack)).catch(() => {});
+    }
+  }
 
   /** Whole seconds since the call was answered; 0 before that, frozen after close. */
   get duration() {
@@ -199,6 +227,19 @@ export class SipCall extends Emitter {
 
   setHold(hold) {
     this.#assertOpen();
+    if (this.#inConference) {
+      this.#client._setConferenceHold(!!hold);
+      return;
+    }
+    if (!hold) {
+      this.#client._autoHoldOthers(this);
+    }
+    this._setHoldDirect(hold);
+  }
+
+  /** @internal */
+  _setHoldDirect(hold) {
+    this.#assertOpen();
     if (hold) {
       let ok = false;
       try {
@@ -218,7 +259,6 @@ export class SipCall extends Emitter {
         this.#holdFallback = false;
       }
     } else {
-      this.#client._autoHoldOthers(this);
       if (this.#holdFallback) {
         this.#holdFallback = false;
         if (this.#localStream && !this.#muted) {
@@ -238,8 +278,18 @@ export class SipCall extends Emitter {
 
   setMuted(muted) {
     this.#assertOpen();
+    if (this.#inConference) {
+      this.#client._setConferenceLocalMuted(!!muted);
+      return;
+    }
     if (muted) this.#session.mute({ audio: true });
     else this.#session.unmute({ audio: true });
+    this.#muted = !!muted;
+    this.#emitMedia();
+  }
+
+  /** @internal */
+  _setMutedFlag(muted) {
     this.#muted = !!muted;
     this.#emitMedia();
   }
@@ -551,6 +601,10 @@ export class SipClient extends Emitter {
   #registered = false;
   #domain = '';
   #calls = new Set();
+  #conferenceCalls = new Set();
+  #conferenceMuted = false;
+  #audioCtx = null;
+  #confGraphNodes = [];
   #nextMessageId = 1;
 
   /**
@@ -573,6 +627,7 @@ export class SipClient extends Emitter {
   get isRegistered() { return this.#registered; }
   get isStarted() { return this.#started; }
   get calls() { return [...this.#calls]; }
+  get conferenceCalls() { return [...this.#conferenceCalls]; }
   /** @internal */
   get _domain() { return this.#domain; }
 
@@ -693,9 +748,181 @@ export class SipClient extends Emitter {
 
   /** @internal */
   _autoHoldOthers(exceptCall) {
+    const exempt = new Set();
+    if (exceptCall) exempt.add(exceptCall);
+    this._autoHoldOutside(exempt);
+  }
+
+  /** @internal */
+  _autoHoldOutside(exemptSet) {
     for (const call of this.#calls) {
-      if (call !== exceptCall && !call.isClosed && !call.isOnHold && call.state === SipCallState.Established) {
-        call.setHold(true);
+      if (!exemptSet.has(call) && !call.isClosed && !call.isOnHold && call.state === SipCallState.Established) {
+        call._setHoldDirect(true);
+      }
+    }
+    this.#rebuildConferenceAudio();
+  }
+
+  /** Merges two open calls into the local audio conference (or adds the non-conference call to an active conference). */
+  mergeCalls(callA, callB) {
+    if (!callA || !callB || callA === callB || callA.isClosed || callB.isClosed) {
+      throw new Error('SipSdk: mergeCalls requires two distinct open calls');
+    }
+    this.#conferenceCalls.add(callA);
+    this.#conferenceCalls.add(callB);
+    callA._setInConference(true);
+    callB._setInConference(true);
+
+    this._autoHoldOutside(this.#conferenceCalls);
+    for (const c of this.#conferenceCalls) {
+      if (c.isOnHold) c._setHoldDirect(false);
+      if (c.hasVideo) c.setLocalVideoEnabled(false);
+    }
+    this.#rebuildConferenceAudio();
+    this.emit('conferenceChanged', { calls: this.conferenceCalls });
+  }
+
+  /** Adds an open call to an already active local audio conference. */
+  addToConference(call) {
+    if (!call || call.isClosed || this.#conferenceCalls.size < 2) {
+      throw new Error('SipSdk: addToConference requires an active conference and an open call');
+    }
+    this.#conferenceCalls.add(call);
+    call._setInConference(true);
+    this._autoHoldOutside(this.#conferenceCalls);
+    for (const c of this.#conferenceCalls) {
+      if (c.isOnHold) c._setHoldDirect(false);
+      if (c.hasVideo) c.setLocalVideoEnabled(false);
+    }
+    this.#rebuildConferenceAudio();
+    this.emit('conferenceChanged', { calls: this.conferenceCalls });
+  }
+
+  /** Removes a call from the conference and places it on hold; dissolves if 1 leg remains. */
+  splitCall(call) {
+    if (!call || !this.#conferenceCalls.has(call)) {
+      throw new Error('SipSdk: call is not in the conference');
+    }
+    this.#conferenceCalls.delete(call);
+    call._setInConference(false);
+    call._restoreOriginalAudioTrack();
+    if (!call.isClosed) call._setHoldDirect(true);
+
+    if (this.#conferenceCalls.size === 1) {
+      for (const rem of this.#conferenceCalls) {
+        rem._setInConference(false);
+        rem._restoreOriginalAudioTrack();
+      }
+      this.#conferenceCalls.clear();
+    }
+    this.#rebuildConferenceAudio();
+    this.emit('conferenceChanged', { calls: this.conferenceCalls });
+  }
+
+  /** Ends all calls currently in the local audio conference. */
+  leaveConference() {
+    const members = [...this.#conferenceCalls];
+    this.#conferenceCalls.clear();
+    this.#conferenceMuted = false;
+    for (const c of members) {
+      c._setInConference(false);
+      c._restoreOriginalAudioTrack();
+    }
+    this.#teardownConferenceAudio();
+    for (const c of members) {
+      if (!c.isClosed) {
+        try { c.hangup(); } catch { /* ignore */ }
+      }
+    }
+    this.emit('conferenceChanged', { calls: [] });
+  }
+
+  /** @internal */
+  _setConferenceHold(hold) {
+    if (!hold) {
+      this._autoHoldOutside(this.#conferenceCalls);
+      for (const c of this.#conferenceCalls) {
+        if (!c.isClosed) c._setHoldDirect(false);
+      }
+    } else {
+      for (const c of this.#conferenceCalls) {
+        if (!c.isClosed) c._setHoldDirect(true);
+      }
+    }
+    this.#rebuildConferenceAudio();
+  }
+
+  /** @internal */
+  _setConferenceLocalMuted(muted) {
+    this.#conferenceMuted = !!muted;
+    for (const c of this.#conferenceCalls) {
+      if (!c.isClosed) c._setMutedFlag(this.#conferenceMuted);
+    }
+    this.#rebuildConferenceAudio();
+  }
+
+  #teardownConferenceAudio() {
+    for (const node of this.#confGraphNodes) {
+      try { node.disconnect?.(); } catch { /* ignore */ }
+    }
+    this.#confGraphNodes = [];
+    if (this.#audioCtx) {
+      this.#audioCtx.close?.().catch?.(() => {});
+      this.#audioCtx = null;
+    }
+  }
+
+  #rebuildConferenceAudio() {
+    const active = [...this.#conferenceCalls].filter((c) => !c.isClosed && !c.isOnHold);
+    if (active.length < 2) {
+      this.#teardownConferenceAudio();
+      return;
+    }
+    const AudioCtx = globalThis.AudioContext || globalThis.webkitAudioContext;
+    if (typeof AudioCtx !== 'function' || typeof MediaStream === 'undefined') {
+      return;
+    }
+    for (const node of this.#confGraphNodes) {
+      try { node.disconnect?.(); } catch { /* ignore */ }
+    }
+    this.#confGraphNodes = [];
+    if (!this.#audioCtx) {
+      this.#audioCtx = new AudioCtx();
+    }
+    const ctx = this.#audioCtx;
+    ctx.resume?.().catch?.(() => {});
+
+    const rxSources = new Map();
+    for (const c of active) {
+      const audioTracks = c.remoteStream?.getAudioTracks?.() || [];
+      if (audioTracks.length > 0) {
+        const src = ctx.createMediaStreamSource(new MediaStream(audioTracks));
+        rxSources.set(c, src);
+        this.#confGraphNodes.push(src);
+      }
+    }
+
+    for (const target of active) {
+      const sender = target._getAudioSender();
+      const origTrack = target._getOriginalAudioTrack();
+      if (!sender?.replaceTrack || !origTrack) continue;
+
+      const dest = ctx.createMediaStreamDestination();
+      const localSrc = ctx.createMediaStreamSource(new MediaStream([origTrack]));
+      const localGain = ctx.createGain();
+      localGain.gain.value = this.#conferenceMuted ? 0 : 1;
+      localSrc.connect(localGain);
+      localGain.connect(dest);
+      this.#confGraphNodes.push(localSrc, localGain, dest);
+
+      for (const [peer, peerSrc] of rxSources.entries()) {
+        if (peer === target) continue; // Mix-minus: never send peer its own RX audio back
+        peerSrc.connect(dest);
+      }
+
+      const mixedTrack = dest.stream.getAudioTracks()[0];
+      if (mixedTrack) {
+        Promise.resolve(sender.replaceTrack(mixedTrack)).catch(() => {});
       }
     }
   }
@@ -734,5 +961,18 @@ export class SipClient extends Emitter {
   /** @internal */
   _removeCall(call) {
     this.#calls.delete(call);
+    if (this.#conferenceCalls.has(call)) {
+      this.#conferenceCalls.delete(call);
+      call._setInConference(false);
+      if (this.#conferenceCalls.size === 1) {
+        for (const rem of this.#conferenceCalls) {
+          rem._setInConference(false);
+          rem._restoreOriginalAudioTrack();
+        }
+        this.#conferenceCalls.clear();
+      }
+      this.#rebuildConferenceAudio();
+      this.emit('conferenceChanged', { calls: this.conferenceCalls });
+    }
   }
 }

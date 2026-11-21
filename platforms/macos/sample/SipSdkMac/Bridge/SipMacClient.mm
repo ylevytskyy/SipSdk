@@ -687,6 +687,27 @@ struct ClientCallbacks {
         });
     }
 
+    static void on_conference_changed(sip_client_t *c, sip_call_t *const *calls, size_t count, void *user_data)
+    {
+        (void)c;
+        auto *self = (__bridge SipMacClient *)user_data;
+        if (!self) return;
+
+        NSMutableArray<SipMacCall *> *arr = [NSMutableArray arrayWithCapacity:count];
+        for (size_t i = 0; i < count; ++i) {
+            if (calls[i]) {
+                SipMacCall *mc = [self getOrCreateCall:calls[i]];
+                if (mc) [arr addObject:mc];
+            }
+        }
+        NSArray<SipMacCall *> *snapshot = [arr copy];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if ([self.delegate respondsToSelector:@selector(client:didUpdateConferenceCalls:)]) {
+                [self.delegate client:self didUpdateConferenceCalls:snapshot];
+            }
+        });
+    }
+
     static void on_transfer_request(sip_call_t *call, const char *refer_to_uri, bool has_replaces, void *user_data)
     {
         auto *self = (__bridge SipMacClient *)user_data;
@@ -868,6 +889,7 @@ static bool set_default_audio_device_by_name(NSString *targetName, bool is_input
     cb.on_transfer_status = ClientCallbacks::on_transfer_status;
     cb.on_transfer_request = ClientCallbacks::on_transfer_request;
     cb.on_call_rejected_busy = ClientCallbacks::on_call_rejected_busy;
+    cb.on_conference_changed = ClientCallbacks::on_conference_changed;
 
     _client = sip_client_create(&cb, (__bridge void *)self);
     if (!_client) return -1;
@@ -1056,6 +1078,50 @@ static bool set_default_audio_device_by_name(NSString *targetName, bool is_input
     if (!h) return nil;
 
     return [self getOrCreateCall:h];
+}
+
+- (int)mergeCall:(SipMacCall *)callA withCall:(SipMacCall *)callB
+{
+    sip_client_t *c = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(_mutex);
+        c = _client;
+    }
+    if (!c || !callA.handle || !callB.handle) return EINVAL;
+    return sip_client_merge_calls(c, callA.handle, callB.handle);
+}
+
+- (int)addCallToConference:(SipMacCall *)call
+{
+    sip_client_t *c = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(_mutex);
+        c = _client;
+    }
+    if (!c || !call.handle) return EINVAL;
+    return sip_client_add_to_conference(c, call.handle);
+}
+
+- (int)splitCallFromConference:(SipMacCall *)call
+{
+    sip_client_t *c = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(_mutex);
+        c = _client;
+    }
+    if (!c || !call.handle) return EINVAL;
+    return sip_client_split_call(c, call.handle);
+}
+
+- (int)leaveConference
+{
+    sip_client_t *c = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(_mutex);
+        c = _client;
+    }
+    if (!c) return EINVAL;
+    return sip_client_leave_conference(c);
 }
 
 - (uint64_t)sendMessageToUri:(NSString *)uri text:(NSString *)text

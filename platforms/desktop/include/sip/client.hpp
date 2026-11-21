@@ -50,6 +50,10 @@ public:
 
     std::shared_ptr<Call> make_call(const std::string &target_uri, bool with_video = false);
     int dial(const std::string &target_uri, bool with_video, std::shared_ptr<Call> &out_call);
+    int merge_calls(const std::shared_ptr<Call> &call_a, const std::shared_ptr<Call> &call_b);
+    int add_to_conference(const std::shared_ptr<Call> &call);
+    int split_call(const std::shared_ptr<Call> &call);
+    int leave_conference();
 
     /**
      * Sends a SIP MESSAGE. body holds UTF-8 text for text/plain or raw bytes for other

@@ -95,6 +95,11 @@ bool Call::is_secure() const
     return m_handle ? sip_call_is_secure(m_handle) : false;
 }
 
+bool Call::is_in_conference() const
+{
+    return m_handle ? sip_call_is_in_conference(m_handle) : false;
+}
+
 uint32_t Call::get_duration() const
 {
     return m_handle ? sip_call_get_duration(m_handle) : 0;

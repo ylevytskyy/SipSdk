@@ -26,6 +26,12 @@ public final class SipClient {
     /// Invoked on the main actor when an incoming INVITE is rejected with 486 Busy Here due to `maxCalls`.
     public var onCallRejectedBusy: ((String) -> Void)?
 
+    /// Calls currently participating in the local audio conference.
+    public private(set) var conferenceCalls: [SipCall] = []
+
+    /// Invoked on the main actor whenever local audio conference membership changes.
+    public var onConferenceChanged: (([SipCall]) -> Void)?
+
     public var isMicrophoneMuted: Bool = false {
         didSet {
             if let client = coreClient {
@@ -227,6 +233,19 @@ public final class SipClient {
             sdk.handleCallRejectedBusy(callerUri: callerStr)
         }
 
+        callbacks.on_conference_changed = { _, callsPtr, count, userData in
+            guard let sdk = SipClient.unwrapClient(userData) else { return }
+            var handles: [OpaquePointer] = []
+            if let callsPtr = callsPtr, count > 0 {
+                for idx in 0..<count {
+                    if let h = callsPtr[idx] {
+                        handles.append(h)
+                    }
+                }
+            }
+            sdk.handleConferenceChanged(callHandles: handles)
+        }
+
         let boxRef = Unmanaged.passRetained(CallbackBox(self))
         self.retainedCallbackBox = boxRef
         let context = boxRef.toOpaque()
@@ -421,6 +440,61 @@ public final class SipClient {
 
         eventContinuation.yield(.callStateChanged(sipCall, .connecting))
         return sipCall
+    }
+
+    // MARK: - Local Audio Conference
+
+    /// Merges two open calls into the local audio conference (or adds the non-conference call to an active conference).
+    public func mergeCalls(_ callA: SipCall, _ callB: SipCall) throws {
+        guard isStarted, let client = coreClient else {
+            throw SipError.engineNotStarted
+        }
+        guard let handleA = callA.coreCall, let handleB = callB.coreCall else {
+            throw SipError.invalidParameter("Call session handle is invalid")
+        }
+        let rc = sip_client_merge_calls(client, handleA, handleB)
+        if rc != 0 {
+            throw SipError.coreError(Int(rc), "Failed to merge calls into conference")
+        }
+    }
+
+    /// Adds an open call to an already active local audio conference.
+    public func addToConference(_ call: SipCall) throws {
+        guard isStarted, let client = coreClient else {
+            throw SipError.engineNotStarted
+        }
+        guard let handle = call.coreCall else {
+            throw SipError.invalidParameter("Call session handle is invalid")
+        }
+        let rc = sip_client_add_to_conference(client, handle)
+        if rc != 0 {
+            throw SipError.coreError(Int(rc), "Failed to add call to conference")
+        }
+    }
+
+    /// Removes a call from the local audio conference and places it on hold.
+    public func splitCall(_ call: SipCall) throws {
+        guard isStarted, let client = coreClient else {
+            throw SipError.engineNotStarted
+        }
+        guard let handle = call.coreCall else {
+            throw SipError.invalidParameter("Call session handle is invalid")
+        }
+        let rc = sip_client_split_call(client, handle)
+        if rc != 0 {
+            throw SipError.coreError(Int(rc), "Failed to split call from conference")
+        }
+    }
+
+    /// Ends all calls in the active local audio conference.
+    public func leaveConference() throws {
+        guard isStarted, let client = coreClient else {
+            throw SipError.engineNotStarted
+        }
+        let rc = sip_client_leave_conference(client)
+        if rc != 0 {
+            throw SipError.coreError(Int(rc), "Failed to leave conference")
+        }
     }
 
     /// Turns an extension ("1002"), user@host, or SIP URI into a SIP URI.
@@ -626,6 +700,21 @@ public final class SipClient {
     private func handleCallRejectedBusy(callerUri: String) {
         onCallRejectedBusy?(callerUri)
         eventContinuation.yield(.callRejectedBusy(callerUri))
+    }
+
+    private func handleConferenceChanged(callHandles: [OpaquePointer]) {
+        let handleSet = Set(callHandles)
+        var members: [SipCall] = []
+        for call in calls {
+            let inConf = call.coreCall.map { handleSet.contains($0) } ?? false
+            call.isInConference = inConf
+            if inConf {
+                members.append(call)
+            }
+        }
+        conferenceCalls = members
+        onConferenceChanged?(members)
+        eventContinuation.yield(.conferenceChanged(members))
     }
 
     private func handleMessageReceived(_ message: SipIncomingMessage) {

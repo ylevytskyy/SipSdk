@@ -290,7 +290,7 @@ struct InCallView: View {
                 }
             }
 
-            // Swap Lines Button (shown when multiple calls are open)
+            // Swap & Merge/Split Buttons (shown when multiple calls are open)
             if let other = model.openCalls.first(where: { $0.id != call.id }) {
                 controlButton(
                     icon: "arrow.left.arrow.right",
@@ -299,6 +299,18 @@ struct InCallView: View {
                 ) {
                     Task {
                         await model.swapToCall(other)
+                    }
+                }
+
+                controlButton(
+                    icon: call.isInConference ? "arrow.triangle.branch" : "arrow.triangle.merge",
+                    label: call.isInConference ? "Split" : "Merge",
+                    isActive: call.isInConference
+                ) {
+                    if call.isInConference {
+                        try? model.client.splitCall(call)
+                    } else {
+                        try? model.client.mergeCalls(call, other)
                     }
                 }
             }
