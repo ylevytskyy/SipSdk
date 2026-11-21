@@ -23,6 +23,7 @@
 		1032 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2034 /* SettingsView.swift */; };
 		1014 /* MainSplitView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2014 /* MainSplitView.swift */; };
 		1015 /* call_session.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 2015 /* call_session.cpp */; };
+		1035 /* conference_mixer.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 2035 /* conference_mixer.cpp */; };
 		1016 /* engine.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 2016 /* engine.cpp */; };
 		1017 /* media_driver.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 2017 /* media_driver.cpp */; };
 		1018 /* sip_abi.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 2018 /* sip_abi.cpp */; };
@@ -58,6 +59,7 @@
 		2034 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		2014 /* MainSplitView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainSplitView.swift; sourceTree = "<group>"; };
 		2015 /* call_session.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = call_session.cpp; path = ../../../core/src/call_session.cpp; sourceTree = "<group>"; };
+		2035 /* conference_mixer.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = conference_mixer.cpp; path = ../../../core/src/conference_mixer.cpp; sourceTree = "<group>"; };
 		2016 /* engine.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = engine.cpp; path = ../../../core/src/engine.cpp; sourceTree = "<group>"; };
 		2017 /* media_driver.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = media_driver.cpp; path = ../../../core/src/media_driver.cpp; sourceTree = "<group>"; };
 		2018 /* sip_abi.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = sip_abi.cpp; path = ../../../core/src/sip_abi.cpp; sourceTree = "<group>"; };
@@ -127,6 +129,7 @@
 			isa = PBXGroup;
 			children = (
 				2015 /* call_session.cpp */,
+				2035 /* conference_mixer.cpp */,
 				2016 /* engine.cpp */,
 				2017 /* media_driver.cpp */,
 				2018 /* sip_abi.cpp */,
@@ -274,6 +277,7 @@
 				1032 /* SettingsView.swift in Sources */,
 				1014 /* MainSplitView.swift in Sources */,
 				1015 /* call_session.cpp in Sources */,
+				1035 /* conference_mixer.cpp in Sources */,
 				1016 /* engine.cpp in Sources */,
 				1017 /* media_driver.cpp in Sources */,
 				1018 /* sip_abi.cpp in Sources */,

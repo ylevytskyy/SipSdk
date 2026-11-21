@@ -25,6 +25,7 @@ endif()
 # Core static library
 add_library(sip_core STATIC
     src/call_session.cpp
+    src/conference_mixer.cpp
     src/engine.cpp
     src/media_driver.cpp
     src/sip_abi.cpp
@@ -51,6 +52,7 @@ target_compile_definitions(sip_core
 # Core shared library (Windows DLL, macOS dylib, Linux so)
 add_library(sip_core_shared SHARED
     src/call_session.cpp
+    src/conference_mixer.cpp
     src/engine.cpp
     src/media_driver.cpp
     src/sip_abi.cpp
@@ -203,6 +205,16 @@ if(BARESIP_LIBRARY)
         PRIVATE
             sip_core
             ${BARESIP_LIBRARY}
+    )
+
+    add_executable(sip_core_conference_mixer_test
+        tests/test_conference_mixer.cpp
+        src/conference_mixer.cpp
+    )
+
+    target_include_directories(sip_core_conference_mixer_test
+        PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/src
     )
 
     if(APPLE)
