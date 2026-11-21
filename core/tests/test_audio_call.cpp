@@ -65,6 +65,38 @@ static std::mutex g_incoming_mutex;
 static std::condition_variable g_incoming_cv;
 static std::vector<IncomingCallEvent> g_incoming_events;
 
+static std::mutex g_conf_mutex;
+static std::condition_variable g_conf_cv;
+static std::vector<std::vector<sip_call_t *>> g_conf_events;
+
+static void test_on_conference_changed(sip_client_t *client, sip_call_t *const *calls, size_t count, void *user_data)
+{
+    (void)client;
+    (void)user_data;
+    std::vector<sip_call_t *> snapshot;
+    for (size_t i = 0; i < count; ++i) {
+        snapshot.push_back(calls[i]);
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_conf_mutex);
+        g_conf_events.push_back(std::move(snapshot));
+    }
+    g_conf_cv.notify_all();
+}
+
+static bool wait_for_conference_count(size_t expected_count, int timeout_sec)
+{
+    std::unique_lock<std::mutex> lock(g_conf_mutex);
+    return g_conf_cv.wait_for(lock, std::chrono::seconds(timeout_sec), [&]() {
+        for (const auto &ev : g_conf_events) {
+            if (ev.size() == expected_count) {
+                return true;
+            }
+        }
+        return false;
+    });
+}
+
 static bool is_current_thread_main()
 {
 #if defined(__APPLE__)
@@ -1129,6 +1161,7 @@ static int run_test_10(const sip_callbacks_t &callbacks, const char *config_dir,
 static int run_test_8b(const sip_callbacks_t &callbacks, const char *config_dir, const char *asterisk_host, int asterisk_port);
 static int run_test_11_cap(const sip_callbacks_t &callbacks, const char *config_dir, const char *asterisk_host, int asterisk_port);
 static int run_test_12_multicall(const sip_callbacks_t &callbacks, const char *config_dir, const char *asterisk_host, int asterisk_port);
+static int run_test_13_conference(const sip_callbacks_t &callbacks, const char *config_dir, const char *asterisk_host, int asterisk_port);
 
 int main(int argc, char *argv[])
 {
@@ -1149,6 +1182,7 @@ int main(int argc, char *argv[])
     callbacks.on_transfer_status = test_on_transfer_status;
     callbacks.on_transfer_request = test_on_transfer_request;
     callbacks.on_call_rejected_busy = test_on_call_rejected_busy;
+    callbacks.on_conference_changed = test_on_conference_changed;
 
     if (argc > 4 && std::string(argv[4]) == "--only-dtls") {
         return run_test_8b(callbacks, config_dir, asterisk_host, asterisk_port);
@@ -1164,6 +1198,9 @@ int main(int argc, char *argv[])
     }
     if (argc > 4 && std::string(argv[4]) == "--only-multicall") {
         return run_test_12_multicall(callbacks, config_dir, asterisk_host, asterisk_port);
+    }
+    if (argc > 4 && std::string(argv[4]) == "--only-conference") {
+        return run_test_13_conference(callbacks, config_dir, asterisk_host, asterisk_port);
     }
 
     // --- Test 1: Client initialization & account registration ---
@@ -1523,6 +1560,9 @@ int main(int argc, char *argv[])
 
     // --- Test 12: Multi-call auto-hold, swap, call waiting & rejected hold fallback ---
     run_test_12_multicall(callbacks, config_dir, asterisk_host, asterisk_port);
+
+    // --- Test 13: Local audio conference (merge, group auto-hold, split, auto-dissolve) ---
+    run_test_13_conference(callbacks, config_dir, asterisk_host, asterisk_port);
 
     std::printf("ALL_AUDIO_CALL_TESTS_PASSED\n");
     return 0;
@@ -1915,5 +1955,115 @@ static int run_test_12_multicall(const sip_callbacks_t &callbacks, const char *c
 
     sip_client_destroy(client);
     std::printf("PASS: Multi-call auto-hold, swap, call waiting & rejected hold fallback verified\n");
+    return 0;
+}
+
+static int run_test_13_conference(const sip_callbacks_t &callbacks, const char *config_dir, const char *asterisk_host, int asterisk_port)
+{
+    std::printf("--- Test 13: Local audio conference (merge, group auto-hold, split, auto-dissolve) ---\n");
+    clear_call_events();
+    {
+        std::lock_guard<std::mutex> lock(g_conf_mutex);
+        g_conf_events.clear();
+    }
+
+    sip_client_t *client = sip_client_create(&callbacks, nullptr);
+    TEST_ASSERT(client != nullptr, "client creation failed");
+    TEST_ASSERT(sip_client_init(client, config_dir) == 0, "sip_client_init failed");
+
+    sip_account_config_t cfg{};
+    cfg.user = "1001";
+    cfg.domain = asterisk_host;
+    cfg.pwd = "test1001";
+    cfg.transport = "udp";
+    cfg.port = asterisk_port;
+    cfg.max_calls = 4;
+    TEST_ASSERT(sip_client_register_account(client, &cfg) == 0, "register_account failed");
+    std::this_thread::sleep_for(std::chrono::milliseconds(800));
+
+    std::string echo_uri = "sip:9001@" + std::string(asterisk_host) + ":" + std::to_string(asterisk_port);
+    std::string moh_uri = "sip:9002@" + std::string(asterisk_host) + ":" + std::to_string(asterisk_port);
+
+    // 1. Dial 9001 (call1) and second 9001 (call2 -> auto-holds call1)
+    sip_call_t *call1 = nullptr;
+    TEST_ASSERT(sip_call_dial(client, echo_uri.c_str(), false, &call1) == 0 && call1 != nullptr, "dial call1 failed");
+    CallEvent ev1;
+    TEST_ASSERT(wait_for_call_state(call1, SIP_CALL_STATE_ESTABLISHED, 10, ev1), "call1 did not establish");
+
+    sip_call_t *call2 = nullptr;
+    TEST_ASSERT(sip_call_dial(client, echo_uri.c_str(), false, &call2) == 0 && call2 != nullptr, "dial call2 failed");
+    CallEvent ev2;
+    TEST_ASSERT(wait_for_call_state(call2, SIP_CALL_STATE_ESTABLISHED, 10, ev2), "call2 did not establish");
+    CallEvent ev1_hold;
+    TEST_ASSERT(wait_for_call_state(call1, SIP_CALL_STATE_HOLD, 5, ev1_hold), "call1 was not auto-held");
+
+    // 2. Merge call1 and call2 -> both become ESTABLISHED & in conference
+    clear_call_events();
+    TEST_ASSERT(sip_client_merge_calls(client, call1, call2) == 0, "sip_client_merge_calls failed");
+    TEST_ASSERT(wait_for_conference_count(2, 5), "on_conference_changed(2) did not fire");
+    CallEvent ev1_resumed;
+    TEST_ASSERT(wait_for_call_state(call1, SIP_CALL_STATE_ESTABLISHED, 5, ev1_resumed), "call1 did not resume on merge");
+    TEST_ASSERT(sip_call_is_in_conference(call1) && sip_call_is_in_conference(call2), "both calls must be in conference");
+    TEST_ASSERT(!sip_call_is_on_hold(call1) && !sip_call_is_on_hold(call2), "neither conference call may be on hold");
+    std::this_thread::sleep_for(std::chrono::milliseconds(600));
+    std::printf("PASS: Merged call1 + call2 into active 2-leg conference\n");
+
+    // 3. Dialing a 3rd call auto-holds BOTH conference legs; resuming call1 resumes BOTH and holds call3
+    clear_call_events();
+    sip_call_t *call3 = nullptr;
+    TEST_ASSERT(sip_call_dial(client, echo_uri.c_str(), false, &call3) == 0 && call3 != nullptr, "dial call3 failed");
+    CallEvent ev3, h1, h2;
+    TEST_ASSERT(wait_for_call_state(call3, SIP_CALL_STATE_ESTABLISHED, 10, ev3), "call3 did not establish");
+    TEST_ASSERT(wait_for_call_state(call1, SIP_CALL_STATE_HOLD, 5, h1), "call1 not auto-held when dialing call3");
+    TEST_ASSERT(wait_for_call_state(call2, SIP_CALL_STATE_HOLD, 5, h2), "call2 not auto-held when dialing call3");
+    TEST_ASSERT(!sip_call_is_in_conference(call3), "call3 must not auto-join conference");
+
+    clear_call_events();
+    TEST_ASSERT(sip_call_set_hold(call1, false) == 0, "resuming conference via call1 failed");
+    CallEvent r1, r2, h3;
+    TEST_ASSERT(wait_for_call_state(call1, SIP_CALL_STATE_ESTABLISHED, 5, r1), "call1 did not resume");
+    TEST_ASSERT(wait_for_call_state(call2, SIP_CALL_STATE_ESTABLISHED, 5, r2), "call2 did not resume with group");
+    TEST_ASSERT(wait_for_call_state(call3, SIP_CALL_STATE_HOLD, 5, h3), "call3 was not auto-held when conference resumed");
+    std::printf("PASS: Group auto-hold and group resume verified with 3rd standalone call\n");
+
+    // 4. Split call2 -> call2 moves to HOLD, conference dissolves (count 0), call1 remains ESTABLISHED
+    clear_call_events();
+    {
+        std::lock_guard<std::mutex> lock(g_conf_mutex);
+        g_conf_events.clear();
+    }
+    TEST_ASSERT(sip_client_split_call(client, call2) == 0, "sip_client_split_call failed");
+    TEST_ASSERT(wait_for_conference_count(0, 5), "on_conference_changed(0) did not fire on split dissolve");
+    CallEvent s2;
+    TEST_ASSERT(wait_for_call_state(call2, SIP_CALL_STATE_HOLD, 5, s2), "split call2 did not move to HOLD");
+    TEST_ASSERT(!sip_call_is_in_conference(call1) && !sip_call_is_in_conference(call2), "conference must dissolve when 1 leg remains");
+    TEST_ASSERT(!sip_call_is_on_hold(call1), "remaining call1 must stay active");
+    std::printf("PASS: Split call2 -> HOLD and dissolved remaining leg call1\n");
+
+    // 5. Re-merge call1 + call2, then leave_conference -> both hang up
+    {
+        std::lock_guard<std::mutex> lock(g_conf_mutex);
+        g_conf_events.clear();
+    }
+    TEST_ASSERT(sip_client_merge_calls(client, call1, call2) == 0, "re-merge failed");
+    TEST_ASSERT(wait_for_conference_count(2, 5), "re-merge conference count 2 not received");
+    clear_call_events();
+    {
+        std::lock_guard<std::mutex> lock(g_conf_mutex);
+        g_conf_events.clear();
+    }
+    TEST_ASSERT(sip_client_leave_conference(client) == 0, "sip_client_leave_conference failed");
+    TEST_ASSERT(wait_for_conference_count(0, 5), "leave_conference did not emit count 0");
+    CallEvent c1, c2, c3;
+    TEST_ASSERT(wait_for_call_state(call1, SIP_CALL_STATE_CLOSED, 5, c1), "call1 did not close on leave_conference");
+    TEST_ASSERT(wait_for_call_state(call2, SIP_CALL_STATE_CLOSED, 5, c2), "call2 did not close on leave_conference");
+
+    sip_call_hangup(call3, 0, "Hangup");
+    wait_for_call_state(call3, SIP_CALL_STATE_CLOSED, 5, c3);
+    sip_call_destroy(call1);
+    sip_call_destroy(call2);
+    sip_call_destroy(call3);
+    sip_client_destroy(client);
+    std::printf("PASS: Local audio conference lifecycle verified against Asterisk\n");
     return 0;
 }

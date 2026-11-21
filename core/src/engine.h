@@ -69,6 +69,10 @@ public:
     int send_dtmf(sip_call_t *call, const char *digits);
     int set_client_mic_muted(bool muted);
     bool is_client_mic_muted() const;
+    int merge_calls(sip_call_t *call_a, sip_call_t *call_b);
+    int add_to_conference(sip_call_t *call);
+    int split_call(sip_call_t *call);
+    int leave_conference();
     int set_audio_driver(const char *src_mod, const char *src_dev, const char *play_mod, const char *play_dev);
     int get_audio_driver(char *src_mod, size_t src_mod_sz, char *play_mod, size_t play_mod_sz) const;
     void destroy_call(sip_call_t *call);
@@ -121,6 +125,7 @@ public:
     void dispatch_transfer_status(sip_call_t *call, int code, const char *reason);
     void dispatch_transfer_request(sip_call_t *call, const char *refer_to_uri, bool has_replaces);
     void dispatch_call_rejected_busy(const char *caller_uri);
+    void dispatch_conference_changed(const std::vector<sip_call_t *> &calls);
 
     bool prepare_audio_session();
     void release_audio_session_if_idle();
@@ -136,7 +141,11 @@ private:
     void run_loop(std::string config_path);
     void cleanup_on_loop_thread();
     void auto_hold_other_calls(sip_call_t *except_call);
+    void auto_hold_calls_outside_set(const std::vector<sip_call_t *> &exempt_calls);
     void hold_call_on_loop(sip_call_t *call, bool hold);
+    void hold_single_call_on_loop(sip_call_t *call, bool hold);
+    void remove_from_conference_on_loop(sip_call_t *call, bool hold_removed);
+    void sync_conference_mixer_on_loop();
 
     static void mqueue_callback(int id, void *data, void *arg);
     static bool sip_request_handler(const struct sip_msg *msg, void *arg);
@@ -166,6 +175,7 @@ private:
 
     mutable std::mutex m_calls_mutex;
     std::vector<sip_call_t *> m_all_calls;
+    std::vector<sip_call_t *> m_conference_calls;
 
     mutable std::mutex m_message_mutex;
     sip_message_callbacks_t m_message_callbacks{};

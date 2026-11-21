@@ -85,6 +85,9 @@ typedef struct sip_callbacks_t {
 
     /** Incoming INVITE rejected with 486 Busy Here because max_calls cap was reached. */
     void (*on_call_rejected_busy)(sip_client_t *client, const char *caller_uri, void *user_data);
+
+    /** Local audio conference membership changed (calls array is valid only for the callback duration). */
+    void (*on_conference_changed)(sip_client_t *client, sip_call_t *const *calls, size_t count, void *user_data);
 } sip_callbacks_t;
 
 /**
@@ -274,6 +277,33 @@ SIP_ABI_EXPORT int sip_client_set_mic_muted(sip_client_t *client, bool muted);
  * Checks client-wide microphone mute state.
  */
 SIP_ABI_EXPORT bool sip_client_is_mic_muted(const sip_client_t *client);
+
+/**
+ * Merges two open calls into the client's local audio conference (or adds the non-conference
+ * call to an already active conference). Un-holds participating legs and starts mix-minus audio.
+ */
+SIP_ABI_EXPORT int sip_client_merge_calls(sip_client_t *client, sip_call_t *call_a, sip_call_t *call_b);
+
+/**
+ * Adds an open call to an already active local audio conference (returns EINVAL if none active).
+ */
+SIP_ABI_EXPORT int sip_client_add_to_conference(sip_client_t *client, sip_call_t *call);
+
+/**
+ * Removes a call from the local audio conference and places it on hold.
+ * If only one leg remains in the conference, dissolves the conference and leaves that leg active.
+ */
+SIP_ABI_EXPORT int sip_client_split_call(sip_client_t *client, sip_call_t *call);
+
+/**
+ * Ends all calls currently in the local audio conference and clears conference state.
+ */
+SIP_ABI_EXPORT int sip_client_leave_conference(sip_client_t *client);
+
+/**
+ * Returns whether the call is currently participating in the local audio conference.
+ */
+SIP_ABI_EXPORT bool sip_call_is_in_conference(const sip_call_t *call);
 
 /**
  * Returns the unique SIP Call-ID string. Pointer valid until call session destroyed.

@@ -2062,6 +2062,102 @@ static void unregister_builtin_nil_audio()
     }
 }
 
+struct ConfFiltEncSt {
+    struct aufilt_enc_st af;
+    const struct audio *au{nullptr};
+};
+
+struct ConfFiltDecSt {
+    struct aufilt_dec_st af;
+    const struct audio *au{nullptr};
+};
+
+static int conf_aufilt_encupd(struct aufilt_enc_st **stp, void **ctx,
+                              const struct aufilt *af, struct aufilt_prm *prm,
+                              const struct audio *au)
+{
+    (void)ctx;
+    (void)af;
+    (void)prm;
+    if (!stp) return EINVAL;
+    if (*stp) {
+        auto *st = reinterpret_cast<ConfFiltEncSt *>(*stp);
+        st->au = au;
+        return 0;
+    }
+    auto *st = static_cast<ConfFiltEncSt *>(mem_zalloc(sizeof(ConfFiltEncSt), nullptr));
+    if (!st) return ENOMEM;
+    st->au = au;
+    *stp = &st->af;
+    return 0;
+}
+
+static int conf_aufilt_encode(struct aufilt_enc_st *st_base, struct auframe *af)
+{
+    if (!st_base || !af || af->fmt != AUFMT_S16LE || !af->sampv || af->sampc == 0) {
+        return 0;
+    }
+    MediaDriverManager *mgr = s_active_manager;
+    if (!mgr) return 0;
+    auto *st = reinterpret_cast<ConfFiltEncSt *>(st_base);
+    mgr->conference_mixer().on_encode(
+        reinterpret_cast<uint64_t>(st->au),
+        static_cast<int16_t *>(af->sampv),
+        af->sampc,
+        af->srate,
+        af->ch);
+    return 0;
+}
+
+static int conf_aufilt_decupd(struct aufilt_dec_st **stp, void **ctx,
+                              const struct aufilt *af, struct aufilt_prm *prm,
+                              const struct audio *au)
+{
+    (void)ctx;
+    (void)af;
+    (void)prm;
+    if (!stp) return EINVAL;
+    if (*stp) {
+        auto *st = reinterpret_cast<ConfFiltDecSt *>(*stp);
+        st->au = au;
+        return 0;
+    }
+    auto *st = static_cast<ConfFiltDecSt *>(mem_zalloc(sizeof(ConfFiltDecSt), nullptr));
+    if (!st) return ENOMEM;
+    st->au = au;
+    *stp = &st->af;
+    return 0;
+}
+
+static int conf_aufilt_decode(struct aufilt_dec_st *st_base, struct auframe *af)
+{
+    if (!st_base || !af || af->fmt != AUFMT_S16LE || !af->sampv || af->sampc == 0) {
+        return 0;
+    }
+    MediaDriverManager *mgr = s_active_manager;
+    if (!mgr) return 0;
+    auto *st = reinterpret_cast<ConfFiltDecSt *>(st_base);
+    mgr->conference_mixer().on_decode(
+        reinterpret_cast<uint64_t>(st->au),
+        static_cast<const int16_t *>(af->sampv),
+        af->sampc,
+        af->srate,
+        af->ch);
+    return 0;
+}
+
+static struct aufilt s_conf_aufilt = {
+    LE_INIT,
+    "sipsdk_conf",
+    true,
+    conf_aufilt_encupd,
+    conf_aufilt_encode,
+    conf_aufilt_decupd,
+    conf_aufilt_decode,
+};
+
+static bool s_conf_aufilt_registered = false;
+
 } // namespace
 
 int MediaDriverManager::register_baresip_plugins()
@@ -2084,6 +2180,10 @@ int MediaDriverManager::register_baresip_plugins()
     }
     register_builtin_dtls_srtp();
     register_builtin_nil_audio();
+    if (!s_conf_aufilt_registered) {
+        aufilt_register(baresip_aufiltl(), &s_conf_aufilt);
+        s_conf_aufilt_registered = true;
+    }
 
     int rc = vidsrc_register(&m_vidsrc,
                              baresip_vidsrcl(),
@@ -2139,6 +2239,11 @@ void MediaDriverManager::unregister_baresip_plugins()
     }
     unregister_builtin_dtls_srtp();
     unregister_builtin_nil_audio();
+    if (s_conf_aufilt_registered) {
+        aufilt_unregister(&s_conf_aufilt);
+        s_conf_aufilt_registered = false;
+    }
+    m_conference_mixer.clear();
 
     if (m_vidsrc) {
         m_vidsrc = static_cast<struct vidsrc *>(mem_deref(m_vidsrc));

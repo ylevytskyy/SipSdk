@@ -2,6 +2,7 @@
 #define SIP_CORE_SRC_MEDIA_DRIVER_H
 
 #include "../include/media_driver.h"
+#include "conference_mixer.h"
 #include "sip_abi.h"
 
 #include <atomic>
@@ -99,6 +100,9 @@ public:
     void on_vidsrc_allocated();
     void on_vidsrc_destroyed();
 
+    ConferenceMixer &conference_mixer() { return m_conference_mixer; }
+    const ConferenceMixer &conference_mixer() const { return m_conference_mixer; }
+
     static MediaDriverManager *active_manager();
 
 private:
@@ -122,6 +126,7 @@ private:
     std::atomic<bool> m_local_video_enabled{true};
     std::atomic<int> m_active_vidsrc_count{0};
     std::atomic<uint64_t> m_frames_decoded{0};
+    ConferenceMixer m_conference_mixer;
 };
 
 } // namespace sip_core
