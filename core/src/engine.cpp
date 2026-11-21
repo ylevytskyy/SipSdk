@@ -227,6 +227,16 @@ int Engine::init_on_loop_thread(const char *config_path)
         m_media_manager->register_baresip_plugins();
     }
 
+    if (cfg != nullptr) {
+        cfg->sip.transports =
+            (1u << SIP_TRANSP_UDP) |
+            (1u << SIP_TRANSP_TCP) |
+            (1u << SIP_TRANSP_TLS) |
+            (1u << SIP_TRANSP_WS);
+        // SIP_TRANSP_WSS is added and managed by Engine via m_wss_tls so
+        // per-account verify_tls_cert and tls_ca_file apply cleanly.
+    }
+
     rc = ua_init("SipSdk", true, true, true);
     if (rc != 0) {
         baresip_close();
@@ -234,6 +244,8 @@ int Engine::init_on_loop_thread(const char *config_path)
         libre_close();
         return rc;
     }
+
+    (void)configure_wss_tls_on_loop(true, "");
 
     rc = bevent_register(ua_event_handler, this);
     if (rc == 0) {
@@ -346,6 +358,9 @@ void Engine::cleanup_on_loop_thread()
     }
 
     ua_close();
+    if (m_wss_tls != nullptr) {
+        m_wss_tls = (struct tls *)mem_deref(m_wss_tls);
+    }
     module_app_unload();
     conf_close();
     baresip_close();
@@ -356,9 +371,81 @@ void Engine::cleanup_on_loop_thread()
     m_started = false;
 }
 
+struct WssLaddrCtx {
+    struct sip *sip;
+    struct tls *tls;
+    int err;
+};
+
+static bool add_wss_laddr_cb(const char *ifname, const struct sa *sa, void *arg)
+{
+    (void)ifname;
+    auto *ctx = static_cast<WssLaddrCtx *>(arg);
+    if (!ctx || !ctx->sip || !ctx->tls || !sa) {
+        return false;
+    }
+    struct sa local;
+    sa_cpy(&local, sa);
+    sa_set_port(&local, 0);
+    int rc = sip_transp_add_websock(ctx->sip, SIP_TRANSP_WSS, &local, false, nullptr, ctx->tls);
+    if (rc != 0 && ctx->err == 0) {
+        ctx->err = rc;
+    }
+    return false;
+}
+
+int Engine::add_wss_transport_on_loop()
+{
+    struct sip *sip = uag_sip();
+    struct network *net = baresip_network();
+    if (!sip || !net || !m_wss_tls) {
+        return EINVAL;
+    }
+    WssLaddrCtx ctx{sip, m_wss_tls, 0};
+    net_laddr_apply(net, add_wss_laddr_cb, &ctx);
+    return ctx.err;
+}
+
+int Engine::configure_wss_tls_on_loop(bool verify_tls_cert, const std::string &ca_file)
+{
+    struct tls *new_tls = nullptr;
+    int rc = tls_alloc(&new_tls, TLS_METHOD_TLS, nullptr, nullptr);
+    if (rc != 0 || !new_tls) {
+        return rc != 0 ? rc : ENOMEM;
+    }
+
+    (void)tls_set_verify_purpose(new_tls, "sslserver");
+
+    if (!verify_tls_cert) {
+        tls_disable_verify_server(new_tls);
+    } else if (!ca_file.empty()) {
+        int ca_rc = tls_add_ca(new_tls, ca_file.c_str());
+        if (ca_rc != 0) {
+            mem_deref(new_tls);
+            return ca_rc;
+        }
+    } else {
+        struct config *bcfg = conf_config();
+        if (bcfg != nullptr && (bcfg->sip.cafile[0] != '\0' || bcfg->sip.capath[0] != '\0')) {
+            const char *cf = bcfg->sip.cafile[0] != '\0' ? bcfg->sip.cafile : nullptr;
+            const char *cp = bcfg->sip.capath[0] != '\0' ? bcfg->sip.capath : nullptr;
+            (void)tls_add_cafile_path(new_tls, cf, cp);
+        }
+    }
+
+    if (m_wss_tls != nullptr) {
+        m_wss_tls = (struct tls *)mem_deref(m_wss_tls);
+    }
+    m_wss_tls = new_tls;
+
+    // Flush and re-add SIP transports so WSS binds to the updated TLS context.
+    (void)uag_reset_transp(false, false);
+    return add_wss_transport_on_loop();
+}
+
 int Engine::register_account(const AccountConfig &config)
 {
-    if (config.user.empty() || config.domain.empty() || config.port <= 0 || config.port > 65535) {
+    if (config.user.empty() || config.domain.empty() || config.port < 0 || config.port > 65535) {
         return EINVAL;
     }
 
@@ -388,11 +475,24 @@ int Engine::register_account(const AccountConfig &config)
             transport_param = ";transport=tcp";
         } else if (lower_transport == "tls") {
             transport_param = ";transport=tls";
+        } else if (lower_transport == "ws") {
+            transport_param = ";transport=ws";
+        } else if (lower_transport == "wss") {
+            transport_param = ";transport=wss";
         }
+        m_active_transport = lower_transport;
 
         int port = cfg.port;
         if (port <= 0) {
-            port = (lower_transport == "tls") ? 5061 : 5060;
+            if (lower_transport == "tls") {
+                port = 5061;
+            } else if (lower_transport == "ws") {
+                port = 80;
+            } else if (lower_transport == "wss") {
+                port = 443;
+            } else {
+                port = 5060;
+            }
         }
 
         std::string aor = "sip:" + cfg.user + "@" + cfg.domain + ":" + std::to_string(port) + transport_param;
@@ -410,6 +510,12 @@ int Engine::register_account(const AccountConfig &config)
                         return;
                     }
                 }
+            }
+        } else if (lower_transport == "wss") {
+            int wss_rc = configure_wss_tls_on_loop(cfg.verify_tls_cert, cfg.tls_ca_file);
+            if (wss_rc != 0 && cfg.verify_tls_cert) {
+                dispatch_reg_state(SIP_REG_STATE_FAILED, wss_rc, "Failed to configure WSS TLS context");
+                return;
             }
         }
 
@@ -430,7 +536,8 @@ int Engine::register_account(const AccountConfig &config)
             }
             if (!cfg.outbound_proxy.empty()) {
                 (void)account_set_outbound(acc, cfg.outbound_proxy.c_str(), 0);
-            } else if (lower_transport == "tls" || lower_transport == "tcp") {
+            } else if (lower_transport == "tls" || lower_transport == "tcp" ||
+                       lower_transport == "ws" || lower_transport == "wss") {
                 std::string outbound = "sip:" + cfg.domain + ":" + std::to_string(port) + transport_param;
                 (void)account_set_outbound(acc, outbound.c_str(), 0);
             }
@@ -451,7 +558,7 @@ int Engine::register_account(const AccountConfig &config)
             }
 
             std::string media_enc = cfg.media_enc;
-            if (media_enc.empty() && lower_transport == "tls") {
+            if (media_enc.empty() && (lower_transport == "tls" || lower_transport == "wss")) {
                 media_enc = "srtp-mand";
             }
             if (!media_enc.empty() && media_enc != "none") {
@@ -494,8 +601,17 @@ int Engine::register_account(const char *user, const char *domain, const char *p
 
 int Engine::reset_transports(bool re_register)
 {
-    bool posted = post_task([re_register]() {
-        (void)uag_reset_transp(re_register, true);
+    bool posted = post_task([this, re_register]() {
+        if (m_active_transport == "wss") {
+            (void)uag_reset_transp(false, false);
+            (void)add_wss_transport_on_loop();
+            if (re_register && m_ua != nullptr) {
+                (void)ua_register(m_ua);
+            }
+        } else {
+            (void)uag_reset_transp(re_register, true);
+            (void)add_wss_transport_on_loop();
+        }
     });
     return posted ? 0 : EIO;
 }

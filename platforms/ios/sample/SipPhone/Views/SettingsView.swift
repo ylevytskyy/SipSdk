@@ -112,10 +112,17 @@ struct SettingsView: View {
                         Text("UDP").tag(SipTransport.udp)
                         Text("TCP").tag(SipTransport.tcp)
                         Text("TLS").tag(SipTransport.tls)
+                        Text("WS").tag(SipTransport.ws)
+                        Text("WSS").tag(SipTransport.wss)
                     }
                     .onChange(of: transport) { _, newValue in
                         if newValue == .tls {
                             if portString == "5060" { portString = "5061" }
+                            if mediaEnc == "none" { mediaEnc = "srtp-mand" }
+                        } else if newValue == .ws {
+                            if portString == "5060" || portString == "5061" { portString = "8088" }
+                        } else if newValue == .wss {
+                            if portString == "5060" || portString == "5061" || portString == "8088" { portString = "8089" }
                             if mediaEnc == "none" { mediaEnc = "srtp-mand" }
                         }
                     }
@@ -127,7 +134,7 @@ struct SettingsView: View {
                         Text("DTLS-SRTP").tag("dtls_srtp")
                     }
 
-                    if transport == .tls {
+                    if transport == .tls || transport == .wss {
                         Toggle("Verify TLS Certificate", isOn: $verifyTlsCert)
                         HStack {
                             Text("CA Cert File")
@@ -313,11 +320,18 @@ struct SettingsView: View {
         self.regIntervalString = "\(acc.regInterval)"
         self.verifyTlsCert = acc.verifyTlsCert
         self.tlsCaFile = acc.tlsCaFile ?? ""
-        self.mediaEnc = acc.mediaEnc ?? (acc.transport == .tls ? "srtp-mand" : "none")
+        self.mediaEnc = acc.mediaEnc ?? ((acc.transport == .tls || acc.transport == .wss) ? "srtp-mand" : "none")
     }
 
     private func saveAndRegister() {
-        let port = Int(portString) ?? (transport == .tls ? 5061 : 5060)
+        let defaultPort: Int
+        switch transport {
+        case .tls: defaultPort = 5061
+        case .ws: defaultPort = 8088
+        case .wss: defaultPort = 8089
+        case .udp, .tcp: defaultPort = 5060
+        }
+        let port = Int(portString) ?? defaultPort
         let regInterval = UInt32(regIntervalString) ?? 3600
 
         let updated = SipAccount(

@@ -24,8 +24,10 @@
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
+#include <signal.h>
 #include <sys/socket.h>
 #include <sys/time.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 struct RegEvent {
@@ -443,6 +445,226 @@ static const char *resolve_ca_cert_path()
         }
     }
     return "docker/asterisk/keys/asterisk.crt";
+}
+
+static const char *resolve_repo_file(const char *rel_path)
+{
+    static thread_local std::string resolved;
+    const char *const prefixes[] = { "", "../../", "../", "/workspace/" };
+    for (const char *pfx : prefixes) {
+        std::string candidate = std::string(pfx) + rel_path;
+        FILE *f = std::fopen(candidate.c_str(), "r");
+        if (f) {
+            std::fclose(f);
+            resolved = candidate;
+            return resolved.c_str();
+        }
+    }
+    resolved = rel_path;
+    return resolved.c_str();
+}
+
+struct WsServerProcess {
+    pid_t pid{-1};
+    int port{0};
+
+    bool start(bool use_tls, const char *cert_path, const char *key_path)
+    {
+        std::string script = resolve_repo_file("core/tests/ws_sip_test_server.py");
+        int pipefd[2];
+        if (pipe(pipefd) != 0) {
+            return false;
+        }
+        pid_t child = fork();
+        if (child < 0) {
+            close(pipefd[0]);
+            close(pipefd[1]);
+            return false;
+        }
+        if (child == 0) {
+            close(pipefd[0]);
+            dup2(pipefd[1], STDOUT_FILENO);
+            close(pipefd[1]);
+            if (use_tls) {
+                execlp("python3", "python3", script.c_str(), "--tls",
+                       "--cert", cert_path, "--key", key_path, static_cast<char *>(nullptr));
+            } else {
+                execlp("python3", "python3", script.c_str(), static_cast<char *>(nullptr));
+            }
+            _exit(127);
+        }
+        close(pipefd[1]);
+        pid = child;
+
+        std::string line;
+        char ch = 0;
+        while (read(pipefd[0], &ch, 1) == 1) {
+            if (ch == '\n') {
+                break;
+            }
+            line.push_back(ch);
+        }
+        close(pipefd[0]);
+        if (line.rfind("PORT=", 0) == 0) {
+            port = std::atoi(line.c_str() + 5);
+        }
+        return port > 0;
+    }
+
+    ~WsServerProcess()
+    {
+        if (pid > 0) {
+            kill(pid, SIGTERM);
+            int st = 0;
+            waitpid(pid, &st, 0);
+            pid = -1;
+        }
+    }
+};
+
+static int run_test_9(const sip_callbacks_t &callbacks, const char *config_dir)
+{
+    std::printf("--- Test 9: SIP over WebSocket (WS and WSS) registration ---\n");
+    const std::string cert_path = resolve_ca_cert_path();
+    const std::string key_path = resolve_repo_file("docker/asterisk/keys/asterisk.key");
+
+    // 9a: Plain WS registration
+    {
+        WsServerProcess ws_srv;
+        if (!ws_srv.start(false, nullptr, nullptr)) {
+            std::printf("FAIL: could not start WS test server\n");
+            return 40;
+        }
+        sip_client_t *ws_client = sip_client_create(&callbacks, nullptr);
+        CHECK(ws_client != nullptr);
+        CHECK(sip_client_init(ws_client, config_dir) == 0);
+        clear_events();
+
+        sip_account_config_t cfg{};
+        cfg.user = "1002";
+        cfg.domain = "127.0.0.1";
+        cfg.pwd = "test1002";
+        cfg.transport = "ws";
+        cfg.port = ws_srv.port;
+
+        CHECK(sip_client_register_account(ws_client, &cfg) == 0);
+        RegEvent ev{};
+        bool reg_ok = wait_for_state(SIP_REG_STATE_REGISTERED, 10, ev);
+        if (!reg_ok || !sip_client_is_registered(ws_client)) {
+            std::printf("FAIL: WS registration failed (events=%zu):\n", g_reg_events.size());
+            for (const auto &e : g_reg_events) {
+                std::printf("  event: state=%d code=%d reason='%s'\n", (int)e.state, e.code, e.reason.c_str());
+            }
+            sip_client_destroy(ws_client);
+            return 41;
+        }
+        std::printf("PASS: WS registration succeeded (port=%d code=%d reason='%s')\n",
+                    ws_srv.port, ev.code, ev.reason.c_str());
+        sip_client_destroy(ws_client);
+    }
+
+    // 9b-9e: WSS registration (valid CA, verify_tls_cert=false, untrusted cert rejected, reset_transports)
+    {
+        WsServerProcess wss_srv;
+        if (!wss_srv.start(true, cert_path.c_str(), key_path.c_str())) {
+            std::printf("FAIL: could not start WSS test server\n");
+            return 42;
+        }
+
+        // 9b: WSS with valid CA + verify_tls_cert=true
+        sip_client_t *wss_client = sip_client_create(&callbacks, nullptr);
+        CHECK(wss_client != nullptr);
+        CHECK(sip_client_init(wss_client, config_dir) == 0);
+        clear_events();
+
+        sip_account_config_t cfg{};
+        cfg.user = "1002";
+        cfg.domain = "127.0.0.1";
+        cfg.pwd = "test1002";
+        cfg.transport = "wss";
+        cfg.port = wss_srv.port;
+        cfg.verify_tls_cert = true;
+        cfg.tls_ca_file = cert_path.c_str();
+
+        CHECK(sip_client_register_account(wss_client, &cfg) == 0);
+        RegEvent ev{};
+        bool reg_ok = wait_for_state(SIP_REG_STATE_REGISTERED, 10, ev);
+        if (!reg_ok || !sip_client_is_registered(wss_client)) {
+            std::printf("FAIL: WSS registration with valid CA failed (events=%zu):\n", g_reg_events.size());
+            for (const auto &e : g_reg_events) {
+                std::printf("  event: state=%d code=%d reason='%s'\n", (int)e.state, e.code, e.reason.c_str());
+            }
+            sip_client_destroy(wss_client);
+            return 43;
+        }
+        std::printf("PASS: WSS registration with valid CA succeeded (port=%d code=%d)\n", wss_srv.port, ev.code);
+
+        // 9e: WSS reset_transports(true) preserves WSS transport and re-registers
+        clear_events();
+        CHECK(sip_client_reset_transports(wss_client, true) == 0);
+        RegEvent reset_ev{};
+        if (!wait_for_state(SIP_REG_STATE_REGISTERED, 10, reset_ev)) {
+            std::printf("FAIL: WSS reset_transports(true) did not re-register\n");
+            sip_client_destroy(wss_client);
+            return 44;
+        }
+        std::printf("PASS: WSS reset_transports(true) re-registered cleanly\n");
+        sip_client_destroy(wss_client);
+
+        // 9c: WSS with verify_tls_cert=false
+        sip_client_t *wss_client2 = sip_client_create(&callbacks, nullptr);
+        CHECK(wss_client2 != nullptr);
+        CHECK(sip_client_init(wss_client2, config_dir) == 0);
+        clear_events();
+
+        sip_account_config_t cfg2{};
+        cfg2.user = "1002";
+        cfg2.domain = "127.0.0.1";
+        cfg2.pwd = "test1002";
+        cfg2.transport = "wss";
+        cfg2.port = wss_srv.port;
+        cfg2.verify_tls_cert = false;
+        cfg2.tls_ca_file = nullptr;
+
+        CHECK(sip_client_register_account(wss_client2, &cfg2) == 0);
+        RegEvent ev2{};
+        if (!wait_for_state(SIP_REG_STATE_REGISTERED, 10, ev2)) {
+            std::printf("FAIL: WSS registration with verify_tls_cert=false failed\n");
+            sip_client_destroy(wss_client2);
+            return 45;
+        }
+        std::printf("PASS: WSS registration with verify_tls_cert=false succeeded\n");
+        sip_client_destroy(wss_client2);
+
+        // 9d: WSS with verify_tls_cert=true and no CA rejects self-signed cert
+        sip_client_t *wss_client3 = sip_client_create(&callbacks, nullptr);
+        CHECK(wss_client3 != nullptr);
+        CHECK(sip_client_init(wss_client3, config_dir) == 0);
+        clear_events();
+
+        sip_account_config_t cfg3{};
+        cfg3.user = "1002";
+        cfg3.domain = "127.0.0.1";
+        cfg3.pwd = "test1002";
+        cfg3.transport = "wss";
+        cfg3.port = wss_srv.port;
+        cfg3.verify_tls_cert = true;
+        cfg3.tls_ca_file = nullptr;
+
+        CHECK(sip_client_register_account(wss_client3, &cfg3) == 0);
+        RegEvent ev3{};
+        bool reg_failed3 = wait_for_state(SIP_REG_STATE_FAILED, 10, ev3);
+        if (!reg_failed3 || sip_client_is_registered(wss_client3)) {
+            std::printf("FAIL: WSS registration with untrusted cert did not fail\n");
+            sip_client_destroy(wss_client3);
+            return 46;
+        }
+        std::printf("PASS: WSS registration with verify_tls_cert=true rejected untrusted cert (code=%d reason='%s')\n",
+                    ev3.code, ev3.reason.c_str());
+        sip_client_destroy(wss_client3);
+    }
+
+    return 0;
 }
 
 static int run_test_8(const sip_callbacks_t &callbacks, const char *config_dir, const char *asterisk_host)
@@ -1042,6 +1264,11 @@ int main(int argc, char *argv[])
     int rc8 = run_test_8(callbacks, config_dir, asterisk_host);
     if (rc8 != 0) {
         return rc8;
+    }
+
+    int rc9 = run_test_9(callbacks, config_dir);
+    if (rc9 != 0) {
+        return rc9;
     }
 
     std::printf("ALL_REGISTRATION_TESTS_PASSED\n");

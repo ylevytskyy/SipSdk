@@ -71,6 +71,8 @@ public enum SipTransport: String, Sendable, Codable, CaseIterable {
     case udp = "udp"
     case tcp = "tcp"
     case tls = "tls"
+    case ws = "ws"
+    case wss = "wss"
 }
 
 /// SIP account configuration profile.
@@ -134,6 +136,8 @@ public struct SipAccount: Sendable, Codable, Hashable {
         switch transport {
         case .tcp: tp = ";transport=tcp"
         case .tls: tp = ";transport=tls"
+        case .ws: tp = ";transport=ws"
+        case .wss: tp = ";transport=wss"
         case .udp: tp = ""
         }
         return "sip:\(username)@\(domain):\(port)\(tp)"

@@ -107,8 +107,8 @@ typedef struct sip_account_config_t {
     const char *user;
     const char *domain;
     const char *pwd;
-    const char *transport;       /* "udp" or "tcp", defaults to "udp" if null */
-    int port;                     /* e.g. 5060, defaults to 5060 if <= 0 */
+    const char *transport;       /* "udp", "tcp", "tls", "ws", or "wss"; defaults to "udp" if null */
+    int port;                     /* e.g. 5060 (UDP/TCP), 5061 (TLS), 8088/80 (WS), 8089/443 (WSS) */
     const char *display_name;    /* optional display name, e.g. "Alice" */
     const char *outbound_proxy;  /* optional outbound proxy URI, e.g. "sip:proxy.example.com:5060" */
     const char *stun_server;     /* optional STUN/TURN host:port, e.g. "stun.l.google.com:19302" */
@@ -136,7 +136,7 @@ SIP_ABI_EXPORT int sip_client_register_account(sip_client_t *client, const sip_a
  * @param user SIP username / extension (e.g. "1001").
  * @param domain SIP domain or registrar host (e.g. "127.0.0.1").
  * @param pwd Account password for MD5 digest authentication.
- * @param transport Protocol transport: "udp" or "tcp" (case-insensitive).
+ * @param transport Protocol transport: "udp", "tcp", "tls", "ws", or "wss" (case-insensitive).
  * @param port SIP port number (e.g. 5060).
  * @return 0 if registration command was queued, or EINVAL on invalid arguments.
  */

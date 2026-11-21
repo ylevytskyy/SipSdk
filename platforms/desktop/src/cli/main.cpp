@@ -147,7 +147,7 @@ static void print_usage(const char *prog) {
     std::printf("  --domain <host>       SIP registrar / host (default: 127.0.0.1)\n");
     std::printf("  --password <pwd>      SIP password (default: test1003)\n");
     std::printf("  --port <port>         SIP port (default: 5060)\n");
-    std::printf("  --transport <proto>   SIP transport: udp, tcp (default: udp)\n");
+    std::printf("  --transport <proto>   SIP transport: udp, tcp, tls, ws, wss (default: udp)\n");
     std::printf("  --call <sip:uri>      Place outgoing call upon registration\n");
     std::printf("  --listen              Listen for incoming calls\n");
     std::printf("  --auto-answer         Auto answer incoming calls\n");
