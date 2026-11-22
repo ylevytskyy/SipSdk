@@ -2,6 +2,7 @@
 #define SIP_DESKTOP_CLIENT_HPP
 
 #include "types.hpp"
+#include "account.hpp"
 #include "listener.hpp"
 #include "call.hpp"
 
@@ -48,8 +49,15 @@ public:
     int unregister_account();
     bool is_registered() const;
 
+    int add_account(const AccountConfig &config, std::shared_ptr<Account> &out_account);
+    int remove_account(const std::shared_ptr<Account> &account);
+    int set_default_account(const std::shared_ptr<Account> &account);
+    std::shared_ptr<Account> default_account() const;
+    std::vector<std::shared_ptr<Account>> accounts() const;
+
     std::shared_ptr<Call> make_call(const std::string &target_uri, bool with_video = false);
     int dial(const std::string &target_uri, bool with_video, std::shared_ptr<Call> &out_call);
+    int dial(const std::shared_ptr<Account> &account, const std::string &target_uri, bool with_video, std::shared_ptr<Call> &out_call);
     int merge_calls(const std::shared_ptr<Call> &call_a, const std::shared_ptr<Call> &call_b);
     int add_to_conference(const std::shared_ptr<Call> &call);
     int split_call(const std::shared_ptr<Call> &call);
@@ -61,6 +69,11 @@ public:
      * IClientListener::on_message_status), or an errno-style code.
      */
     int send_message(const std::string &target_uri,
+                     const std::string &body,
+                     const std::string &content_type = "text/plain",
+                     uint64_t *message_id = nullptr);
+    int send_message(const std::shared_ptr<Account> &account,
+                     const std::string &target_uri,
                      const std::string &body,
                      const std::string &content_type = "text/plain",
                      uint64_t *message_id = nullptr);
@@ -81,6 +94,7 @@ private:
     struct Callbacks;
     std::shared_ptr<Call> get_or_create_call(sip_call_t *handle);
     void remove_call(sip_call_t *handle);
+    std::shared_ptr<Account> find_account(sip_account_t *handle) const;
 
     std::string m_username;
     std::string m_domain;
@@ -100,6 +114,7 @@ private:
     mutable std::mutex m_mutex;
 
     std::unordered_map<sip_call_t *, std::shared_ptr<Call>> m_active_calls;
+    std::unordered_map<sip_account_t *, std::shared_ptr<Account>> m_accounts;
     std::shared_ptr<sip_core::IVideoCaptureDriver> m_capture_driver;
 };
 

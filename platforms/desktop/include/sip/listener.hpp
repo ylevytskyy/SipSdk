@@ -8,6 +8,7 @@
 
 namespace sip {
 
+class Account;
 class Call;
 
 class IClientListener {
@@ -60,6 +61,18 @@ public:
 
     virtual void on_conference_changed(const std::vector<std::shared_ptr<Call>> &calls) {
         (void)calls;
+    }
+
+    virtual void on_account_registration_state(std::shared_ptr<Account> account,
+                                               RegistrationState state,
+                                               int code,
+                                               const std::string &reason) {
+        (void)account; (void)state; (void)code; (void)reason;
+    }
+
+    virtual void on_account_message_received(std::shared_ptr<Account> account,
+                                             const IncomingMessage &message) {
+        (void)account; (void)message;
     }
 };
 
