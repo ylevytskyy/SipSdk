@@ -1,15 +1,9 @@
 #import <Foundation/Foundation.h>
+#import "SipMacAccount.h"
 #import "SipMacCall.h"
 #import "SipMacVideoView.h"
 
 NS_ASSUME_NONNULL_BEGIN
-
-typedef NS_ENUM(NSInteger, SipMacRegistrationState) {
-    SipMacRegistrationStateUnregistered = 0,
-    SipMacRegistrationStateRegistering,
-    SipMacRegistrationStateRegistered,
-    SipMacRegistrationStateFailed
-};
 
 /// Status of a sent SIP MESSAGE; values match sip_message_status_t.
 typedef NS_ENUM(NSInteger, SipMacMessageStatus) {
@@ -26,6 +20,8 @@ typedef NS_ENUM(NSInteger, SipMacMessageStatus) {
 - (void)client:(SipMacClient *)client didReceiveMessageFrom:(NSString *)from contentType:(NSString *)contentType body:(NSData *)body;
 - (void)client:(SipMacClient *)client message:(uint64_t)messageId didChangeStatus:(SipMacMessageStatus)status code:(NSInteger)code reason:(NSString *)reason;
 - (void)client:(SipMacClient *)client didChangeRegistrationState:(SipMacRegistrationState)state code:(NSInteger)code reason:(NSString *)reason;
+- (void)client:(SipMacClient *)client account:(SipMacAccount *)account didChangeRegistrationState:(SipMacRegistrationState)state code:(NSInteger)code reason:(NSString *)reason;
+- (void)client:(SipMacClient *)client account:(SipMacAccount *)account didReceiveMessageFrom:(NSString *)from contentType:(NSString *)contentType body:(NSData *)body;
 - (void)client:(SipMacClient *)client didReceiveIncomingCall:(SipMacCall *)call;
 - (void)client:(SipMacClient *)client call:(SipMacCall *)call didChangeState:(SipMacCallState)state code:(NSInteger)code reason:(NSString *)reason;
 - (void)client:(SipMacClient *)client call:(SipMacCall *)call didUpdateMediaWidth:(int)width height:(int)height;
@@ -47,6 +43,8 @@ typedef NS_ENUM(NSInteger, SipMacMessageStatus) {
 @property (nonatomic, readonly, copy) NSString *username;
 @property (nonatomic, readonly, copy) NSString *domain;
 @property (nonatomic, readonly, copy) NSString *aor;
+@property (nonatomic, readonly, nullable) SipMacAccount *defaultAccount;
+@property (nonatomic, readonly) NSArray<SipMacAccount *> *accounts;
 
 - (instancetype)initWithUsername:(NSString *)username domain:(NSString *)domain;
 
@@ -79,6 +77,28 @@ typedef NS_ENUM(NSInteger, SipMacMessageStatus) {
                    mediaEnc:(nullable NSString *)mediaEnc;
 - (int)unregisterAccount;
 - (int)resetTransports:(BOOL)reRegister;
+
+// Multi-account management
+- (nullable SipMacAccount *)addAccountWithUsername:(NSString *)user
+                                            domain:(NSString *)domain
+                                          password:(NSString *)password
+                                         transport:(NSString *)transport
+                                              port:(int)port;
+- (nullable SipMacAccount *)addAccountWithUsername:(NSString *)user
+                                            domain:(NSString *)domain
+                                          password:(NSString *)password
+                                         transport:(NSString *)transport
+                                              port:(int)port
+                                       displayName:(nullable NSString *)displayName
+                                     outboundProxy:(nullable NSString *)outboundProxy
+                                        stunServer:(nullable NSString *)stunServer
+                                          mediaNat:(nullable NSString *)mediaNat
+                                       regInterval:(uint32_t)regInterval
+                                         tlsCaFile:(nullable NSString *)tlsCaFile
+                                     verifyTlsCert:(BOOL)verifyTlsCert
+                                          mediaEnc:(nullable NSString *)mediaEnc;
+- (int)removeAccount:(SipMacAccount *)account;
+- (int)setDefaultAccount:(SipMacAccount *)account;
 
 - (nullable SipMacCall *)makeCallToUri:(NSString *)uri withVideo:(BOOL)withVideo;
 - (int)mergeCall:(SipMacCall *)callA withCall:(SipMacCall *)callB;
