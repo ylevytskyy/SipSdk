@@ -16,6 +16,8 @@ public final class SipClient {
     public private(set) var isStarted: Bool = false
     public private(set) var registrationState: SipRegistrationState = .unregistered
     public private(set) var currentAccount: SipAccount?
+    public private(set) var accounts: [SipAccountSession] = []
+    public private(set) var defaultAccountSession: SipAccountSession?
     public private(set) var calls: [SipCall] = []
 
     public var activeCall: SipCall? {
@@ -271,6 +273,21 @@ public final class SipClient {
         }
         _ = sip_client_set_message_callbacks(client, &messageCallbacks)
 
+        var accountCallbacks = sip_account_callbacks_t()
+        accountCallbacks.on_account_reg_state = { _, accountHandle, state, code, reason, userData in
+            guard let sdk = SipClient.unwrapClient(userData), let accountHandle = accountHandle else { return }
+            let reasonStr = reason != nil ? String(cString: reason!) : ""
+            sdk.handleAccountRegState(accountHandle: accountHandle, state: state, code: Int(code), reason: reasonStr)
+        }
+        accountCallbacks.on_account_message_received = { _, accountHandle, fromUri, contentType, body, bodyLen, userData in
+            guard let sdk = SipClient.unwrapClient(userData), let accountHandle = accountHandle else { return }
+            let from = fromUri != nil ? String(cString: fromUri!) : ""
+            let ctype = contentType != nil ? String(cString: contentType!) : "text/plain"
+            let data = (body != nil && bodyLen > 0) ? Data(bytes: body!, count: bodyLen) : Data()
+            sdk.handleAccountMessageReceived(accountHandle: accountHandle, message: SipIncomingMessage(from: from, contentType: ctype, body: data))
+        }
+        _ = sip_client_set_account_callbacks(client, &accountCallbacks)
+
         // Configure AudioUnit
         _ = sip_client_set_audio_driver(client, "audiounit", "", "audiounit", "")
 
@@ -313,6 +330,15 @@ public final class SipClient {
             await call.hangup()
         }
         calls.removeAll()
+
+        for account in accounts {
+            if let handle = account.coreAccount {
+                sip_account_destroy(handle)
+                account.coreAccount = nil
+            }
+        }
+        accounts.removeAll()
+        defaultAccountSession = nil
 
         captureDriver.stop()
         remoteVideoView?.clearVideo()
@@ -395,6 +421,196 @@ public final class SipClient {
         _ = sip_client_unregister(client)
         registrationState = .unregistered
         eventContinuation.yield(.registrationChanged(.unregistered))
+    }
+
+    // MARK: - Multi-Account Management
+
+    /// Adds and registers a new SIP account on this client (up to 8 concurrent accounts).
+    @discardableResult
+    public func addAccount(_ account: SipAccount) async throws -> SipAccountSession {
+        guard isStarted, let client = coreClient else {
+            throw SipError.engineNotStarted
+        }
+
+        callKit.updateConfiguration(maxCalls: account.maxCalls)
+
+        var handle: OpaquePointer?
+        var rc: Int32 = 0
+        var cConfig = sip_account_config_t()
+        account.username.withCString { userPtr in
+            account.domain.withCString { domainPtr in
+                account.password.withCString { pwdPtr in
+                    account.transport.rawValue.withCString { tpPtr in
+                        cConfig.user = userPtr
+                        cConfig.domain = domainPtr
+                        cConfig.pwd = pwdPtr
+                        cConfig.transport = tpPtr
+                        cConfig.port = Int32(account.port)
+                        cConfig.reg_interval = account.regInterval
+                        cConfig.verify_tls_cert = account.verifyTlsCert
+                        cConfig.max_calls = Int32(account.maxCalls)
+
+                        let dname = account.displayName?.cString(using: .utf8)
+                        let ob = account.outboundProxy?.cString(using: .utf8)
+                        let stun = account.stunServer?.cString(using: .utf8)
+                        let stunUser = account.stunUser?.cString(using: .utf8)
+                        let stunPass = account.stunPassword?.cString(using: .utf8)
+                        let nat = account.mediaNat?.cString(using: .utf8)
+                        let tlsCa = account.tlsCaFile?.cString(using: .utf8)
+                        let menc = account.mediaEnc?.cString(using: .utf8)
+
+                        dname?.withUnsafeBufferPointer { cConfig.display_name = $0.baseAddress }
+                        ob?.withUnsafeBufferPointer { cConfig.outbound_proxy = $0.baseAddress }
+                        stun?.withUnsafeBufferPointer { cConfig.stun_server = $0.baseAddress }
+                        stunUser?.withUnsafeBufferPointer { cConfig.stun_user = $0.baseAddress }
+                        stunPass?.withUnsafeBufferPointer { cConfig.stun_pass = $0.baseAddress }
+                        nat?.withUnsafeBufferPointer { cConfig.media_nat = $0.baseAddress }
+                        tlsCa?.withUnsafeBufferPointer { cConfig.tls_ca_file = $0.baseAddress }
+                        menc?.withUnsafeBufferPointer { cConfig.media_enc = $0.baseAddress }
+
+                        rc = sip_client_add_account(client, &cConfig, &handle)
+                    }
+                }
+            }
+        }
+
+        if rc == EBUSY {
+            throw SipError.busy
+        }
+        guard rc == 0, let validHandle = handle else {
+            throw SipError.registrationFailed(Int(rc), "sip_client_add_account failed")
+        }
+
+        let session = SipAccountSession(coreAccount: validHandle, profile: account)
+        accounts.append(session)
+        if defaultAccountSession == nil {
+            defaultAccountSession = session
+            currentAccount = account
+        }
+        return session
+    }
+
+    /// Removes and unregisters an account from this client.
+    public func removeAccount(_ session: SipAccountSession) async throws {
+        guard isStarted, let client = coreClient else {
+            throw SipError.engineNotStarted
+        }
+        guard let handle = session.coreAccount else {
+            throw SipError.invalidParameter("Account session handle is invalid")
+        }
+        let rc = sip_client_remove_account(client, handle)
+        guard rc == 0 else {
+            throw SipError.coreError(Int(rc), "Failed to remove account")
+        }
+        accounts.removeAll(where: { $0.id == session.id })
+        sip_account_destroy(handle)
+        session.coreAccount = nil
+        if defaultAccountSession?.id == session.id {
+            defaultAccountSession = accounts.first
+            currentAccount = defaultAccountSession?.profile
+        }
+    }
+
+    /// Selects the default account used by single-account convenience APIs.
+    public func setDefaultAccount(_ session: SipAccountSession) throws {
+        guard isStarted, let client = coreClient else {
+            throw SipError.engineNotStarted
+        }
+        guard let handle = session.coreAccount else {
+            throw SipError.invalidParameter("Account session handle is invalid")
+        }
+        let rc = sip_client_set_default_account(client, handle)
+        guard rc == 0 else {
+            throw SipError.coreError(Int(rc), "Failed to set default account")
+        }
+        defaultAccountSession = session
+        currentAccount = session.profile
+    }
+
+    /// Places an outgoing call from a specific registered account.
+    @discardableResult
+    public func makeCall(from account: SipAccountSession, to destination: String, withVideo: Bool = true) async throws -> SipCall {
+        guard isStarted else {
+            throw SipError.engineNotStarted
+        }
+        guard let accHandle = account.coreAccount else {
+            throw SipError.invalidParameter("Account session handle is invalid")
+        }
+
+        let dialUri: String
+        if destination.hasPrefix("sip:") {
+            dialUri = destination
+        } else if !destination.contains("@") {
+            dialUri = "sip:\(destination)@\(account.profile.domain)"
+        } else {
+            dialUri = "sip:\(destination)"
+        }
+
+        _ = IosAudioManager.shared.prepareCallAudioSession()
+
+        var coreCallHandle: OpaquePointer?
+        let rc = sip_account_dial(accHandle, dialUri, withVideo, &coreCallHandle)
+        if rc == EBUSY {
+            throw SipError.busy
+        }
+        guard rc == 0, let handle = coreCallHandle else {
+            throw SipError.callCreationFailed("sip_account_dial failed (rc=\(rc)) for URI: \(dialUri)")
+        }
+
+        let sipCall = SipCall(
+            coreCall: handle,
+            remoteUri: dialUri,
+            isOutgoing: true,
+            hasVideo: withVideo,
+            initialState: .connecting
+        )
+        sipCall.accountSession = account
+        sip_call_set_user_data(handle, Unmanaged.passUnretained(sipCall).toOpaque())
+        calls.append(sipCall)
+        eventContinuation.yield(.callStateChanged(sipCall, .connecting))
+        return sipCall
+    }
+
+    /// Sends a UTF-8 text message from a specific registered account.
+    @discardableResult
+    public func sendMessage(from account: SipAccountSession, to destination: String, text: String) throws -> UInt64 {
+        try sendMessage(from: account, to: destination, body: Data(text.utf8), contentType: "text/plain")
+    }
+
+    /// Sends a SIP MESSAGE from a specific registered account.
+    @discardableResult
+    public func sendMessage(from account: SipAccountSession, to destination: String, body: Data, contentType: String) throws -> UInt64 {
+        guard isStarted else {
+            throw SipError.engineNotStarted
+        }
+        guard let accHandle = account.coreAccount else {
+            throw SipError.invalidParameter("Account session handle is invalid")
+        }
+        guard !destination.isEmpty else {
+            throw SipError.invalidParameter("Message destination is empty")
+        }
+        guard !body.isEmpty else {
+            throw SipError.invalidParameter("Message body is empty")
+        }
+
+        let uri: String
+        if destination.hasPrefix("sip:") {
+            uri = destination
+        } else if !destination.contains("@") {
+            uri = "sip:\(destination)@\(account.profile.domain)"
+        } else {
+            uri = "sip:\(destination)"
+        }
+
+        var messageId: UInt64 = 0
+        let rc = body.withUnsafeBytes { raw -> Int32 in
+            sip_account_send_message(accHandle, uri, contentType,
+                                     raw.bindMemory(to: UInt8.self).baseAddress, raw.count, &messageId)
+        }
+        guard rc == 0 else {
+            throw SipError.messageSendFailed(Int(rc), "sip_account_send_message failed for URI: \(uri)")
+        }
+        return messageId
     }
 
     /// Resets network sockets for seamless network handover (Wi-Fi <-> Cellular) and triggers re-registration.
@@ -612,6 +828,10 @@ public final class SipClient {
             hasVideo: hasVideo,
             initialState: .incoming
         )
+        if let accHandle = sip_call_get_account(callHandle),
+           let accSession = accounts.first(where: { $0.coreAccount == accHandle }) {
+            sipCall.accountSession = accSession
+        }
 
         sip_call_set_user_data(callHandle, Unmanaged.passUnretained(sipCall).toOpaque())
         calls.append(sipCall)
@@ -721,6 +941,25 @@ public final class SipClient {
         eventContinuation.yield(.messageReceived(message))
     }
 
+    private func handleAccountRegState(accountHandle: OpaquePointer, state: sip_reg_state_t, code: Int, reason: String) {
+        guard let session = accounts.first(where: { $0.coreAccount == accountHandle }) else { return }
+        let newState: SipRegistrationState
+        switch state {
+        case SIP_REG_STATE_UNREGISTERED: newState = .unregistered
+        case SIP_REG_STATE_REGISTERING: newState = .registering
+        case SIP_REG_STATE_REGISTERED: newState = .registered
+        case SIP_REG_STATE_FAILED: newState = .failed(code: code, reason: reason)
+        default: newState = .failed(code: code, reason: reason)
+        }
+        session.updateRegistrationState(newState)
+        eventContinuation.yield(.accountRegistrationChanged(session, newState))
+    }
+
+    private func handleAccountMessageReceived(accountHandle: OpaquePointer, message: SipIncomingMessage) {
+        guard let session = accounts.first(where: { $0.coreAccount == accountHandle }) else { return }
+        eventContinuation.yield(.accountMessageReceived(session, message))
+    }
+
     private func handleMessageStatus(id: UInt64, status: sip_message_status_t, code: Int, reason: String) {
         let newStatus = SipMessageStatus(rawValue: Int(status.rawValue)) ?? .failed
         eventContinuation.yield(.messageStatusChanged(id: id, status: newStatus, code: code, reason: reason))
@@ -744,6 +983,10 @@ public final class SipClient {
             hasVideo: hasVideo,
             initialState: .connecting
         )
+        if let accHandle = sip_call_get_account(callHandle),
+           let accSession = accounts.first(where: { $0.coreAccount == accHandle }) {
+            sipCall.accountSession = accSession
+        }
         sip_call_set_user_data(callHandle, Unmanaged.passUnretained(sipCall).toOpaque())
         calls.append(sipCall)
         return sipCall

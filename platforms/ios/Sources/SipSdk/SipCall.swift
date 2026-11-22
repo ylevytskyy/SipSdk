@@ -41,6 +41,9 @@ public final class SipCall: Identifiable {
     /// True if this call is currently part of the local audio conference.
     public internal(set) var isInConference: Bool = false
 
+    /// Account session that owns this call (when multi-account API is used).
+    public internal(set) var accountSession: SipAccountSession?
+
     /// Active call duration in seconds.
     public private(set) var durationSeconds: UInt32 = 0
 
