@@ -43,6 +43,10 @@ public:
     bool is_secure() const;
     bool is_in_conference() const { return m_in_conference.load(); }
     void set_in_conference(bool in_conf) { m_in_conference.store(in_conf); }
+    bool is_recording() const { return m_is_recording.load(); }
+    const char *get_recording_path() const;
+    uint64_t recording_leg_id() const;
+    void set_recording_state(bool recording, uint64_t leg_id, const std::string &path);
     uint32_t get_duration() const;
     int get_stats(sip_call_stats_t *stats) const;
 
@@ -112,10 +116,13 @@ private:
     std::atomic<bool> m_is_muted{false};
     std::atomic<bool> m_closed{false};
     std::atomic<bool> m_in_conference{false};
+    std::atomic<bool> m_is_recording{false};
     std::atomic<uint32_t> m_duration{0};
     std::atomic<int> m_ref_count{1};
 
     mutable std::mutex m_mutex;
+    uint64_t m_recording_leg_id{0};
+    std::string m_recording_path;
     std::chrono::steady_clock::time_point m_established_at{};
     bool m_is_established{false};
     void *m_user_data{nullptr};

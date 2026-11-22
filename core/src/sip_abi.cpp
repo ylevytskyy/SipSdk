@@ -434,4 +434,48 @@ SIP_ABI_EXPORT int sip_client_send_message(sip_client_t *client,
     return client->engine->send_message(peer_uri, content_type, body, body_len, message_id);
 }
 
+SIP_ABI_EXPORT int sip_client_set_recording_callbacks(sip_client_t *client,
+                                                      const sip_recording_callbacks_t *callbacks)
+{
+    if (!client || !client->engine) return EINVAL;
+    return client->engine->set_recording_callbacks(callbacks);
+}
+
+SIP_ABI_EXPORT int sip_client_set_media_recorder_driver(sip_client_t *client,
+                                                        const sip_media_recorder_driver_t *driver)
+{
+    if (!client || !client->engine) return EINVAL;
+    if (!driver) {
+        return client->engine->set_media_recorder_driver(nullptr);
+    }
+    auto cpp_driver = std::make_shared<sip_core::CApiMediaRecorderDriver>(*driver);
+    return client->engine->set_media_recorder_driver(cpp_driver);
+}
+
+SIP_ABI_EXPORT int sip_call_start_recording(sip_call_t *call,
+                                            const char *path,
+                                            sip_recording_mode_t mode)
+{
+    if (!call || !call->engine()) return EINVAL;
+    return call->engine()->start_recording(call, path, mode);
+}
+
+SIP_ABI_EXPORT int sip_call_stop_recording(sip_call_t *call)
+{
+    if (!call || !call->engine()) return EINVAL;
+    return call->engine()->stop_recording(call);
+}
+
+SIP_ABI_EXPORT bool sip_call_is_recording(const sip_call_t *call)
+{
+    if (!call) return false;
+    return call->is_recording();
+}
+
+SIP_ABI_EXPORT const char *sip_call_get_recording_path(const sip_call_t *call)
+{
+    if (!call) return "";
+    return call->get_recording_path();
+}
+
 } // extern "C"

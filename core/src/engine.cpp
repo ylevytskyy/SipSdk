@@ -808,6 +808,9 @@ void Engine::handle_ua_event(int ev, struct bevent *event)
                             consult->release();
                         }
                     }
+                    if (sess->is_recording()) {
+                        stop_recording(sess);
+                    }
                     if (sess->is_in_conference()) {
                         remove_from_conference_on_loop(sess, false);
                     }
@@ -1080,6 +1083,9 @@ int Engine::hangup_call(sip_call_t *call, int code, const char *reason)
     call->retain();
     bool posted = post_task([this, call, scode, reason_str]() {
         call->stop_stats_timer();
+        if (call->is_recording()) {
+            stop_recording(call);
+        }
         struct call *c = call->raw_call();
         if (m_ua != nullptr && c != nullptr) {
             call->latch_media_stats();
@@ -1309,6 +1315,10 @@ int Engine::mute_call(sip_call_t *call, bool muted)
                     struct audio *au = call_audio(c);
                     if (au != nullptr) {
                         audio_mute(au, false);
+                        if (m_media_manager && sess->is_recording()) {
+                            m_media_manager->call_recorder().set_local_muted(
+                                reinterpret_cast<uint64_t>(au), muted);
+                        }
                     }
                 }
                 sess->set_hold_fallback_muted(false);
@@ -1324,6 +1334,10 @@ int Engine::mute_call(sip_call_t *call, bool muted)
             struct audio *au = call_audio(c);
             if (au != nullptr) {
                 audio_mute(au, muted);
+                if (m_media_manager && call->is_recording()) {
+                    m_media_manager->call_recorder().set_local_muted(
+                        reinterpret_cast<uint64_t>(au), muted);
+                }
             }
             call->set_hold_fallback_muted(false);
             call->set_muted(muted);
@@ -1489,6 +1503,10 @@ int Engine::set_client_mic_muted(bool muted)
                 if (au != nullptr) {
                     bool effective_au_mute = sess->is_in_conference() ? false : muted;
                     audio_mute(au, effective_au_mute);
+                    if (m_media_manager && sess->is_recording()) {
+                        m_media_manager->call_recorder().set_local_muted(
+                            reinterpret_cast<uint64_t>(au), muted);
+                    }
                 }
                 sess->set_muted(muted);
                 dispatch_call_media(sess, 0, 0, sess->is_on_hold(), muted);
@@ -2510,6 +2528,162 @@ int Engine::set_message_callbacks(const sip_message_callbacks_t *callbacks)
         m_message_callbacks = sip_message_callbacks_t{};
     }
     return 0;
+}
+
+int Engine::set_recording_callbacks(const sip_recording_callbacks_t *callbacks)
+{
+    std::lock_guard<std::mutex> lock(m_recording_mutex);
+    if (callbacks) {
+        m_recording_callbacks = *callbacks;
+    } else {
+        m_recording_callbacks = sip_recording_callbacks_t{};
+    }
+    return 0;
+}
+
+int Engine::set_media_recorder_driver(std::shared_ptr<IMediaRecorderDriver> driver)
+{
+    if (!m_media_manager) return EINVAL;
+    m_media_manager->set_media_recorder_driver(std::move(driver));
+    return 0;
+}
+
+void Engine::dispatch_recording_state(sip_call_t *call, sip_recording_state_t state,
+                                      const char *path, int error_code)
+{
+    sip_recording_callbacks_t cbs{};
+    {
+        std::lock_guard<std::mutex> lock(m_recording_mutex);
+        cbs = m_recording_callbacks;
+    }
+    if (!cbs.on_recording_state) return;
+
+    std::string path_copy = path ? path : "";
+    if (call) call->retain();
+
+    auto *ctx = new std::function<void()>([this, cbs, call, state, path_copy, error_code]() {
+        cbs.on_recording_state(m_owner, call, state, path_copy.c_str(), error_code, m_user_data);
+        if (call) call->release();
+    });
+
+    if (m_callbacks.dispatch_to_main) {
+        m_callbacks.dispatch_to_main(
+            [](void *arg) {
+                auto *fn = static_cast<std::function<void()> *>(arg);
+                (*fn)();
+                delete fn;
+            },
+            ctx,
+            m_user_data);
+    } else {
+        (*ctx)();
+        delete ctx;
+    }
+}
+
+int Engine::start_recording(sip_call_t *call, const char *path, sip_recording_mode_t mode)
+{
+    if (!call || !path || path[0] == '\0') return EINVAL;
+    if (call->is_closed()) return EINVAL;
+    if (call->is_recording()) return EALREADY;
+    if (!m_started.load() || !m_media_manager) return EIO;
+
+    std::string path_str = path;
+    auto run_on_loop = [this, call, path_str, mode]() -> int {
+        if (call->is_closed()) return EINVAL;
+        if (call->is_recording()) return EALREADY;
+        struct call *c = call->raw_call();
+        if (!c) return EINVAL;
+        struct audio *au = call_audio(c);
+        if (!au) return EIO;
+        uint64_t leg_id = reinterpret_cast<uint64_t>(au);
+        RecordingMode rec_mode = static_cast<RecordingMode>(static_cast<int>(mode));
+        int rc = m_media_manager->call_recorder().start_recording(leg_id, path_str, rec_mode);
+        if (rc != 0) {
+            dispatch_recording_state(call, SIP_RECORDING_STATE_FAILED, path_str.c_str(), rc);
+            return rc;
+        }
+        m_media_manager->call_recorder().set_local_muted(leg_id, call->is_muted() || m_mic_muted.load());
+        call->set_recording_state(true, leg_id, path_str);
+        dispatch_recording_state(call, SIP_RECORDING_STATE_RECORDING, path_str.c_str(), 0);
+        return 0;
+    };
+
+    if (std::this_thread::get_id() == m_loop_thread.get_id()) {
+        return run_on_loop();
+    }
+
+    std::mutex wait_mu;
+    std::condition_variable wait_cv;
+    bool done = false;
+    int result = EIO;
+
+    call->retain();
+    bool posted = post_task([&]() {
+        result = run_on_loop();
+        call->release();
+        {
+            std::lock_guard<std::mutex> lock(wait_mu);
+            done = true;
+        }
+        wait_cv.notify_one();
+    });
+    if (!posted) {
+        call->release();
+        return EIO;
+    }
+
+    std::unique_lock<std::mutex> lock(wait_mu);
+    wait_cv.wait(lock, [&]() { return done; });
+    return result;
+}
+
+int Engine::stop_recording(sip_call_t *call)
+{
+    if (!call) return EINVAL;
+    if (!m_media_manager) return EIO;
+
+    auto run_on_loop = [this, call]() -> int {
+        uint64_t leg_id = call->recording_leg_id();
+        if (leg_id == 0 || !call->is_recording()) {
+            return ENOENT;
+        }
+        std::string stopped_path;
+        int rc = m_media_manager->call_recorder().stop_recording(leg_id, &stopped_path);
+        call->set_recording_state(false, 0, "");
+        if (rc == 0) {
+            dispatch_recording_state(call, SIP_RECORDING_STATE_IDLE, stopped_path.c_str(), 0);
+        }
+        return rc;
+    };
+
+    if (!m_started.load() || std::this_thread::get_id() == m_loop_thread.get_id()) {
+        return run_on_loop();
+    }
+
+    std::mutex wait_mu;
+    std::condition_variable wait_cv;
+    bool done = false;
+    int result = ENOENT;
+
+    call->retain();
+    bool posted = post_task([&]() {
+        result = run_on_loop();
+        call->release();
+        {
+            std::lock_guard<std::mutex> lock(wait_mu);
+            done = true;
+        }
+        wait_cv.notify_one();
+    });
+    if (!posted) {
+        call->release();
+        return run_on_loop();
+    }
+
+    std::unique_lock<std::mutex> lock(wait_mu);
+    wait_cv.wait(lock, [&]() { return done; });
+    return result;
 }
 
 int Engine::send_message(const char *peer_uri, const char *content_type, const uint8_t *body, size_t body_len,

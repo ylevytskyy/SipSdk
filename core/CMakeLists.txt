@@ -24,10 +24,12 @@ endif()
 
 # Core static library
 add_library(sip_core STATIC
+    src/call_recorder.cpp
     src/call_session.cpp
     src/conference_mixer.cpp
     src/engine.cpp
     src/media_driver.cpp
+    src/mkv_writer.cpp
     src/sip_abi.cpp
 )
 
@@ -51,10 +53,12 @@ target_compile_definitions(sip_core
 
 # Core shared library (Windows DLL, macOS dylib, Linux so)
 add_library(sip_core_shared SHARED
+    src/call_recorder.cpp
     src/call_session.cpp
     src/conference_mixer.cpp
     src/engine.cpp
     src/media_driver.cpp
+    src/mkv_writer.cpp
     src/sip_abi.cpp
 )
 
@@ -213,6 +217,17 @@ if(BARESIP_LIBRARY)
     )
 
     target_include_directories(sip_core_conference_mixer_test
+        PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+
+    add_executable(sip_core_call_recorder_test
+        tests/test_call_recorder.cpp
+        src/call_recorder.cpp
+        src/mkv_writer.cpp
+    )
+
+    target_include_directories(sip_core_call_recorder_test
         PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/src
     )

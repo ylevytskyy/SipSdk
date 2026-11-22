@@ -35,6 +35,8 @@ public:
     bool is_closed() const;
     bool is_secure() const;
     bool is_in_conference() const;
+    bool is_recording() const;
+    std::string get_recording_path() const;
     uint32_t get_duration() const;
     /** Counts of what the call received; complete once the call is closed. */
     CallMediaStats get_media_stats() const;
@@ -49,6 +51,8 @@ public:
     int transfer(const std::string &target_uri);
     int attended_transfer(const std::shared_ptr<Call> &consult_call);
     int accept_transfer(bool accept);
+    int start_recording(const std::string &path, RecordingMode mode = RecordingMode::AudioStereo);
+    int stop_recording();
 
     void invalidate();
 

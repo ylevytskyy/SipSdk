@@ -216,6 +216,11 @@ if(TARGET sip_core_conference_mixer_test)
     add_test(NAME core_conference_mixer COMMAND sip_core_conference_mixer_test)
 endif()
 
+# Local call recorder (WAV + portable MKV + driver) unit tests (needs no PBX).
+if(TARGET sip_core_call_recorder_test)
+    add_test(NAME core_call_recorder COMMAND sip_core_call_recorder_test)
+endif()
+
 # sip_cli against a scripted SIP peer on loopback (needs no PBX).
 add_executable(test_cli_media
     tests/test_cli_media.cpp

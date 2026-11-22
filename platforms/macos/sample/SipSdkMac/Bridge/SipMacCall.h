@@ -11,6 +11,18 @@ typedef NS_ENUM(NSInteger, SipMacCallState) {
     SipMacCallStateClosed
 };
 
+typedef NS_ENUM(NSInteger, SipMacRecordingMode) {
+    SipMacRecordingModeAudioStereo = 0,
+    SipMacRecordingModeAudioMono = 1,
+    SipMacRecordingModeAudioVideo = 2
+};
+
+typedef NS_ENUM(NSInteger, SipMacRecordingState) {
+    SipMacRecordingStateIdle = 0,
+    SipMacRecordingStateRecording = 1,
+    SipMacRecordingStateFailed = 2
+};
+
 struct sip_call_t;
 
 @interface SipMacCall : NSObject
@@ -24,6 +36,8 @@ struct sip_call_t;
 @property (nonatomic, readonly) BOOL isClosed;
 @property (nonatomic, readonly) BOOL isSecure;
 @property (nonatomic, readonly) BOOL isInConference;
+@property (nonatomic, readonly) BOOL isRecording;
+@property (nonatomic, readonly, copy) NSString *recordingPath;
 @property (nonatomic, readonly) uint32_t duration;
 @property (nonatomic, readonly, copy) NSString *audioCodec;
 @property (nonatomic, readonly) uint32_t audioBitrateKbps;
@@ -41,6 +55,8 @@ struct sip_call_t;
 - (int)transferToUri:(NSString *)targetUri;
 - (int)attendedTransferWithCall:(SipMacCall *)consultCall;
 - (int)acceptTransfer:(BOOL)accept;
+- (int)startRecordingToPath:(NSString *)path mode:(SipMacRecordingMode)mode;
+- (int)stopRecording;
 
 - (void)invalidate;
 - (struct sip_call_t *)handle;

@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { SipClient, SipCall, SipCallState, SipMessageStatus, SipRegistrationState, sanitizeSdp } from '../src/sipsdk.js';
+import { SipClient, SipCall, SipCallState, SipMessageStatus, SipRecordingMode, SipRecordingState, SipRegistrationState, sanitizeSdp } from '../src/sipsdk.js';
 import { createFakeJsSIP, FakeSession } from './fake-jssip.mjs';
 
 const ACCOUNT = { username: '1002', domain: 'pbx.local', password: 'pw', wsUri: 'ws://pbx.local:8088/ws' };
@@ -645,4 +645,82 @@ test('local audio conference: merge, group hold/resume, mute, split dissolve, an
   assert.ok(s2.terminated);
   c3.hangup();
   s3.emit('ended', {});
+});
+
+test('local call recording: startRecording, double-start guard, stopRecording Blob, and auto-stop on close', async () => {
+  const origMR = globalThis.MediaRecorder;
+  const origMS = globalThis.MediaStream;
+  const origAC = globalThis.AudioContext;
+
+  class FakeMediaStream {
+    constructor(tracks = []) { this._tracks = [...tracks]; }
+    addTrack(t) { this._tracks.push(t); }
+    getTracks() { return this._tracks; }
+    getAudioTracks() { return this._tracks.filter((t) => t.kind === 'audio'); }
+    getVideoTracks() { return this._tracks.filter((t) => t.kind === 'video'); }
+  }
+  class FakeMediaRecorder {
+    constructor(stream, opts = {}) {
+      this.stream = stream;
+      this.mimeType = opts.mimeType || 'audio/webm';
+      this.state = 'inactive';
+      this.ondataavailable = null;
+      this.onstop = null;
+    }
+    start() {
+      this.state = 'recording';
+      if (this.ondataavailable) {
+        this.ondataavailable({ data: new Blob([new Uint8Array([1, 2, 3, 4])], { type: this.mimeType }) });
+      }
+    }
+    stop() {
+      this.state = 'inactive';
+      if (this.onstop) this.onstop();
+    }
+  }
+
+  globalThis.MediaStream = FakeMediaStream;
+  globalThis.MediaRecorder = FakeMediaRecorder;
+  delete globalThis.AudioContext;
+
+  try {
+    const { client, ua } = registered();
+
+    const states = [];
+    client.on('recordingStateChanged', (e) => states.push(e.state));
+
+    const call = client.makeCall('9001', { video: true });
+    const sess = ua.outgoing[0];
+    const remoteStream = new FakeMediaStream([{ kind: 'audio' }, { kind: 'video' }]);
+    sess.connection = {
+      getReceivers: () => [{ track: { kind: 'audio' } }, { track: { kind: 'video' } }],
+      getSenders: () => [{ track: { kind: 'audio' } }],
+      addEventListener: (ev, fn) => {
+        if (ev === 'track') {
+          fn({ track: { kind: 'audio' }, streams: [remoteStream] });
+          fn({ track: { kind: 'video' }, streams: [remoteStream] });
+        }
+      },
+    };
+    sess.emit('peerconnection', { peerconnection: sess.connection });
+    sess.established = true;
+    sess.emit('accepted', {});
+
+    call.startRecording({ mode: SipRecordingMode.AudioVideo });
+    assert.equal(call.isRecording, true);
+    assert.throws(() => call.startRecording({ mode: SipRecordingMode.AudioStereo }), /already recording/);
+
+    const blob = await call.stopRecording();
+    assert.equal(call.isRecording, false);
+    assert.ok(blob instanceof Blob);
+    assert.equal(blob.size, 4);
+    assert.deepEqual(states, [SipRecordingState.Recording, SipRecordingState.Idle]);
+
+    call.hangup();
+    sess.emit('ended', {});
+  } finally {
+    if (origMR !== undefined) globalThis.MediaRecorder = origMR; else delete globalThis.MediaRecorder;
+    if (origMS !== undefined) globalThis.MediaStream = origMS; else delete globalThis.MediaStream;
+    if (origAC !== undefined) globalThis.AudioContext = origAC; else delete globalThis.AudioContext;
+  }
 });

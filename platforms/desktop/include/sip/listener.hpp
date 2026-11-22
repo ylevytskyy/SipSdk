@@ -61,6 +61,11 @@ public:
     virtual void on_conference_changed(const std::vector<std::shared_ptr<Call>> &calls) {
         (void)calls;
     }
+
+    virtual void on_recording_state(std::shared_ptr<Call> call, RecordingState state,
+                                    const std::string &path, int error_code) {
+        (void)call; (void)state; (void)path; (void)error_code;
+    }
 };
 
 } // namespace sip

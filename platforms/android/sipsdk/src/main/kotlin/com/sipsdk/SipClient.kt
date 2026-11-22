@@ -648,6 +648,36 @@ class SipClient(
         listener?.onMessageStatusChanged(messageId, SipMessageStatus.fromInt(status), code, String(reason, Charsets.UTF_8))
     }
 
+    private val mediaRecorder = AndroidMediaRecorder()
+
+    @JvmSynthetic
+    fun onNativeRecordingState(callHandle: Long, state: Int, path: ByteArray, errorCode: Int) {
+        val call = activeCallsMap[callHandle] ?: return
+        listener?.onRecordingStateChanged(
+            call,
+            SipRecordingState.fromInt(state),
+            String(path, Charsets.UTF_8),
+            errorCode
+        )
+    }
+
+    @JvmSynthetic
+    fun onNativeRecorderStart(path: ByteArray, sampleRate: Int, channels: Int, videoWidth: Int, videoHeight: Int): Int =
+        mediaRecorder.start(String(path, Charsets.UTF_8), sampleRate, channels, videoWidth, videoHeight)
+
+    @JvmSynthetic
+    fun onNativeRecorderAudio(pcmBytes: ByteArray, timestampNs: Long) {
+        mediaRecorder.writeAudio(pcmBytes, timestampNs)
+    }
+
+    @JvmSynthetic
+    fun onNativeRecorderVideo(i420Bytes: ByteArray, width: Int, height: Int, timestampNs: Long) {
+        mediaRecorder.writeVideo(i420Bytes, width, height, timestampNs)
+    }
+
+    @JvmSynthetic
+    fun onNativeRecorderStop(): Int = mediaRecorder.stop()
+
     @JvmSynthetic
     fun onNativeCallRejectedBusy(callerUri: ByteArray) {
         listener?.onCallRejectedBusy(String(callerUri, Charsets.UTF_8))

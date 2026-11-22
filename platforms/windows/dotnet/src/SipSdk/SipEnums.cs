@@ -38,4 +38,18 @@ namespace SipSdk
         /// <summary>Reserved: display (read) notification (IMDN, RFC 5438) from the peer.</summary>
         Displayed = 3
     }
+
+    public enum SipRecordingMode
+    {
+        AudioStereo = 0,
+        AudioMono = 1,
+        AudioVideo = 2
+    }
+
+    public enum SipRecordingState
+    {
+        Idle = 0,
+        Recording = 1,
+        Failed = 2
+    }
 }

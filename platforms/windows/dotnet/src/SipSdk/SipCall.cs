@@ -54,6 +54,8 @@ namespace SipSdk
         public bool IsClosed => _callHandle == IntPtr.Zero || SipNativeAbi.sip_call_is_closed(_callHandle);
         public bool IsSecure => _callHandle != IntPtr.Zero && SipNativeAbi.sip_call_is_secure(_callHandle);
         public bool IsInConference => _callHandle != IntPtr.Zero && SipNativeAbi.sip_call_is_in_conference(_callHandle);
+        public bool IsRecording => _callHandle != IntPtr.Zero && SipNativeAbi.sip_call_is_recording(_callHandle);
+        public string RecordingPath => _callHandle != IntPtr.Zero ? MarshalUtf8String(SipNativeAbi.sip_call_get_recording_path(_callHandle)) : string.Empty;
         internal IntPtr NativeHandle => _callHandle;
         public uint Duration => _callHandle != IntPtr.Zero ? SipNativeAbi.sip_call_get_duration(_callHandle) : 0;
 
@@ -146,6 +148,19 @@ namespace SipSdk
         {
             ThrowIfDisposed();
             return SipNativeAbi.sip_call_accept_transfer(_callHandle, accept);
+        }
+
+        public int StartRecording(string path, SipRecordingMode mode = SipRecordingMode.AudioStereo)
+        {
+            ThrowIfDisposed();
+            if (string.IsNullOrEmpty(path)) throw new ArgumentException("Recording path cannot be empty", nameof(path));
+            return SipNativeAbi.sip_call_start_recording(_callHandle, path, (int)mode);
+        }
+
+        public int StopRecording()
+        {
+            ThrowIfDisposed();
+            return SipNativeAbi.sip_call_stop_recording(_callHandle);
         }
 
         internal void HandleStatsUpdate(SipCallStats stats)
