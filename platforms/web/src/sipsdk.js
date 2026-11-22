@@ -30,6 +30,15 @@ export const SipMessageStatus = Object.freeze({
   Displayed: 3, // reserved: IMDN display (read) notification (RFC 5438)
 });
 
+/** Maximum concurrent SIP accounts hosted by a single SipClient. */
+export const SIP_CLIENT_MAX_ACCOUNTS = 8;
+
+const makeError = (message, code) => {
+  const err = new Error(message);
+  if (code) err.code = code;
+  return err;
+};
+
 const VIDEO_CONSTRAINTS = { width: { ideal: 640 }, height: { ideal: 480 } };
 const CONTENT_TYPE = /^[^\s/;]+\/[^\s/;]+(\s*;.*)?$/;
 const DTMF_DIGITS = /^[0-9A-D#*]+$/i;
@@ -118,9 +127,10 @@ export function sanitizeSdp(sdp) {
   return out.join('\r\n') + '\r\n';
 }
 
-/** One SIP call session. Created by SipClient.makeCall or delivered by incomingCall. */
+/** One SIP call session. Created by SipClient.makeCall / SipAccount.dial or delivered by incomingCall. */
 export class SipCall extends Emitter {
   #client;
+  #account;
   #session;
   #state;
   #hasVideo;
@@ -140,9 +150,10 @@ export class SipCall extends Emitter {
   #prevStats = null;
   #pendingRefer = null;
 
-  constructor(client, session, { outgoing, video }) {
+  constructor(client, session, { outgoing, video, account = null }) {
     super();
     this.#client = client;
+    this.#account = account;
     this.#session = session;
     this.#state = outgoing ? SipCallState.Connecting : SipCallState.Incoming;
     this.#hasVideo = video;
@@ -153,6 +164,7 @@ export class SipCall extends Emitter {
     this.#wireSession();
   }
 
+  get account() { return this.#account; }
   get state() { return this.#state; }
   get hasVideo() { return this.#hasVideo; }
   get isOnHold() { return this.#onHold; }
@@ -209,7 +221,7 @@ export class SipCall extends Emitter {
     this.#hasVideo = withVideo;
     this.#session.answer({
       mediaConstraints: { audio: true, video: withVideo ? VIDEO_CONSTRAINTS : false },
-      pcConfig: this.#client.pcConfig,
+      pcConfig: this.#account?._pcConfig || this.#client.pcConfig,
     });
   }
 
@@ -314,7 +326,7 @@ export class SipCall extends Emitter {
     this.#assertOpen();
     if (!target) throw new Error('SipSdk: transfer target is required');
     if (typeof this.#session.refer !== 'function') throw new Error('SipSdk: session does not support REFER');
-    const ok = this.#session.refer(toSipUri(target, this.#client._domain), {
+    const ok = this.#session.refer(toSipUri(target, this.#account?.domain || this.#client._domain), {
       eventHandlers: this.#referHandlers(),
     });
     if (!ok) throw new Error('SipSdk: transfer failed');
@@ -593,13 +605,90 @@ export class SipCall extends Emitter {
   }
 }
 
-/** Owns the SIP user agent: registration, outgoing calls and incoming call delivery. */
+/** One SIP account hosted by a SipClient, backed by its own JsSIP UA instance. */
+export class SipAccount {
+  #client;
+  #ua;
+  #id;
+  #aor;
+  #user;
+  #domain;
+  #pcConfig;
+  #regState = SipRegistrationState.Unregistered;
+  #active = true;
+
+  /** @internal */
+  constructor(client, { id, aor, user, domain, pcConfig, ua }) {
+    this.#client = client;
+    this.#id = id;
+    this.#aor = aor;
+    this.#user = user;
+    this.#domain = domain;
+    this.#pcConfig = pcConfig;
+    this.#ua = ua;
+  }
+
+  get id() { return this.#id; }
+  get aor() { return this.#aor; }
+  get user() { return this.#user; }
+  get domain() { return this.#domain; }
+  get regState() { return this.#regState; }
+  get isRegistered() { return this.#active && this.#regState === SipRegistrationState.Registered; }
+
+  /** @internal */
+  get _ua() { return this.#ua; }
+  /** @internal */
+  get _pcConfig() { return this.#pcConfig; }
+  /** @internal */
+  get _active() { return this.#active; }
+  /** @internal */
+  _setRegState(state) { this.#regState = state; }
+  /** @internal */
+  _deactivate() {
+    this.#active = false;
+    this.#regState = SipRegistrationState.Unregistered;
+  }
+
+  /** Re-registers this account with its registrar. */
+  reregister() {
+    if (!this.#active || !this.#ua) throw makeError('SipSdk: account is no longer active', 'EINVAL');
+    this.#ua.register();
+  }
+
+  /** Removes every binding of this account from its registrar. */
+  unregister() {
+    if (!this.#active || !this.#ua) return;
+    this.#ua.unregister({ all: true });
+  }
+
+  /**
+   * Places an outgoing call from this account.
+   * Accepts options `{ video?: boolean }` or a boolean `withVideo`.
+   * @returns {SipCall}
+   */
+  dial(targetUri, options = {}) {
+    return this.#client._makeCallFromAccount(this, targetUri, options);
+  }
+
+  /** Alias for dial(). */
+  makeCall(targetUri, options = {}) {
+    return this.dial(targetUri, options);
+  }
+
+  /** Sends a SIP MESSAGE (RFC 3428) from this account. */
+  sendMessage(peerUri, body, options = {}) {
+    return this.#client._sendMessageFromAccount(this, peerUri, body, options);
+  }
+}
+
+/** Owns one or more SIP user agents: registration, outgoing calls and incoming call delivery. */
 export class SipClient extends Emitter {
   #JsSIP;
   #started = false;
-  #ua = null;
-  #registered = false;
-  #domain = '';
+  #accounts = [];
+  #defaultAccount = null;
+  #nextAccountId = 1;
+  #defaultPcConfig = { iceServers: [] };
   #calls = new Set();
   #conferenceCalls = new Set();
   #conferenceMuted = false;
@@ -617,75 +706,187 @@ export class SipClient extends Emitter {
     if (!jssip?.UA) throw new Error('SipSdk: JsSIP is not loaded');
     this.#JsSIP = jssip;
     this.now = now;
-    this.accountAor = '';
-    this.pcConfig = { iceServers: [] };
   }
 
   #maxCalls = 4;
   get maxCalls() { return this.#maxCalls; }
   set maxCalls(value) { this.#maxCalls = Math.max(1, Math.min(8, Number(value) || 4)); }
-  get isRegistered() { return this.#registered; }
+  get defaultAccount() { return this.#defaultAccount; }
+  get accounts() { return [...this.#accounts]; }
+  get accountCount() { return this.#accounts.length; }
+  get isRegistered() { return this.#defaultAccount ? this.#defaultAccount.isRegistered : false; }
+  get accountAor() { return this.#defaultAccount ? this.#defaultAccount.aor : ''; }
+  get pcConfig() { return this.#defaultAccount?._pcConfig || this.#defaultPcConfig; }
+  set pcConfig(value) { this.#defaultPcConfig = value || { iceServers: [] }; }
   get isStarted() { return this.#started; }
   get calls() { return [...this.#calls]; }
   get conferenceCalls() { return [...this.#conferenceCalls]; }
   /** @internal */
-  get _domain() { return this.#domain; }
+  get _domain() { return this.#defaultAccount ? this.#defaultAccount.domain : ''; }
 
   start() {
     this.#started = true;
   }
 
-  /** Hangs up every open call, stops the user agent and its WebSocket. */
+  /** Hangs up every open call, stops every user agent and its WebSocket. */
   stop() {
-    for (const call of this.#calls) {
+    for (const call of [...this.#calls]) {
       try { call.hangup(); } catch { /* already closing */ }
     }
-    if (this.#ua) this.#ua.stop();
-    this.#ua = null;
-    this.#registered = false;
+    for (const account of [...this.#accounts]) {
+      account._deactivate();
+      try { account._ua?.stop(); } catch { /* ignore */ }
+    }
+    this.#accounts = [];
+    this.#defaultAccount = null;
     this.#started = false;
   }
 
   /**
-   * Registers a SIP account over a SIP WebSocket (ws:// or wss://).
+   * Adds and registers a new SIP account (up to SIP_CLIENT_MAX_ACCOUNTS = 8).
+   * The first added account becomes the default account.
+   * @param {{username?: string, user?: string, domain: string, password?: string, wsUri: string,
+   *          displayName?: string, iceServers?: RTCIceServer[], maxCalls?: number}} config
+   * @returns {SipAccount}
+   */
+  addAccount(config) {
+    if (!this.#started) throw makeError('SipSdk: call start() before addAccount()', 'EIO');
+    return this.#addAccountInternal(config, { makeDefault: false });
+  }
+
+  /**
+   * Hangs up active calls owned by account, stops/unregisters its UA, removes it, and
+   * re-elects defaultAccount to the first remaining account (or null).
+   */
+  removeAccount(account) {
+    const idx = this.#accounts.indexOf(account);
+    if (idx === -1) throw makeError('SipSdk: account is not active on this client', 'EINVAL');
+    for (const call of [...this.#calls]) {
+      if (call.account === account && !call.isClosed) {
+        try { call.hangup(); } catch { /* already closing */ }
+      }
+    }
+    account._deactivate();
+    try { account._ua?.stop(); } catch { /* ignore */ }
+    this.#accounts.splice(idx, 1);
+    if (this.#defaultAccount === account) {
+      this.#defaultAccount = this.#accounts[0] || null;
+    }
+  }
+
+  /** Switches the default account used by single-account convenience methods. */
+  setDefaultAccount(account) {
+    if (!account || !this.#accounts.includes(account)) {
+      throw makeError('SipSdk: account is not active on this client', 'EINVAL');
+    }
+    this.#defaultAccount = account;
+  }
+
+  /** Reconnects / re-registers every active account after a transport change. */
+  resetTransports(reRegister = true) {
+    for (const account of this.#accounts) {
+      if (!account._active || !account._ua) continue;
+      if (typeof account._ua.isConnected === 'function' && !account._ua.isConnected()) {
+        account._ua.start();
+      }
+      if (reRegister) {
+        account.reregister();
+      }
+    }
+  }
+
+  /**
+   * Registers or replaces the default SIP account over a SIP WebSocket (ws:// or wss://).
    * @param {{username: string, domain: string, password?: string, wsUri: string,
    *          displayName?: string, iceServers?: RTCIceServer[], maxCalls?: number}} account
+   * @returns {SipAccount}
    */
-  register({ username, domain, password = '', wsUri, displayName = '', iceServers = [], maxCalls = 4 }) {
-    if (!this.#started) throw new Error('SipSdk: call start() before register()');
-    if (!username) throw new Error('SipSdk: username is required');
-    if (!domain) throw new Error('SipSdk: domain is required');
-    if (!wsUri) throw new Error('SipSdk: wsUri is required');
-    if (this.#ua) this.#ua.stop();
+  register(config) {
+    if (!this.#started) throw makeError('SipSdk: call start() before register()', 'EIO');
+    const validated = this.#validateAccountConfig(config);
+    const nextAor = `sip:${validated.username}@${validated.domain}`.toLowerCase();
+    if (this.#accounts.some((a) => a !== this.#defaultAccount && a.aor.toLowerCase() === nextAor)) {
+      throw makeError(`SipSdk: account sip:${validated.username}@${validated.domain} is already active on this client`, 'EEXIST');
+    }
+    if (this.#defaultAccount) {
+      const old = this.#defaultAccount;
+      const idx = this.#accounts.indexOf(old);
+      old._deactivate();
+      try { old._ua?.stop(); } catch { /* ignore */ }
+      if (idx !== -1) this.#accounts.splice(idx, 1);
+      this.#defaultAccount = this.#accounts[0] || null;
+    }
+    if (config.maxCalls !== undefined) this.maxCalls = config.maxCalls;
+    else this.maxCalls = 4;
+    return this.#addAccountInternal(validated, { makeDefault: true, skipValidation: true });
+  }
 
-    this.maxCalls = maxCalls;
-    this.#registered = false;
-    this.#domain = domain;
-    this.accountAor = `sip:${username}@${domain}`;
-    this.pcConfig = { iceServers };
+  #validateAccountConfig(config) {
+    if (!config || typeof config !== 'object') {
+      throw makeError('SipSdk: account config is required', 'EINVAL');
+    }
+    const username = config.username ?? config.user ?? '';
+    const { domain, password = '', wsUri, displayName = '', iceServers = [], maxCalls } = config;
+    if (!username) throw makeError('SipSdk: username is required', 'EINVAL');
+    if (!domain) throw makeError('SipSdk: domain is required', 'EINVAL');
+    if (!wsUri) throw makeError('SipSdk: wsUri is required', 'EINVAL');
+    return { username, domain, password, wsUri, displayName, iceServers, maxCalls };
+  }
 
+  #addAccountInternal(config, { makeDefault = false, skipValidation = false } = {}) {
+    const { username, domain, password, wsUri, displayName, iceServers, maxCalls } = skipValidation
+      ? config
+      : this.#validateAccountConfig(config);
+
+    const aor = `sip:${username}@${domain}`;
+    if (this.#accounts.some((a) => a.aor.toLowerCase() === aor.toLowerCase())) {
+      throw makeError(`SipSdk: account ${aor} is already active on this client`, 'EEXIST');
+    }
+    if (this.#accounts.length >= SIP_CLIENT_MAX_ACCOUNTS) {
+      throw makeError(`SipSdk: maximum accounts (${SIP_CLIENT_MAX_ACCOUNTS}) reached`, 'EBUSY');
+    }
+    if (!skipValidation && maxCalls !== undefined) {
+      this.maxCalls = maxCalls;
+    }
+
+    const pcConfig = { iceServers };
     const ua = new this.#JsSIP.UA({
       sockets: [new this.#JsSIP.WebSocketInterface(wsUri)],
-      uri: this.accountAor,
+      uri: aor,
       password: password || undefined,
       display_name: displayName || undefined,
       session_timers: true,
       register: true,
     });
-    this.#ua = ua;
+
+    const account = new SipAccount(this, {
+      id: this.#nextAccountId++,
+      aor,
+      user: username,
+      domain,
+      pcConfig,
+      ua,
+    });
+    this.#accounts.push(account);
+    if (makeDefault || !this.#defaultAccount) {
+      this.#defaultAccount = account;
+    }
 
     const report = (state, e) => {
-      if (this.#ua !== ua) return;
-      this.#registered = state === SipRegistrationState.Registered;
+      if (!account._active) return;
+      account._setRegState(state);
       const code = e?.response?.status_code || 0;
       const reason = e?.response?.reason_phrase || e?.cause || '';
-      this.emit('registrationStateChanged', { state, code, reason });
+      this.emit('accountRegistrationStateChanged', { account, state, code, reason });
+      if (this.#defaultAccount === account) {
+        this.emit('registrationStateChanged', { state, code, reason });
+      }
     };
     ua.on('registered', (e) => report(SipRegistrationState.Registered, e));
     ua.on('unregistered', (e) => report(SipRegistrationState.Unregistered, e));
     ua.on('registrationFailed', (e) => report(SipRegistrationState.Failed, e));
     ua.on('newRTCSession', (e) => {
-      if (this.#ua !== ua || e.originator !== 'remote') return;
+      if (!account._active || e.originator !== 'remote') return;
       if (this.#openCalls().length >= this.#maxCalls) {
         try {
           e.session.terminate({ status_code: 486, reason_phrase: 'Busy Here' });
@@ -694,37 +895,65 @@ export class SipClient extends Emitter {
         this.emit('callRejectedBusy', { callerUri });
         return;
       }
-      const call = new SipCall(this, e.session, { outgoing: false, video: offerHasVideo(e.request?.body) });
+      const call = new SipCall(this, e.session, {
+        outgoing: false,
+        video: offerHasVideo(e.request?.body),
+        account,
+      });
       this.#calls.add(call);
       this.emit('incomingCall', { call });
     });
     ua.on('newMessage', (e) => {
-      if (this.#ua !== ua || e.originator !== 'remote') return;
+      if (!account._active || e.originator !== 'remote') return;
       const contentType = (e.request?.getHeader?.('Content-Type') || 'text/plain').split(';')[0].trim();
-      this.emit('messageReceived', {
-        from: e.message?.remote_identity?.uri?.toString() || '',
-        contentType,
-        body: e.request?.body || '',
-      });
+      const from = e.message?.remote_identity?.uri?.toString() || '';
+      const body = e.request?.body || '';
+      this.emit('accountMessageReceived', { account, from, fromUri: from, contentType, body });
+      this.emit('messageReceived', { from, contentType, body });
     });
 
-    this.emit('registrationStateChanged', { state: SipRegistrationState.Registering, code: 0, reason: '' });
+    account._setRegState(SipRegistrationState.Registering);
+    this.emit('accountRegistrationStateChanged', {
+      account,
+      state: SipRegistrationState.Registering,
+      code: 0,
+      reason: '',
+    });
+    if (this.#defaultAccount === account) {
+      this.emit('registrationStateChanged', { state: SipRegistrationState.Registering, code: 0, reason: '' });
+    }
     ua.start();
+    return account;
   }
 
-  /** Removes every binding of the account from the registrar. */
+  /** Removes every binding of the default account from the registrar. */
   unregister() {
-    if (!this.#ua) return;
-    this.#ua.unregister({ all: true });
+    this.#defaultAccount?.unregister();
   }
 
   /**
-   * Places a call. target is an extension ("9001"), user@host, or a sip: URI.
+   * Places a call from the default account. target is an extension ("9001"), user@host, or a sip: URI.
    * @returns {SipCall}
    */
-  makeCall(target, { video = false } = {}) {
+  makeCall(target, options = {}) {
     if (!this.#started) throw new Error('SipSdk: call start() before makeCall()');
-    if (!this.#ua || !this.#registered) throw new Error('SipSdk: register an account before makeCall()');
+    if (!this.#defaultAccount || !this.#defaultAccount.isRegistered) {
+      throw new Error('SipSdk: register an account before makeCall()');
+    }
+    return this._makeCallFromAccount(this.#defaultAccount, target, options);
+  }
+
+  /** Alias for makeCall(). */
+  dial(target, options = {}) {
+    return this.makeCall(target, options);
+  }
+
+  /** @internal */
+  _makeCallFromAccount(account, target, options = {}) {
+    if (!this.#started) throw new Error('SipSdk: call start() before makeCall()');
+    if (!account || !account._active || !account.isRegistered) {
+      throw new Error('SipSdk: register an account before makeCall()');
+    }
     if (!target) throw new Error('SipSdk: target is required');
     if (this.#openCalls().length >= this.#maxCalls) {
       const err = new Error('SipSdk: maximum concurrent calls reached (Busy)');
@@ -732,12 +961,13 @@ export class SipClient extends Emitter {
       err.statusCode = 486;
       throw err;
     }
+    const { video = false } = typeof options === 'boolean' ? { video: options } : (options || {});
     this._autoHoldOthers(null);
-    const session = this.#ua.call(toSipUri(target, this.#domain), {
+    const session = account._ua.call(toSipUri(target, account.domain), {
       mediaConstraints: { audio: true, video: video ? VIDEO_CONSTRAINTS : false },
-      pcConfig: this.pcConfig,
+      pcConfig: account._pcConfig,
     });
-    const call = new SipCall(this, session, { outgoing: true, video: !!video });
+    const call = new SipCall(this, session, { outgoing: true, video: !!video, account });
     this.#calls.add(call);
     return call;
   }
@@ -928,16 +1158,28 @@ export class SipClient extends Emitter {
   }
 
   /**
-   * Sends a SIP MESSAGE (RFC 3428). target is an extension ("1002"), user@host, or a sip: URI.
+   * Sends a SIP MESSAGE (RFC 3428) from the default account.
+   * target is an extension ("1002"), user@host, or a sip: URI.
    * The result arrives as a 'messageStatusChanged' event { id, status, code, reason }.
    * @param {string} target
    * @param {string} body text, or a serialized body for other content types
    * @param {{contentType?: string}} [options] MIME type, default "text/plain"
    * @returns {number} local message id
    */
-  sendMessage(target, body, { contentType = 'text/plain' } = {}) {
+  sendMessage(target, body, options = {}) {
     if (!this.#started) throw new Error('SipSdk: call start() before sendMessage()');
-    if (!this.#ua || !this.#registered) throw new Error('SipSdk: register an account before sendMessage()');
+    if (!this.#defaultAccount || !this.#defaultAccount.isRegistered) {
+      throw new Error('SipSdk: register an account before sendMessage()');
+    }
+    return this._sendMessageFromAccount(this.#defaultAccount, target, body, options);
+  }
+
+  /** @internal */
+  _sendMessageFromAccount(account, target, body, { contentType = 'text/plain' } = {}) {
+    if (!this.#started) throw new Error('SipSdk: call start() before sendMessage()');
+    if (!account || !account._active || !account.isRegistered) {
+      throw new Error('SipSdk: register an account before sendMessage()');
+    }
     if (!target) throw new Error('SipSdk: target is required');
     if (!body) throw new Error('SipSdk: message body is required');
     if (!CONTENT_TYPE.test(contentType)) throw new Error(`SipSdk: invalid content type "${contentType}"`);
@@ -948,7 +1190,7 @@ export class SipClient extends Emitter {
       const reason = e?.response?.reason_phrase || e?.cause || '';
       this.emit('messageStatusChanged', { id, status, code, reason });
     };
-    this.#ua.sendMessage(toSipUri(target, this.#domain), body, {
+    account._ua.sendMessage(toSipUri(target, account.domain), body, {
       contentType,
       eventHandlers: {
         succeeded: (e) => report(SipMessageStatus.Sent, e),

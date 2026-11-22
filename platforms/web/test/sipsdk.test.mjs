@@ -3,7 +3,16 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { SipClient, SipCall, SipCallState, SipMessageStatus, SipRegistrationState, sanitizeSdp } from '../src/sipsdk.js';
+import {
+  SIP_CLIENT_MAX_ACCOUNTS,
+  SipAccount,
+  SipClient,
+  SipCall,
+  SipCallState,
+  SipMessageStatus,
+  SipRegistrationState,
+  sanitizeSdp,
+} from '../src/sipsdk.js';
 import { createFakeJsSIP, FakeSession } from './fake-jssip.mjs';
 
 const ACCOUNT = { username: '1002', domain: 'pbx.local', password: 'pw', wsUri: 'ws://pbx.local:8088/ws' };
@@ -645,4 +654,239 @@ test('local audio conference: merge, group hold/resume, mute, split dissolve, an
   assert.ok(s2.terminated);
   c3.hangup();
   s3.emit('ended', {});
+});
+
+// ---- Multi-account registration & routing ----
+
+const ACCOUNT_2 = { username: '1005', domain: 'pbx2.local', password: 'pw2', wsUri: 'ws://pbx2.local:8088/ws' };
+
+test('multi-account: simultaneous registration of 2 accounts on one SipClient', () => {
+  const { fake, client, events } = setup();
+  const accEvents = [];
+  client.on('accountRegistrationStateChanged', (e) => accEvents.push(e));
+
+  assert.throws(() => client.addAccount(ACCOUNT), (err) => err.code === 'EIO');
+  client.start();
+
+  const acc1 = client.addAccount(ACCOUNT);
+  const acc2 = client.addAccount(ACCOUNT_2);
+  assert.ok(acc1 instanceof SipAccount);
+  assert.ok(acc2 instanceof SipAccount);
+  assert.notEqual(acc1.id, acc2.id);
+  assert.equal(acc1.aor, 'sip:1002@pbx.local');
+  assert.equal(acc1.user, '1002');
+  assert.equal(acc1.domain, 'pbx.local');
+  assert.equal(acc2.aor, 'sip:1005@pbx2.local');
+  assert.equal(client.accountCount, 2);
+  assert.equal(client.defaultAccount, acc1);
+  assert.equal(client.accountAor, 'sip:1002@pbx.local');
+
+  // accounts getter returns a shallow copy
+  const list = client.accounts;
+  assert.deepEqual(list, [acc1, acc2]);
+  list.pop();
+  assert.equal(client.accountCount, 2);
+
+  fake.uas[0].emit('registered', { response: { status_code: 200, reason_phrase: 'OK' } });
+  fake.uas[1].emit('registered', { response: { status_code: 200, reason_phrase: 'OK' } });
+
+  assert.equal(acc1.isRegistered, true);
+  assert.equal(acc1.regState, SipRegistrationState.Registered);
+  assert.equal(acc2.isRegistered, true);
+  assert.equal(acc2.regState, SipRegistrationState.Registered);
+  assert.equal(client.isRegistered, true);
+
+  // accountRegistrationStateChanged fires for both; legacy registrationStateChanged only for defaultAccount
+  assert.equal(accEvents.filter((e) => e.account === acc1 && e.state === SipRegistrationState.Registered).length, 1);
+  assert.equal(accEvents.filter((e) => e.account === acc2 && e.state === SipRegistrationState.Registered).length, 1);
+  assert.deepEqual(events, [
+    { state: SipRegistrationState.Registering, code: 0, reason: '' },
+    { state: SipRegistrationState.Registered, code: 200, reason: 'OK' },
+  ]);
+});
+
+test('multi-account: dialing from a specific account and call.account attribution (outgoing & incoming)', () => {
+  const { fake, client } = setup();
+  client.start();
+  const acc1 = client.addAccount(ACCOUNT);
+  const acc2 = client.addAccount(ACCOUNT_2);
+  const ua1 = fake.uas[0];
+  const ua2 = fake.uas[1];
+  ua1.emit('registered', { response: { status_code: 200, reason_phrase: 'OK' } });
+  ua2.emit('registered', { response: { status_code: 200, reason_phrase: 'OK' } });
+
+  // Outgoing via default (acc1) and specific (acc2)
+  const out1 = client.makeCall('9001');
+  assert.equal(out1.account, acc1);
+  assert.equal(ua1.outgoing[0].remote_identity.uri.toString(), 'sip:9001@pbx.local');
+
+  const out2 = acc2.dial('9002', true);
+  assert.equal(out2.account, acc2);
+  assert.equal(out2.hasVideo, true);
+  assert.equal(ua2.outgoing[0].remote_identity.uri.toString(), 'sip:9002@pbx2.local');
+
+  // Transfer uses the call's owning account domain
+  ua2.outgoing[0].established = true;
+  out2.transfer('1009');
+  assert.equal(ua2.outgoing[0].referCalls[0][0], 'sip:1009@pbx2.local');
+
+  // Incoming on acc2 is attributed to acc2
+  const incomingCalls = [];
+  client.on('incomingCall', ({ call }) => incomingCalls.push(call));
+  const incSession = new FakeSession({ direction: 'incoming', uri: 'sip:1001@pbx2.local', displayName: 'Bob' });
+  ua2.emit('newRTCSession', { originator: 'remote', session: incSession, request: { body: AUDIO_OFFER } });
+  assert.equal(incomingCalls.length, 1);
+  assert.equal(incomingCalls[0].account, acc2);
+});
+
+test('multi-account: cross-account auto-hold, conference merge, and client-wide maxCalls cap', () => {
+  const { fake, client } = setup();
+  client.start();
+  const acc1 = client.addAccount({ ...ACCOUNT, maxCalls: 2 });
+  const acc2 = client.addAccount(ACCOUNT_2);
+  const ua1 = fake.uas[0];
+  const ua2 = fake.uas[1];
+  ua1.emit('registered', { response: { status_code: 200, reason_phrase: 'OK' } });
+  ua2.emit('registered', { response: { status_code: 200, reason_phrase: 'OK' } });
+
+  // Call 1 on acc1 becomes Established
+  const c1 = acc1.dial('9001');
+  const s1 = ua1.outgoing[0];
+  s1.established = true;
+  s1.emit('accepted', {});
+
+  // Call 2 on acc2 auto-holds Call 1 on acc1
+  const c2 = acc2.dial('9002');
+  const s2 = ua2.outgoing[0];
+  assert.deepEqual(s1.holdCalls, ['hold']);
+  s1.emit('hold', { originator: 'local' });
+  assert.equal(c1.isOnHold, true);
+  s2.established = true;
+  s2.emit('accepted', {});
+
+  // Client-wide maxCalls=2 rejects a 3rd outgoing call on either account AND incoming call with 486
+  assert.throws(() => acc1.dial('9003'), (err) => err.code === 'EBUSY');
+  assert.throws(() => acc2.dial('9003'), (err) => err.code === 'EBUSY');
+  const busySession = new FakeSession({ direction: 'incoming', uri: 'sip:1009@pbx2.local' });
+  ua2.emit('newRTCSession', { originator: 'remote', session: busySession, request: { body: AUDIO_OFFER } });
+  assert.deepEqual(busySession.terminated, { status_code: 486, reason_phrase: 'Busy Here' });
+
+  // Cross-account local audio conference merge unholds c1 and keeps both in conference
+  client.mergeCalls(c1, c2);
+  s1.emit('unhold', { originator: 'local' });
+  assert.equal(c1.isInConference, true);
+  assert.equal(c2.isInConference, true);
+  assert.equal(c1.isOnHold, false);
+  assert.equal(c2.isOnHold, false);
+});
+
+test('multi-account: per-account SIP MESSAGE send and accountMessageReceived', () => {
+  const { fake, client } = setup();
+  client.start();
+  const acc1 = client.addAccount(ACCOUNT);
+  const acc2 = client.addAccount(ACCOUNT_2);
+  const ua1 = fake.uas[0];
+  const ua2 = fake.uas[1];
+  ua1.emit('registered', { response: { status_code: 200, reason_phrase: 'OK' } });
+  ua2.emit('registered', { response: { status_code: 200, reason_phrase: 'OK' } });
+
+  const id = acc2.sendMessage('1001', 'hello from acc2', { contentType: 'text/plain' });
+  assert.ok(id > 0);
+  assert.equal(ua1.messages.length, 0);
+  assert.equal(ua2.messages.length, 1);
+  assert.equal(ua2.messages[0].target, 'sip:1001@pbx2.local');
+  assert.equal(ua2.messages[0].body, 'hello from acc2');
+
+  const accMsgs = [];
+  const legacyMsgs = [];
+  client.on('accountMessageReceived', (e) => accMsgs.push(e));
+  client.on('messageReceived', (e) => legacyMsgs.push(e));
+
+  const req = {
+    body: 'ping acc2',
+    getHeader: (name) => (name.toLowerCase() === 'content-type' ? 'text/plain;charset=UTF-8' : undefined),
+  };
+  ua2.emit('newMessage', {
+    originator: 'remote',
+    message: { remote_identity: { uri: { toString: () => 'sip:1001@pbx2.local' } } },
+    request: req,
+  });
+
+  assert.equal(accMsgs.length, 1);
+  assert.equal(accMsgs[0].account, acc2);
+  assert.equal(accMsgs[0].fromUri, 'sip:1001@pbx2.local');
+  assert.equal(accMsgs[0].from, 'sip:1001@pbx2.local');
+  assert.equal(accMsgs[0].contentType, 'text/plain');
+  assert.equal(accMsgs[0].body, 'ping acc2');
+  assert.deepEqual(legacyMsgs, [{ from: 'sip:1001@pbx2.local', contentType: 'text/plain', body: 'ping acc2' }]);
+});
+
+test('multi-account: setDefaultAccount, removeAccount, reregister, resetTransports, EEXIST, and 8-account cap', () => {
+  const { fake, client } = setup();
+  client.start();
+  const acc1 = client.addAccount(ACCOUNT);
+  const acc2 = client.addAccount(ACCOUNT_2);
+  const ua1 = fake.uas[0];
+  const ua2 = fake.uas[1];
+  ua1.emit('registered', { response: { status_code: 200, reason_phrase: 'OK' } });
+  ua2.emit('registered', { response: { status_code: 200, reason_phrase: 'OK' } });
+
+  // Duplicate active AOR rejected with EEXIST
+  assert.throws(() => client.addAccount({ ...ACCOUNT }), (err) => err.code === 'EEXIST');
+
+  // setDefaultAccount switches default used by makeCall / sendMessage
+  client.setDefaultAccount(acc2);
+  assert.equal(client.defaultAccount, acc2);
+  assert.equal(client.accountAor, 'sip:1005@pbx2.local');
+  const c2 = client.makeCall('9001');
+  assert.equal(c2.account, acc2);
+  const c1 = acc1.dial('9002');
+  assert.equal(c1.account, acc1);
+
+  // reregister & resetTransports
+  acc1.reregister();
+  assert.equal(ua1.registerCalls, 1);
+  client.resetTransports(true);
+  assert.equal(ua1.registerCalls, 2);
+  assert.equal(ua2.registerCalls, 1);
+
+  // removeAccount hangs up owned calls, leaves other accounts' calls intact, stops UA, re-elects default
+  const accEvents = [];
+  client.on('accountRegistrationStateChanged', (e) => accEvents.push(e));
+  client.removeAccount(acc2);
+  assert.deepEqual(ua2.outgoing[0].terminated, {});
+  assert.equal(ua1.outgoing[0].terminated, null);
+  assert.equal(ua2.stopped, true);
+  assert.equal(client.accountCount, 1);
+  assert.equal(client.defaultAccount, acc1);
+
+  // Late events from removed UA are ignored
+  ua2.emit('registered', {});
+  assert.equal(accEvents.length, 0);
+
+  // setDefaultAccount / removeAccount on inactive account throw
+  assert.throws(() => client.setDefaultAccount(acc2), (err) => err.code === 'EINVAL');
+  assert.throws(() => client.removeAccount(acc2), (err) => err.code === 'EINVAL');
+
+  // Remove last account -> defaultAccount becomes null
+  client.removeAccount(acc1);
+  assert.equal(client.accountCount, 0);
+  assert.equal(client.defaultAccount, null);
+  assert.equal(client.isRegistered, false);
+
+  // Enforce SIP_CLIENT_MAX_ACCOUNTS = 8 cap (EBUSY on 9th)
+  assert.equal(SIP_CLIENT_MAX_ACCOUNTS, 8);
+  for (let i = 1; i <= SIP_CLIENT_MAX_ACCOUNTS; i++) {
+    client.addAccount({ username: `200${i}`, domain: 'pbx.local', wsUri: 'ws://pbx.local:8088/ws' });
+  }
+  assert.equal(client.accountCount, 8);
+  assert.throws(
+    () => client.addAccount({ username: '2009', domain: 'pbx.local', wsUri: 'ws://pbx.local:8088/ws' }),
+    (err) => err.code === 'EBUSY',
+  );
+
+  // stop() cleans up all accounts
+  client.stop();
+  assert.equal(client.accountCount, 0);
+  assert.equal(client.defaultAccount, null);
 });
