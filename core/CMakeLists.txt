@@ -24,6 +24,7 @@ endif()
 
 # Core static library
 add_library(sip_core STATIC
+    src/account_session.cpp
     src/call_session.cpp
     src/conference_mixer.cpp
     src/engine.cpp
@@ -51,6 +52,7 @@ target_compile_definitions(sip_core
 
 # Core shared library (Windows DLL, macOS dylib, Linux so)
 add_library(sip_core_shared SHARED
+    src/account_session.cpp
     src/call_session.cpp
     src/conference_mixer.cpp
     src/engine.cpp
@@ -217,6 +219,21 @@ if(BARESIP_LIBRARY)
             ${CMAKE_CURRENT_SOURCE_DIR}/src
     )
 
+    add_executable(sip_core_multi_account_test
+        tests/test_multi_account.cpp
+    )
+
+    target_include_directories(sip_core_multi_account_test
+        PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+
+    target_link_libraries(sip_core_multi_account_test
+        PRIVATE
+            sip_core
+            ${BARESIP_LIBRARY}
+    )
+
     if(APPLE)
         target_link_libraries(sip_core_display_frames_test
             PRIVATE
@@ -301,6 +318,23 @@ if(BARESIP_LIBRARY)
                 z
                 m
         )
+
+        target_link_libraries(sip_core_multi_account_test
+            PRIVATE
+                "-framework Foundation"
+                "-framework CoreFoundation"
+                "-framework SystemConfiguration"
+                "-framework CoreAudio"
+                "-framework AudioToolbox"
+                "-framework AVFoundation"
+                "-framework CFNetwork"
+                "-framework CoreMedia"
+                "-framework CoreVideo"
+                "-framework VideoToolbox"
+                "-framework Security"
+                z
+                m
+        )
     else()
         find_package(Threads REQUIRED)
         set(CORE_TEST_LINUX_LIBS
@@ -317,5 +351,6 @@ if(BARESIP_LIBRARY)
         target_link_libraries(sip_core_audio_call_test PRIVATE ${CORE_TEST_LINUX_LIBS})
         target_link_libraries(sip_core_video_streaming_test PRIVATE ${CORE_TEST_LINUX_LIBS})
         target_link_libraries(sip_core_display_frames_test PRIVATE ${CORE_TEST_LINUX_LIBS})
+        target_link_libraries(sip_core_multi_account_test PRIVATE ${CORE_TEST_LINUX_LIBS})
     endif()
 endif()
