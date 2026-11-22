@@ -122,6 +122,8 @@ struct ClientJniContext {
     jmethodID onCallRejectedBusyMethodId = nullptr;
     jmethodID onMessageReceivedMethodId = nullptr;
     jmethodID onMessageStatusMethodId = nullptr;
+    jmethodID onAccountRegStateMethodId = nullptr;
+    jmethodID onAccountMessageReceivedMethodId = nullptr;
     jmethodID prepareAudioSessionMethodId = nullptr;
     jmethodID releaseAudioSessionMethodId = nullptr;
 
@@ -433,6 +435,50 @@ static void jni_on_message_status(sip_client_t *client, uint64_t message_id, sip
     }
 }
 
+static void jni_on_account_reg_state(sip_client_t *client, sip_account_t *account,
+                                     sip_reg_state_t state, int code, const char *reason,
+                                     void *user_data) {
+    (void)client;
+    auto *ctx = static_cast<ClientJniContext *>(user_data);
+    if (!ctx || ctx->destroyed.load() || !ctx->javaClientGlobalRef || !ctx->onAccountRegStateMethodId) return;
+
+    JniEnvGuard guard;
+    if (!guard.env) return;
+
+    const char *r = reason ? reason : "";
+    jbyteArray jReason = jni_bytes(guard.env, r, std::strlen(r));
+    if (jReason) {
+        guard.env->CallVoidMethod(ctx->javaClientGlobalRef, ctx->onAccountRegStateMethodId,
+                                  reinterpret_cast<jlong>(account), (jint)state, (jint)code, jReason);
+        guard.env->DeleteLocalRef(jReason);
+    }
+}
+
+static void jni_on_account_message_received(sip_client_t *client, sip_account_t *account,
+                                            const char *from_uri, const char *content_type,
+                                            const uint8_t *body, size_t body_len,
+                                            void *user_data) {
+    (void)client;
+    auto *ctx = static_cast<ClientJniContext *>(user_data);
+    if (!ctx || ctx->destroyed.load() || !ctx->javaClientGlobalRef || !ctx->onAccountMessageReceivedMethodId) return;
+
+    JniEnvGuard guard;
+    if (!guard.env) return;
+
+    const char *from = from_uri ? from_uri : "";
+    const char *ctype = content_type ? content_type : "text/plain";
+    jbyteArray jFrom = jni_bytes(guard.env, from, std::strlen(from));
+    jbyteArray jType = jni_bytes(guard.env, ctype, std::strlen(ctype));
+    jbyteArray jBody = jni_bytes(guard.env, body, body_len);
+    if (jFrom && jType && jBody) {
+        guard.env->CallVoidMethod(ctx->javaClientGlobalRef, ctx->onAccountMessageReceivedMethodId,
+                                  reinterpret_cast<jlong>(account), jFrom, jType, jBody);
+    }
+    if (jFrom) guard.env->DeleteLocalRef(jFrom);
+    if (jType) guard.env->DeleteLocalRef(jType);
+    if (jBody) guard.env->DeleteLocalRef(jBody);
+}
+
 static bool jni_prepare_audio_session(sip_client_t *client, void *user_data) {
     (void)client;
     auto *ctx = static_cast<ClientJniContext *>(user_data);
@@ -508,6 +554,8 @@ Java_com_sipsdk_SipClient_nativeCreate(JNIEnv *env, jobject thiz) {
     ctx->onConferenceChangedMethodId = env->GetMethodID(clientClass, "onNativeConferenceChanged", "([J)V");
     ctx->onMessageReceivedMethodId = env->GetMethodID(clientClass, "onNativeMessageReceived", "([B[B[B)V");
     ctx->onMessageStatusMethodId = env->GetMethodID(clientClass, "onNativeMessageStatus", "(JII[B)V");
+    ctx->onAccountRegStateMethodId = env->GetMethodID(clientClass, "onNativeAccountRegState", "(JII[B)V");
+    ctx->onAccountMessageReceivedMethodId = env->GetMethodID(clientClass, "onNativeAccountMessageReceived", "(J[B[B[B)V");
     ctx->prepareAudioSessionMethodId = env->GetMethodID(clientClass, "onNativePrepareAudioSession", "()Z");
     ctx->releaseAudioSessionMethodId = env->GetMethodID(clientClass, "onNativeReleaseAudioSession", "()V");
 
@@ -554,6 +602,11 @@ Java_com_sipsdk_SipClient_nativeCreate(JNIEnv *env, jobject thiz) {
         messageCallbacks.on_message_received = jni_on_message_received;
         messageCallbacks.on_message_status = jni_on_message_status;
         sip_client_set_message_callbacks(ctx->coreClient, &messageCallbacks);
+
+        sip_account_callbacks_t accountCallbacks = {};
+        accountCallbacks.on_account_reg_state = jni_on_account_reg_state;
+        accountCallbacks.on_account_message_received = jni_on_account_message_received;
+        sip_client_set_account_callbacks(ctx->coreClient, &accountCallbacks);
 
         sip_video_codec_driver_t codecDriver = sipsdk::AndroidMediaCodecDriver::get_c_driver();
         sip_client_set_video_codec_driver(ctx->coreClient, &codecDriver);
@@ -1031,6 +1084,269 @@ Java_com_sipsdk_SipCall_nativeAcceptTransfer(JNIEnv *env, jobject thiz, jlong ca
     auto *call = reinterpret_cast<sip_call_t *>(callHandle);
     if (!call) return -1;
     return sip_call_accept_transfer(call, accept == JNI_TRUE);
+}
+
+JNIEXPORT jlong JNICALL
+Java_com_sipsdk_SipCall_nativeCallGetAccount(JNIEnv *env, jobject thiz, jlong callHandle) {
+    (void)env;
+    (void)thiz;
+    auto *call = reinterpret_cast<sip_call_t *>(callHandle);
+    if (!call) return 0;
+    return reinterpret_cast<jlong>(sip_call_get_account(call));
+}
+
+static void jni_set_status(JNIEnv *env, jintArray outStatus, int rc) {
+    if (!outStatus || env->GetArrayLength(outStatus) <= 0) return;
+    jint status = rc;
+    if (rc == EBUSY) status = 16;
+    else if (rc == EEXIST) status = 17;
+    else if (rc == EINVAL) status = 22;
+    else if (rc == EIO) status = 5;
+    env->SetIntArrayRegion(outStatus, 0, 1, &status);
+}
+
+JNIEXPORT jlong JNICALL
+Java_com_sipsdk_SipClient_nativeAddAccount(JNIEnv *env, jobject thiz, jlong handle,
+                                           jstring user, jstring domain, jstring pwd,
+                                           jstring displayName, jstring transport, jint port,
+                                           jstring tlsCaFile, jboolean verifyTlsCert,
+                                           jstring mediaEnc, jint maxCalls,
+                                           jstring outboundProxy, jstring stunServer,
+                                           jstring stunUser, jstring stunPass,
+                                           jstring mediaNat, jint regInterval,
+                                           jintArray outStatus) {
+    (void)thiz;
+    auto *ctx = reinterpret_cast<ClientJniContext *>(handle);
+    if (!ctx || !ctx->coreClient) {
+        jni_set_status(env, outStatus, EINVAL);
+        return 0;
+    }
+
+    const char *u = user ? env->GetStringUTFChars(user, nullptr) : "";
+    const char *d = domain ? env->GetStringUTFChars(domain, nullptr) : "";
+    const char *p = pwd ? env->GetStringUTFChars(pwd, nullptr) : "";
+    const char *dn = displayName ? env->GetStringUTFChars(displayName, nullptr) : "";
+    const char *t = transport ? env->GetStringUTFChars(transport, nullptr) : "udp";
+    const char *ca = tlsCaFile ? env->GetStringUTFChars(tlsCaFile, nullptr) : "";
+    const char *me = mediaEnc ? env->GetStringUTFChars(mediaEnc, nullptr) : "";
+    const char *op = outboundProxy ? env->GetStringUTFChars(outboundProxy, nullptr) : "";
+    const char *ss = stunServer ? env->GetStringUTFChars(stunServer, nullptr) : "";
+    const char *su = stunUser ? env->GetStringUTFChars(stunUser, nullptr) : "";
+    const char *sp = stunPass ? env->GetStringUTFChars(stunPass, nullptr) : "";
+    const char *mn = mediaNat ? env->GetStringUTFChars(mediaNat, nullptr) : "";
+
+    sip_account_config_t cfg{};
+    cfg.user = u;
+    cfg.domain = d;
+    cfg.pwd = p;
+    cfg.transport = t;
+    cfg.port = port;
+    cfg.display_name = (dn && dn[0]) ? dn : nullptr;
+    cfg.outbound_proxy = (op && op[0]) ? op : nullptr;
+    cfg.stun_server = (ss && ss[0]) ? ss : nullptr;
+    cfg.stun_user = (su && su[0]) ? su : nullptr;
+    cfg.stun_pass = (sp && sp[0]) ? sp : nullptr;
+    cfg.media_nat = (mn && mn[0]) ? mn : nullptr;
+    cfg.reg_interval = regInterval > 0 ? static_cast<uint32_t>(regInterval) : 0;
+    cfg.tls_ca_file = (ca && ca[0]) ? ca : nullptr;
+    cfg.verify_tls_cert = (verifyTlsCert == JNI_TRUE);
+    cfg.media_enc = (me && me[0]) ? me : nullptr;
+    cfg.max_calls = maxCalls > 0 ? maxCalls : 4;
+
+    sip_account_t *account = nullptr;
+    int rc = sip_client_add_account(ctx->coreClient, &cfg, &account);
+
+    if (user) env->ReleaseStringUTFChars(user, u);
+    if (domain) env->ReleaseStringUTFChars(domain, d);
+    if (pwd) env->ReleaseStringUTFChars(pwd, p);
+    if (displayName) env->ReleaseStringUTFChars(displayName, dn);
+    if (transport) env->ReleaseStringUTFChars(transport, t);
+    if (tlsCaFile) env->ReleaseStringUTFChars(tlsCaFile, ca);
+    if (mediaEnc) env->ReleaseStringUTFChars(mediaEnc, me);
+    if (outboundProxy) env->ReleaseStringUTFChars(outboundProxy, op);
+    if (stunServer) env->ReleaseStringUTFChars(stunServer, ss);
+    if (stunUser) env->ReleaseStringUTFChars(stunUser, su);
+    if (stunPass) env->ReleaseStringUTFChars(stunPass, sp);
+    if (mediaNat) env->ReleaseStringUTFChars(mediaNat, mn);
+
+    jni_set_status(env, outStatus, rc);
+    return rc == 0 ? reinterpret_cast<jlong>(account) : 0;
+}
+
+JNIEXPORT jint JNICALL
+Java_com_sipsdk_SipClient_nativeRemoveAccount(JNIEnv *env, jobject thiz, jlong handle, jlong accountHandle) {
+    (void)env;
+    (void)thiz;
+    auto *ctx = reinterpret_cast<ClientJniContext *>(handle);
+    auto *account = reinterpret_cast<sip_account_t *>(accountHandle);
+    if (!ctx || !ctx->coreClient || !account) return EINVAL;
+    return sip_client_remove_account(ctx->coreClient, account);
+}
+
+JNIEXPORT jint JNICALL
+Java_com_sipsdk_SipClient_nativeSetDefaultAccount(JNIEnv *env, jobject thiz, jlong handle, jlong accountHandle) {
+    (void)env;
+    (void)thiz;
+    auto *ctx = reinterpret_cast<ClientJniContext *>(handle);
+    auto *account = reinterpret_cast<sip_account_t *>(accountHandle);
+    if (!ctx || !ctx->coreClient || !account) return EINVAL;
+    return sip_client_set_default_account(ctx->coreClient, account);
+}
+
+JNIEXPORT jlong JNICALL
+Java_com_sipsdk_SipClient_nativeGetDefaultAccount(JNIEnv *env, jobject thiz, jlong handle) {
+    (void)env;
+    (void)thiz;
+    auto *ctx = reinterpret_cast<ClientJniContext *>(handle);
+    if (!ctx || !ctx->coreClient) return 0;
+    return reinterpret_cast<jlong>(sip_client_get_default_account(ctx->coreClient));
+}
+
+JNIEXPORT jint JNICALL
+Java_com_sipsdk_SipClient_nativeGetAccountCount(JNIEnv *env, jobject thiz, jlong handle) {
+    (void)env;
+    (void)thiz;
+    auto *ctx = reinterpret_cast<ClientJniContext *>(handle);
+    if (!ctx || !ctx->coreClient) return 0;
+    return static_cast<jint>(sip_client_get_account_count(ctx->coreClient));
+}
+
+JNIEXPORT jlongArray JNICALL
+Java_com_sipsdk_SipClient_nativeGetAccounts(JNIEnv *env, jobject thiz, jlong handle) {
+    (void)thiz;
+    auto *ctx = reinterpret_cast<ClientJniContext *>(handle);
+    if (!ctx || !ctx->coreClient) return env->NewLongArray(0);
+    size_t count = sip_client_get_account_count(ctx->coreClient);
+    if (count == 0) return env->NewLongArray(0);
+    std::vector<sip_account_t *> raw(count, nullptr);
+    size_t written = sip_client_get_accounts(ctx->coreClient, raw.data(), count);
+    jlongArray arr = env->NewLongArray(static_cast<jsize>(written));
+    if (!arr) return nullptr;
+    if (written > 0) {
+        std::vector<jlong> handles(written);
+        for (size_t i = 0; i < written; ++i) {
+            handles[i] = reinterpret_cast<jlong>(raw[i]);
+        }
+        env->SetLongArrayRegion(arr, 0, static_cast<jsize>(written), handles.data());
+    }
+    return arr;
+}
+
+JNIEXPORT jint JNICALL
+Java_com_sipsdk_SipAccount_nativeAccountReregister(JNIEnv *env, jobject thiz, jlong accountHandle) {
+    (void)env;
+    (void)thiz;
+    auto *account = reinterpret_cast<sip_account_t *>(accountHandle);
+    if (!account) return EINVAL;
+    return sip_account_reregister(account);
+}
+
+JNIEXPORT jint JNICALL
+Java_com_sipsdk_SipAccount_nativeAccountUnregister(JNIEnv *env, jobject thiz, jlong accountHandle) {
+    (void)env;
+    (void)thiz;
+    auto *account = reinterpret_cast<sip_account_t *>(accountHandle);
+    if (!account) return EINVAL;
+    return sip_account_unregister(account);
+}
+
+JNIEXPORT jlong JNICALL
+Java_com_sipsdk_SipAccount_nativeAccountDial(JNIEnv *env, jobject thiz, jlong accountHandle,
+                                             jstring targetUri, jboolean withVideo, jintArray outStatus) {
+    (void)thiz;
+    auto *account = reinterpret_cast<sip_account_t *>(accountHandle);
+    if (!account) {
+        jni_set_status(env, outStatus, EINVAL);
+        return 0;
+    }
+
+    const char *target = targetUri ? env->GetStringUTFChars(targetUri, nullptr) : "";
+    sip_call_t *call = nullptr;
+    int rc = sip_account_dial(account, target, withVideo == JNI_TRUE, &call);
+    if (targetUri) env->ReleaseStringUTFChars(targetUri, target);
+
+    jni_set_status(env, outStatus, rc);
+    return rc == 0 ? reinterpret_cast<jlong>(call) : 0;
+}
+
+JNIEXPORT jlong JNICALL
+Java_com_sipsdk_SipAccount_nativeAccountSendMessage(JNIEnv *env, jobject thiz, jlong accountHandle,
+                                                    jstring peerUri, jstring contentType, jbyteArray body) {
+    (void)thiz;
+    auto *account = reinterpret_cast<sip_account_t *>(accountHandle);
+    if (!account || !peerUri || !contentType || !body) return -EINVAL;
+
+    const char *target = env->GetStringUTFChars(peerUri, nullptr);
+    const char *ctype = env->GetStringUTFChars(contentType, nullptr);
+    jsize len = env->GetArrayLength(body);
+    jbyte *bytes = env->GetByteArrayElements(body, nullptr);
+
+    uint64_t messageId = 0;
+    int rc = sip_account_send_message(account, target, ctype,
+                                      reinterpret_cast<const uint8_t *>(bytes), static_cast<size_t>(len), &messageId);
+
+    env->ReleaseByteArrayElements(body, bytes, JNI_ABORT);
+    env->ReleaseStringUTFChars(contentType, ctype);
+    env->ReleaseStringUTFChars(peerUri, target);
+    return rc == 0 ? static_cast<jlong>(messageId) : -static_cast<jlong>(rc);
+}
+
+JNIEXPORT jlong JNICALL
+Java_com_sipsdk_SipAccount_nativeAccountGetId(JNIEnv *env, jobject thiz, jlong accountHandle) {
+    (void)env;
+    (void)thiz;
+    auto *account = reinterpret_cast<sip_account_t *>(accountHandle);
+    return account ? static_cast<jlong>(sip_account_get_id(account)) : 0L;
+}
+
+JNIEXPORT jstring JNICALL
+Java_com_sipsdk_SipAccount_nativeAccountGetAor(JNIEnv *env, jobject thiz, jlong accountHandle) {
+    (void)thiz;
+    auto *account = reinterpret_cast<sip_account_t *>(accountHandle);
+    const char *aor = account ? sip_account_get_aor(account) : "";
+    return env->NewStringUTF(aor ? aor : "");
+}
+
+JNIEXPORT jstring JNICALL
+Java_com_sipsdk_SipAccount_nativeAccountGetUser(JNIEnv *env, jobject thiz, jlong accountHandle) {
+    (void)thiz;
+    auto *account = reinterpret_cast<sip_account_t *>(accountHandle);
+    const char *user = account ? sip_account_get_user(account) : "";
+    return env->NewStringUTF(user ? user : "");
+}
+
+JNIEXPORT jstring JNICALL
+Java_com_sipsdk_SipAccount_nativeAccountGetDomain(JNIEnv *env, jobject thiz, jlong accountHandle) {
+    (void)thiz;
+    auto *account = reinterpret_cast<sip_account_t *>(accountHandle);
+    const char *domain = account ? sip_account_get_domain(account) : "";
+    return env->NewStringUTF(domain ? domain : "");
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_sipsdk_SipAccount_nativeAccountIsRegistered(JNIEnv *env, jobject thiz, jlong accountHandle) {
+    (void)env;
+    (void)thiz;
+    auto *account = reinterpret_cast<sip_account_t *>(accountHandle);
+    return (account && sip_account_is_registered(account)) ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jint JNICALL
+Java_com_sipsdk_SipAccount_nativeAccountGetRegState(JNIEnv *env, jobject thiz, jlong accountHandle) {
+    (void)env;
+    (void)thiz;
+    auto *account = reinterpret_cast<sip_account_t *>(accountHandle);
+    return account ? static_cast<jint>(sip_account_get_reg_state(account)) : static_cast<jint>(SIP_REG_STATE_UNREGISTERED);
+}
+
+JNIEXPORT void JNICALL
+Java_com_sipsdk_SipAccount_nativeAccountDestroy(JNIEnv *env, jobject thiz, jlong accountHandle) {
+    (void)env;
+    (void)thiz;
+    auto *account = reinterpret_cast<sip_account_t *>(accountHandle);
+    if (account) {
+        sip_account_destroy(account);
+    }
 }
 
 JNIEXPORT jint JNICALL
