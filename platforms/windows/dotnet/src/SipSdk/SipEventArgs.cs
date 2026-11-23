@@ -235,6 +235,22 @@ namespace SipSdk
         }
     }
 
+    public class RecordingStateChangedEventArgs : EventArgs
+    {
+        public SipCall Call { get; }
+        public SipRecordingState State { get; }
+        public string Path { get; }
+        public int ErrorCode { get; }
+
+        public RecordingStateChangedEventArgs(SipCall call, SipRecordingState state, string path, int errorCode)
+        {
+            Call = call ?? throw new ArgumentNullException(nameof(call));
+            State = state;
+            Path = path ?? string.Empty;
+            ErrorCode = errorCode;
+        }
+    }
+
     /// <summary>
     /// Event arguments for per-account SIP registration state changes.
     /// </summary>

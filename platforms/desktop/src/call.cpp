@@ -100,6 +100,18 @@ bool Call::is_in_conference() const
     return m_handle ? sip_call_is_in_conference(m_handle) : false;
 }
 
+bool Call::is_recording() const
+{
+    return m_handle ? sip_call_is_recording(m_handle) : false;
+}
+
+std::string Call::get_recording_path() const
+{
+    if (!m_handle) return "";
+    const char *p = sip_call_get_recording_path(m_handle);
+    return p ? p : "";
+}
+
 uint32_t Call::get_duration() const
 {
     return m_handle ? sip_call_get_duration(m_handle) : 0;
@@ -188,6 +200,18 @@ int Call::accept_transfer(bool accept)
 {
     if (!m_handle) return -1;
     return sip_call_accept_transfer(m_handle, accept);
+}
+
+int Call::start_recording(const std::string &path, RecordingMode mode)
+{
+    if (!m_handle || path.empty()) return -1;
+    return sip_call_start_recording(m_handle, path.c_str(), static_cast<sip_recording_mode_t>(mode));
+}
+
+int Call::stop_recording()
+{
+    if (!m_handle) return -1;
+    return sip_call_stop_recording(m_handle);
 }
 
 void Call::invalidate()

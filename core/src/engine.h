@@ -113,6 +113,13 @@ public:
     void dispatch_message_status(uint64_t message_id, sip_message_status_t status, int code, const char *reason);
     void dispatch_message_received(std::string from_uri, std::string content_type, std::string body);
 
+    int set_recording_callbacks(const sip_recording_callbacks_t *callbacks);
+    int set_media_recorder_driver(std::shared_ptr<IMediaRecorderDriver> driver);
+    int start_recording(sip_call_t *call, const char *path, sip_recording_mode_t mode);
+    int stop_recording(sip_call_t *call);
+    void dispatch_recording_state(sip_call_t *call, sip_recording_state_t state,
+                                  const char *path, int error_code);
+
     int set_video_capture_driver(std::shared_ptr<IVideoCaptureDriver> driver);
     int set_remote_renderer(std::shared_ptr<IVideoRendererDriver> renderer);
     int set_local_renderer(std::shared_ptr<IVideoRendererDriver> renderer);
@@ -212,6 +219,9 @@ private:
     sip_message_callbacks_t m_message_callbacks{};
     std::atomic<uint64_t> m_next_message_id{1};
     struct sip_lsnr *m_message_lsnr{nullptr};
+
+    mutable std::mutex m_recording_mutex;
+    sip_recording_callbacks_t m_recording_callbacks{};
 
     std::unique_ptr<MediaDriverManager> m_media_manager;
 };

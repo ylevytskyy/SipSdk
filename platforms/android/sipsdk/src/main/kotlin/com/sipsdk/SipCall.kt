@@ -34,6 +34,12 @@ class SipCall internal constructor(
     val isInConference: Boolean
         get() = if (nativeHandle != 0L) nativeIsInConference(nativeHandle) else false
 
+    val isRecording: Boolean
+        get() = if (nativeHandle != 0L) nativeIsRecording(nativeHandle) else false
+
+    val recordingPath: String
+        get() = if (nativeHandle != 0L) nativeGetRecordingPath(nativeHandle) else ""
+
     fun answer(withVideo: Boolean = false): Int =
         if (nativeHandle != 0L) nativeAnswer(nativeHandle, withVideo) else -1
 
@@ -60,6 +66,12 @@ class SipCall internal constructor(
     fun acceptTransfer(accept: Boolean): Int =
         if (nativeHandle != 0L) nativeAcceptTransfer(nativeHandle, accept) else -1
 
+    fun startRecording(path: String, mode: SipRecordingMode = SipRecordingMode.AUDIO_STEREO): Int =
+        if (nativeHandle != 0L) nativeStartRecording(nativeHandle, path, mode.nativeValue) else -1
+
+    fun stopRecording(): Int =
+        if (nativeHandle != 0L) nativeStopRecording(nativeHandle) else -1
+
     private external fun nativeAnswer(handle: Long, withVideo: Boolean): Int
     private external fun nativeHangup(handle: Long, code: Int, reason: String): Int
     private external fun nativeSetHold(handle: Long, hold: Boolean): Int
@@ -75,5 +87,9 @@ class SipCall internal constructor(
     private external fun nativeTransfer(handle: Long, target: String): Int
     private external fun nativeAttendedTransfer(handle: Long, consultHandle: Long): Int
     private external fun nativeAcceptTransfer(handle: Long, accept: Boolean): Int
+    private external fun nativeStartRecording(handle: Long, path: String, mode: Int): Int
+    private external fun nativeStopRecording(handle: Long): Int
+    private external fun nativeIsRecording(handle: Long): Boolean
+    private external fun nativeGetRecordingPath(handle: Long): String
     private external fun nativeCallGetAccount(callHandle: Long): Long
 }

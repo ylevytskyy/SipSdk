@@ -31,6 +31,7 @@ typedef NS_ENUM(NSInteger, SipMacMessageStatus) {
 - (void)client:(SipMacClient *)client call:(SipMacCall *)call didReceiveTransferRequest:(NSString *)referToUri hasReplaces:(BOOL)hasReplaces;
 - (void)client:(SipMacClient *)client didRejectIncomingCallBusyFrom:(NSString *)callerUri;
 - (void)client:(SipMacClient *)client didUpdateConferenceCalls:(NSArray<SipMacCall *> *)calls;
+- (void)client:(SipMacClient *)client call:(SipMacCall *)call didChangeRecordingState:(SipMacRecordingState)state path:(NSString *)path errorCode:(NSInteger)errorCode;
 @end
 
 @interface SipMacClient : NSObject

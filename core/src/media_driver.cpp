@@ -2184,7 +2184,183 @@ static struct aufilt s_conf_aufilt = {
 
 static bool s_conf_aufilt_registered = false;
 
+struct RecFiltEncSt {
+    struct aufilt_enc_st af;
+    const struct audio *au{nullptr};
+    std::shared_ptr<CallRecorder> recorder;
+};
+
+struct RecFiltDecSt {
+    struct aufilt_dec_st af;
+    const struct audio *au{nullptr};
+    std::shared_ptr<CallRecorder> recorder;
+};
+
+static void rec_filt_enc_dtor(void *arg)
+{
+    auto *st = static_cast<RecFiltEncSt *>(arg);
+    st->~RecFiltEncSt();
+}
+
+static void rec_filt_dec_dtor(void *arg)
+{
+    auto *st = static_cast<RecFiltDecSt *>(arg);
+    st->~RecFiltDecSt();
+}
+
+static int rec_aufilt_encupd(struct aufilt_enc_st **stp, void **ctx,
+                             const struct aufilt *af, struct aufilt_prm *prm,
+                             const struct audio *au)
+{
+    (void)ctx;
+    (void)af;
+    (void)prm;
+    if (!stp) return EINVAL;
+    if (*stp) {
+        auto *st = reinterpret_cast<RecFiltEncSt *>(*stp);
+        st->au = au;
+        if (s_active_manager) {
+            st->recorder = s_active_manager->call_recorder_shared();
+        }
+        return 0;
+    }
+    void *raw = mem_zalloc(sizeof(RecFiltEncSt), rec_filt_enc_dtor);
+    if (!raw) return ENOMEM;
+    auto *st = new (raw) RecFiltEncSt();
+    st->au = au;
+    if (s_active_manager) {
+        st->recorder = s_active_manager->call_recorder_shared();
+    }
+    *stp = &st->af;
+    return 0;
+}
+
+static int rec_aufilt_encode(struct aufilt_enc_st *st_base, struct auframe *af)
+{
+    if (!st_base || !af || af->fmt != AUFMT_S16LE || !af->sampv || af->sampc == 0) {
+        return 0;
+    }
+    auto *st = reinterpret_cast<RecFiltEncSt *>(st_base);
+    if (!st->recorder) return 0;
+    st->recorder->on_encode(
+        reinterpret_cast<uint64_t>(st->au),
+        static_cast<const int16_t *>(af->sampv),
+        af->sampc,
+        af->srate,
+        af->ch);
+    return 0;
+}
+
+static int rec_aufilt_decupd(struct aufilt_dec_st **stp, void **ctx,
+                             const struct aufilt *af, struct aufilt_prm *prm,
+                             const struct audio *au)
+{
+    (void)ctx;
+    (void)af;
+    (void)prm;
+    if (!stp) return EINVAL;
+    if (*stp) {
+        auto *st = reinterpret_cast<RecFiltDecSt *>(*stp);
+        st->au = au;
+        if (s_active_manager) {
+            st->recorder = s_active_manager->call_recorder_shared();
+        }
+        return 0;
+    }
+    void *raw = mem_zalloc(sizeof(RecFiltDecSt), rec_filt_dec_dtor);
+    if (!raw) return ENOMEM;
+    auto *st = new (raw) RecFiltDecSt();
+    st->au = au;
+    if (s_active_manager) {
+        st->recorder = s_active_manager->call_recorder_shared();
+    }
+    *stp = &st->af;
+    return 0;
+}
+
+static int rec_aufilt_decode(struct aufilt_dec_st *st_base, struct auframe *af)
+{
+    if (!st_base || !af || af->fmt != AUFMT_S16LE || !af->sampv || af->sampc == 0) {
+        return 0;
+    }
+    auto *st = reinterpret_cast<RecFiltDecSt *>(st_base);
+    if (!st->recorder) return 0;
+    st->recorder->on_decode(
+        reinterpret_cast<uint64_t>(st->au),
+        static_cast<const int16_t *>(af->sampv),
+        af->sampc,
+        af->srate,
+        af->ch);
+    return 0;
+}
+
+static struct aufilt s_rec_aufilt = {
+    LE_INIT,
+    "sipsdk_rec",
+    true,
+    rec_aufilt_encupd,
+    rec_aufilt_encode,
+    rec_aufilt_decupd,
+    rec_aufilt_decode,
+};
+
+static bool s_rec_aufilt_registered = false;
+
 } // namespace
+
+CApiMediaRecorderDriver::CApiMediaRecorderDriver(const sip_media_recorder_driver_t &driver)
+    : m_driver(driver)
+{
+}
+
+int CApiMediaRecorderDriver::start(const char *path, int sample_rate, int channels,
+                                   int video_width, int video_height)
+{
+    if (m_driver.start) {
+        return m_driver.start(m_driver.user_data, path, sample_rate, channels,
+                              video_width, video_height);
+    }
+    return 0;
+}
+
+void CApiMediaRecorderDriver::write_audio(const int16_t *pcm, size_t sample_count, uint64_t timestamp_ns)
+{
+    if (m_driver.write_audio) {
+        m_driver.write_audio(m_driver.user_data, pcm, sample_count, timestamp_ns);
+    }
+}
+
+void CApiMediaRecorderDriver::write_video(const RecordedVideoFrame &frame)
+{
+    if (m_driver.write_video) {
+        sip_video_frame_t cf{};
+        cf.width = frame.width;
+        cf.height = frame.height;
+        cf.y = frame.y;
+        cf.u = frame.u;
+        cf.v = frame.v;
+        cf.y_stride = frame.y_stride;
+        cf.u_stride = frame.u_stride;
+        cf.v_stride = frame.v_stride;
+        cf.timestamp_ns = frame.timestamp_ns;
+        m_driver.write_video(m_driver.user_data, &cf);
+    }
+}
+
+int CApiMediaRecorderDriver::stop()
+{
+    if (m_driver.stop) {
+        return m_driver.stop(m_driver.user_data);
+    }
+    return 0;
+}
+
+void MediaDriverManager::set_media_recorder_driver(std::shared_ptr<IMediaRecorderDriver> driver)
+{
+    if (m_call_recorder) {
+        m_call_recorder->set_media_recorder_driver(std::move(driver));
+    }
+}
 
 int MediaDriverManager::register_baresip_plugins()
 {
@@ -2209,6 +2385,10 @@ int MediaDriverManager::register_baresip_plugins()
     if (!s_conf_aufilt_registered) {
         aufilt_register(baresip_aufiltl(), &s_conf_aufilt);
         s_conf_aufilt_registered = true;
+    }
+    if (!s_rec_aufilt_registered) {
+        aufilt_register(baresip_aufiltl(), &s_rec_aufilt);
+        s_rec_aufilt_registered = true;
     }
 
     int rc = vidsrc_register(&m_vidsrc,
@@ -2269,7 +2449,12 @@ void MediaDriverManager::unregister_baresip_plugins()
         aufilt_unregister(&s_conf_aufilt);
         s_conf_aufilt_registered = false;
     }
+    if (s_rec_aufilt_registered) {
+        aufilt_unregister(&s_rec_aufilt);
+        s_rec_aufilt_registered = false;
+    }
     m_conference_mixer->clear();
+    m_call_recorder->stop_all();
 
     if (m_vidsrc) {
         m_vidsrc = static_cast<struct vidsrc *>(mem_deref(m_vidsrc));
@@ -2296,7 +2481,8 @@ void MediaDriverManager::handle_display_frame(const struct vidframe *frame, uint
     if (!frame) return;
     m_frames_decoded.fetch_add(1, std::memory_order_relaxed);
     auto renderer = remote_renderer();
-    if (!renderer) return;
+    const bool recording = m_call_recorder && m_call_recorder->has_any_recording();
+    if (!renderer && !recording) return;
 
     VideoFrame vf;
     vf.width = static_cast<int>(frame->size.w);
@@ -2309,7 +2495,23 @@ void MediaDriverManager::handle_display_frame(const struct vidframe *frame, uint
     vf.v_stride = frame->linesize[2];
     vf.timestamp_ns = timestamp * 1000ULL;
 
-    renderer->render_frame(vf);
+    if (recording) {
+        RecordedVideoFrame rvf;
+        rvf.width = vf.width;
+        rvf.height = vf.height;
+        rvf.y = vf.y;
+        rvf.u = vf.u;
+        rvf.v = vf.v;
+        rvf.y_stride = vf.y_stride;
+        rvf.u_stride = vf.u_stride;
+        rvf.v_stride = vf.v_stride;
+        rvf.timestamp_ns = vf.timestamp_ns;
+        m_call_recorder->on_video_frame(rvf);
+    }
+
+    if (renderer) {
+        renderer->render_frame(vf);
+    }
 }
 
 void MediaDriverManager::handle_stream_resized(int width, int height)

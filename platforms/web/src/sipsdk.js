@@ -30,6 +30,18 @@ export const SipMessageStatus = Object.freeze({
   Displayed: 3, // reserved: IMDN display (read) notification (RFC 5438)
 });
 
+export const SipRecordingMode = Object.freeze({
+  AudioStereo: 0,
+  AudioMono: 1,
+  AudioVideo: 2,
+});
+
+export const SipRecordingState = Object.freeze({
+  Idle: 0,
+  Recording: 1,
+  Failed: 2,
+});
+
 /** Maximum concurrent SIP accounts hosted by a single SipClient. */
 export const SIP_CLIENT_MAX_ACCOUNTS = 8;
 
@@ -149,6 +161,11 @@ export class SipCall extends Emitter {
   #statsTimer = null;
   #prevStats = null;
   #pendingRefer = null;
+  #recorder = null;
+  #recorderCtx = null;
+  #recordChunks = [];
+  #recordingMode = null;
+  #recordingStopPromise = null;
 
   constructor(client, session, { outgoing, video, account = null }) {
     super();
@@ -170,6 +187,7 @@ export class SipCall extends Emitter {
   get isOnHold() { return this.#onHold; }
   get isMuted() { return this.#muted; }
   get isInConference() { return this.#inConference; }
+  get isRecording() { return this.#recorder !== null; }
   get isLocalVideoEnabled() { return this.#localVideoEnabled; }
   get isClosed() { return this.#state === SipCallState.Closed; }
   get isSecure() {
@@ -321,6 +339,103 @@ export class SipCall extends Emitter {
     this.#session.sendDTMF(digits, { transportType: 'INFO' });
   }
 
+  /**
+   * Starts local browser recording using MediaRecorder + Web Audio API.
+   * AudioStereo maps local mic -> left channel and remote audio -> right channel.
+   */
+  startRecording({ mode = SipRecordingMode.AudioStereo, mimeType } = {}) {
+    this.#assertOpen();
+    if (this.#recorder) throw new Error('SipSdk: call is already recording');
+    const MediaRecorderCtor = globalThis.MediaRecorder;
+    if (!MediaRecorderCtor) throw new Error('SipSdk: MediaRecorder is not available');
+
+    const tracks = [];
+    const AudioCtx = globalThis.AudioContext || globalThis.webkitAudioContext;
+    if (AudioCtx && (this.#localStream || this.#remoteStream)) {
+      const ctx = new AudioCtx();
+      const dest = ctx.createMediaStreamDestination();
+      if (mode === SipRecordingMode.AudioMono) {
+        if (this.#localStream?.getAudioTracks?.().length) {
+          ctx.createMediaStreamSource(new MediaStream(this.#localStream.getAudioTracks())).connect(dest);
+        }
+        if (this.#remoteStream?.getAudioTracks?.().length) {
+          ctx.createMediaStreamSource(new MediaStream(this.#remoteStream.getAudioTracks())).connect(dest);
+        }
+      } else {
+        const merger = ctx.createChannelMerger(2);
+        merger.connect(dest);
+        if (this.#localStream?.getAudioTracks?.().length) {
+          ctx.createMediaStreamSource(new MediaStream(this.#localStream.getAudioTracks())).connect(merger, 0, 0);
+        }
+        if (this.#remoteStream?.getAudioTracks?.().length) {
+          ctx.createMediaStreamSource(new MediaStream(this.#remoteStream.getAudioTracks())).connect(merger, 0, 1);
+        }
+      }
+      for (const t of dest.stream.getAudioTracks()) tracks.push(t);
+      this.#recorderCtx = ctx;
+    } else if (this.#remoteStream?.getAudioTracks?.().length) {
+      tracks.push(...this.#remoteStream.getAudioTracks());
+    } else if (this.#localStream?.getAudioTracks?.().length) {
+      tracks.push(...this.#localStream.getAudioTracks());
+    }
+
+    if (mode === SipRecordingMode.AudioVideo && this.#remoteStream?.getVideoTracks?.().length) {
+      tracks.push(...this.#remoteStream.getVideoTracks());
+    }
+    if (tracks.length === 0) {
+      if (this.#recorderCtx) {
+        this.#recorderCtx.close?.().catch?.(() => {});
+        this.#recorderCtx = null;
+      }
+      throw new Error('SipSdk: no active media tracks available to record');
+    }
+
+    const combined = new MediaStream(tracks);
+    const options = {};
+    if (mimeType) options.mimeType = mimeType;
+    const rec = new MediaRecorderCtor(combined, options);
+    this.#recordChunks = [];
+    this.#recordingMode = mode;
+    this.#recorder = rec;
+    rec.ondataavailable = (ev) => {
+      if (ev?.data && ev.data.size > 0) this.#recordChunks.push(ev.data);
+    };
+    rec.start(250);
+    this.emit('recordingStateChanged', { call: this, state: SipRecordingState.Recording, errorCode: 0 });
+    this.#client.emit('recordingStateChanged', { call: this, state: SipRecordingState.Recording, errorCode: 0 });
+  }
+
+  /** Stops recording and resolves with the recorded Blob (or null if idle). */
+  stopRecording() {
+    if (!this.#recorder) return Promise.resolve(null);
+    if (this.#recordingStopPromise) return this.#recordingStopPromise;
+    const rec = this.#recorder;
+    const ctx = this.#recorderCtx;
+    this.#recorder = null;
+    this.#recorderCtx = null;
+    this.#recordingStopPromise = new Promise((resolve) => {
+      const finish = () => {
+        const type = rec.mimeType || (this.#recordingMode === SipRecordingMode.AudioVideo ? 'video/webm' : 'audio/webm');
+        const blob = new Blob(this.#recordChunks, { type });
+        this.#recordChunks = [];
+        this.#recordingMode = null;
+        this.#recordingStopPromise = null;
+        if (ctx) ctx.close?.().catch?.(() => {});
+        this.emit('recordingStateChanged', { call: this, state: SipRecordingState.Idle, blob, errorCode: 0 });
+        this.#client.emit('recordingStateChanged', { call: this, state: SipRecordingState.Idle, blob, errorCode: 0 });
+        resolve(blob);
+      };
+      rec.onstop = finish;
+      try {
+        if (rec.state !== 'inactive') rec.stop();
+        else finish();
+      } catch {
+        finish();
+      }
+    });
+    return this.#recordingStopPromise;
+  }
+
   /** Blind call transfer (SIP REFER) to target extension, user@host, or sip: URI. */
   transfer(target) {
     this.#assertOpen();
@@ -458,6 +573,7 @@ export class SipCall extends Emitter {
     if (state === SipCallState.Closed) {
       this.#closedAt = this.#client.now();
       this.#stopStatsTimer();
+      this.stopRecording();
       this.#client._removeCall(this);
       this.#detachStreams();
     }

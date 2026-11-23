@@ -630,6 +630,23 @@ struct ClientCallbacks {
         });
     }
 
+    static void on_recording_state(sip_client_t *c, sip_call_t *call, sip_recording_state_t state,
+                                   const char *path, int error_code, void *user_data)
+    {
+        (void)c;
+        auto *self = (__bridge SipMacClient *)user_data;
+        if (!self || !call) return;
+
+        SipMacCall *macCall = [self getOrCreateCall:call];
+        NSString *pStr = (path ? [NSString stringWithUTF8String:path] : nil) ?: @"";
+        SipMacRecordingState recState = static_cast<SipMacRecordingState>(state);
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if ([self.delegate respondsToSelector:@selector(client:call:didChangeRecordingState:path:errorCode:)]) {
+                [self.delegate client:self call:macCall didChangeRecordingState:recState path:pStr errorCode:error_code];
+            }
+        });
+    }
+
     static void on_dtmf_digit(sip_call_t *call, const char *digit, void *user_data)
     {
         auto *self = (__bridge SipMacClient *)user_data;
@@ -942,6 +959,11 @@ static bool set_default_audio_device_by_name(NSString *targetName, bool is_input
     msgCb.on_message_received = ClientCallbacks::on_message_received;
     msgCb.on_message_status = ClientCallbacks::on_message_status;
     sip_client_set_message_callbacks(_client, &msgCb);
+
+    sip_recording_callbacks_t recCb;
+    std::memset(&recCb, 0, sizeof(recCb));
+    recCb.on_recording_state = ClientCallbacks::on_recording_state;
+    sip_client_set_recording_callbacks(_client, &recCb);
 
     sip_account_callbacks_t accCb;
     std::memset(&accCb, 0, sizeof(accCb));

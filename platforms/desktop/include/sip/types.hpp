@@ -72,6 +72,18 @@ struct IncomingMessage {
     std::string body;          // raw body bytes
 };
 
+enum class RecordingMode {
+    AudioStereo = 0,
+    AudioMono = 1,
+    AudioVideo = 2
+};
+
+enum class RecordingState {
+    Idle = 0,
+    Recording = 1,
+    Failed = 2
+};
+
 struct AccountConfig {
     std::string username;
     std::string domain;

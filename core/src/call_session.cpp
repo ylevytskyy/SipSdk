@@ -130,6 +130,28 @@ bool sip_call_t::is_closed() const
     return m_closed.load();
 }
 
+const char *sip_call_t::get_recording_path() const
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_recording_path.c_str();
+}
+
+uint64_t sip_call_t::recording_leg_id() const
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_recording_leg_id;
+}
+
+void sip_call_t::set_recording_state(bool recording, uint64_t leg_id, const std::string &path)
+{
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_recording_leg_id = recording ? leg_id : 0;
+        m_recording_path = recording ? path : std::string();
+    }
+    m_is_recording.store(recording);
+}
+
 bool sip_call_t::is_secure() const
 {
     std::lock_guard<std::mutex> lock(m_mutex);

@@ -122,6 +122,11 @@ struct ClientJniContext {
     jmethodID onCallRejectedBusyMethodId = nullptr;
     jmethodID onMessageReceivedMethodId = nullptr;
     jmethodID onMessageStatusMethodId = nullptr;
+    jmethodID onRecordingStateMethodId = nullptr;
+    jmethodID onRecorderStartMethodId = nullptr;
+    jmethodID onRecorderAudioMethodId = nullptr;
+    jmethodID onRecorderVideoMethodId = nullptr;
+    jmethodID onRecorderStopMethodId = nullptr;
     jmethodID onAccountRegStateMethodId = nullptr;
     jmethodID onAccountMessageReceivedMethodId = nullptr;
     jmethodID prepareAudioSessionMethodId = nullptr;
@@ -435,6 +440,92 @@ static void jni_on_message_status(sip_client_t *client, uint64_t message_id, sip
     }
 }
 
+static void jni_on_recording_state(sip_client_t *client, sip_call_t *call, sip_recording_state_t state,
+                                   const char *path, int error_code, void *user_data) {
+    (void)client;
+    auto *ctx = static_cast<ClientJniContext *>(user_data);
+    if (!ctx || ctx->destroyed.load() || !ctx->javaClientGlobalRef || !ctx->onRecordingStateMethodId) return;
+
+    JniEnvGuard guard;
+    if (!guard.env) return;
+
+    const char *p = path ? path : "";
+    jbyteArray jPath = jni_bytes(guard.env, p, std::strlen(p));
+    if (jPath) {
+        guard.env->CallVoidMethod(ctx->javaClientGlobalRef, ctx->onRecordingStateMethodId,
+                                  reinterpret_cast<jlong>(call), (jint)state, jPath, (jint)error_code);
+        guard.env->DeleteLocalRef(jPath);
+    }
+}
+
+static int jni_recorder_start(void *user_data, const char *path, int sample_rate, int channels,
+                              int video_width, int video_height) {
+    auto *ctx = static_cast<ClientJniContext *>(user_data);
+    if (!ctx || ctx->destroyed.load() || !ctx->javaClientGlobalRef || !ctx->onRecorderStartMethodId) return EIO;
+    JniEnvGuard guard;
+    if (!guard.env) return EIO;
+    const char *p = path ? path : "";
+    jbyteArray jPath = jni_bytes(guard.env, p, std::strlen(p));
+    if (!jPath) return ENOMEM;
+    jint rc = guard.env->CallIntMethod(ctx->javaClientGlobalRef, ctx->onRecorderStartMethodId,
+                                       jPath, (jint)sample_rate, (jint)channels, (jint)video_width, (jint)video_height);
+    guard.env->DeleteLocalRef(jPath);
+    return (int)rc;
+}
+
+static void jni_recorder_write_audio(void *user_data, const int16_t *pcm, size_t sample_count, uint64_t ts_ns) {
+    auto *ctx = static_cast<ClientJniContext *>(user_data);
+    if (!ctx || ctx->destroyed.load() || !ctx->javaClientGlobalRef || !ctx->onRecorderAudioMethodId || !pcm || sample_count == 0) return;
+    JniEnvGuard guard;
+    if (!guard.env) return;
+    jbyteArray jPcm = jni_bytes(guard.env, pcm, sample_count * sizeof(int16_t));
+    if (jPcm) {
+        guard.env->CallVoidMethod(ctx->javaClientGlobalRef, ctx->onRecorderAudioMethodId,
+                                  jPcm, static_cast<jlong>(ts_ns));
+        guard.env->DeleteLocalRef(jPcm);
+    }
+}
+
+static void jni_recorder_write_video(void *user_data, const sip_video_frame_t *frame) {
+    auto *ctx = static_cast<ClientJniContext *>(user_data);
+    if (!ctx || ctx->destroyed.load() || !ctx->javaClientGlobalRef || !ctx->onRecorderVideoMethodId || !frame) return;
+    if (!frame->y || !frame->u || !frame->v || frame->width <= 0 || frame->height <= 0) return;
+    JniEnvGuard guard;
+    if (!guard.env) return;
+    const int w = frame->width;
+    const int h = frame->height;
+    const int uv_w = w / 2;
+    const int uv_h = h / 2;
+    std::vector<uint8_t> packed;
+    packed.reserve(static_cast<size_t>(w * h + 2 * uv_w * uv_h));
+    for (int r = 0; r < h; ++r) {
+        const uint8_t *row = frame->y + static_cast<size_t>(r) * static_cast<size_t>(frame->y_stride);
+        packed.insert(packed.end(), row, row + w);
+    }
+    for (int r = 0; r < uv_h; ++r) {
+        const uint8_t *row = frame->u + static_cast<size_t>(r) * static_cast<size_t>(frame->u_stride);
+        packed.insert(packed.end(), row, row + uv_w);
+    }
+    for (int r = 0; r < uv_h; ++r) {
+        const uint8_t *row = frame->v + static_cast<size_t>(r) * static_cast<size_t>(frame->v_stride);
+        packed.insert(packed.end(), row, row + uv_w);
+    }
+    jbyteArray jFrame = jni_bytes(guard.env, packed.data(), packed.size());
+    if (jFrame) {
+        guard.env->CallVoidMethod(ctx->javaClientGlobalRef, ctx->onRecorderVideoMethodId,
+                                  jFrame, (jint)w, (jint)h, static_cast<jlong>(frame->timestamp_ns));
+        guard.env->DeleteLocalRef(jFrame);
+    }
+}
+
+static int jni_recorder_stop(void *user_data) {
+    auto *ctx = static_cast<ClientJniContext *>(user_data);
+    if (!ctx || ctx->destroyed.load() || !ctx->javaClientGlobalRef || !ctx->onRecorderStopMethodId) return 0;
+    JniEnvGuard guard;
+    if (!guard.env) return 0;
+    return (int)guard.env->CallIntMethod(ctx->javaClientGlobalRef, ctx->onRecorderStopMethodId);
+}
+
 static void jni_on_account_reg_state(sip_client_t *client, sip_account_t *account,
                                      sip_reg_state_t state, int code, const char *reason,
                                      void *user_data) {
@@ -554,6 +645,11 @@ Java_com_sipsdk_SipClient_nativeCreate(JNIEnv *env, jobject thiz) {
     ctx->onConferenceChangedMethodId = env->GetMethodID(clientClass, "onNativeConferenceChanged", "([J)V");
     ctx->onMessageReceivedMethodId = env->GetMethodID(clientClass, "onNativeMessageReceived", "([B[B[B)V");
     ctx->onMessageStatusMethodId = env->GetMethodID(clientClass, "onNativeMessageStatus", "(JII[B)V");
+    ctx->onRecordingStateMethodId = env->GetMethodID(clientClass, "onNativeRecordingState", "(JI[BI)V");
+    ctx->onRecorderStartMethodId = env->GetMethodID(clientClass, "onNativeRecorderStart", "([BIIII)I");
+    ctx->onRecorderAudioMethodId = env->GetMethodID(clientClass, "onNativeRecorderAudio", "([BJ)V");
+    ctx->onRecorderVideoMethodId = env->GetMethodID(clientClass, "onNativeRecorderVideo", "([BIIJ)V");
+    ctx->onRecorderStopMethodId = env->GetMethodID(clientClass, "onNativeRecorderStop", "()I");
     ctx->onAccountRegStateMethodId = env->GetMethodID(clientClass, "onNativeAccountRegState", "(JII[B)V");
     ctx->onAccountMessageReceivedMethodId = env->GetMethodID(clientClass, "onNativeAccountMessageReceived", "(J[B[B[B)V");
     ctx->prepareAudioSessionMethodId = env->GetMethodID(clientClass, "onNativePrepareAudioSession", "()Z");
@@ -602,6 +698,18 @@ Java_com_sipsdk_SipClient_nativeCreate(JNIEnv *env, jobject thiz) {
         messageCallbacks.on_message_received = jni_on_message_received;
         messageCallbacks.on_message_status = jni_on_message_status;
         sip_client_set_message_callbacks(ctx->coreClient, &messageCallbacks);
+
+        sip_recording_callbacks_t recCallbacks = {};
+        recCallbacks.on_recording_state = jni_on_recording_state;
+        sip_client_set_recording_callbacks(ctx->coreClient, &recCallbacks);
+
+        sip_media_recorder_driver_t recDriver = {};
+        recDriver.user_data = ctx;
+        recDriver.start = jni_recorder_start;
+        recDriver.write_audio = jni_recorder_write_audio;
+        recDriver.write_video = jni_recorder_write_video;
+        recDriver.stop = jni_recorder_stop;
+        sip_client_set_media_recorder_driver(ctx->coreClient, &recDriver);
 
         sip_account_callbacks_t accountCallbacks = {};
         accountCallbacks.on_account_reg_state = jni_on_account_reg_state;
@@ -1018,6 +1126,42 @@ Java_com_sipsdk_SipCall_nativeIsInConference(JNIEnv *env, jobject thiz, jlong ca
     (void)thiz;
     auto *call = reinterpret_cast<sip_call_t *>(callHandle);
     return (call && sip_call_is_in_conference(call)) ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jint JNICALL
+Java_com_sipsdk_SipCall_nativeStartRecording(JNIEnv *env, jobject thiz, jlong callHandle, jstring jPath, jint mode) {
+    (void)thiz;
+    auto *call = reinterpret_cast<sip_call_t *>(callHandle);
+    if (!call || !jPath) return EINVAL;
+    const char *path = env->GetStringUTFChars(jPath, nullptr);
+    int rc = sip_call_start_recording(call, path, static_cast<sip_recording_mode_t>(mode));
+    env->ReleaseStringUTFChars(jPath, path);
+    return (jint)rc;
+}
+
+JNIEXPORT jint JNICALL
+Java_com_sipsdk_SipCall_nativeStopRecording(JNIEnv *env, jobject thiz, jlong callHandle) {
+    (void)env;
+    (void)thiz;
+    auto *call = reinterpret_cast<sip_call_t *>(callHandle);
+    if (!call) return EINVAL;
+    return (jint)sip_call_stop_recording(call);
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_sipsdk_SipCall_nativeIsRecording(JNIEnv *env, jobject thiz, jlong callHandle) {
+    (void)env;
+    (void)thiz;
+    auto *call = reinterpret_cast<sip_call_t *>(callHandle);
+    return (call && sip_call_is_recording(call)) ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jstring JNICALL
+Java_com_sipsdk_SipCall_nativeGetRecordingPath(JNIEnv *env, jobject thiz, jlong callHandle) {
+    (void)thiz;
+    auto *call = reinterpret_cast<sip_call_t *>(callHandle);
+    const char *p = call ? sip_call_get_recording_path(call) : "";
+    return env->NewStringUTF(p ? p : "");
 }
 
 JNIEXPORT jobject JNICALL

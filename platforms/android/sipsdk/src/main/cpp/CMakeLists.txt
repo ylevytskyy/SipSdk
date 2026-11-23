@@ -32,10 +32,12 @@ add_library(sipcore SHARED
     sip_jni.cpp
     media_codec_driver.cpp
     ${CORE_DIR}/src/account_session.cpp
+    ${CORE_DIR}/src/call_recorder.cpp
     ${CORE_DIR}/src/call_session.cpp
     ${CORE_DIR}/src/conference_mixer.cpp
     ${CORE_DIR}/src/engine.cpp
     ${CORE_DIR}/src/media_driver.cpp
+    ${CORE_DIR}/src/mkv_writer.cpp
     ${CORE_DIR}/src/sip_abi.cpp
 )
 

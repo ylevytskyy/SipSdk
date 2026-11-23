@@ -278,6 +278,28 @@ struct Client::Callbacks {
         }
     }
 
+    static void on_recording_state(sip_client_t *client, sip_call_t *call, sip_recording_state_t state,
+                                   const char *path, int error_code, void *user_data)
+    {
+        (void)client;
+        auto *self = static_cast<Client *>(user_data);
+        if (!self || !call) return;
+
+        auto call_obj = self->get_or_create_call(call);
+        std::shared_ptr<IClientListener> listener;
+        {
+            std::lock_guard<std::mutex> lock(self->m_mutex);
+            listener = self->m_listener;
+        }
+        if (listener) {
+            listener->on_recording_state(
+                call_obj,
+                static_cast<RecordingState>(state),
+                path ? path : "",
+                error_code);
+        }
+    }
+
     static void dispatch_to_main(void (*task)(void *arg), void *arg, void *user_data)
     {
         (void)user_data;
@@ -412,6 +434,11 @@ int Client::start(const std::string &config_path)
     msg_cb.on_message_received = Callbacks::on_message_received;
     msg_cb.on_message_status = Callbacks::on_message_status;
     sip_client_set_message_callbacks(m_client, &msg_cb);
+
+    sip_recording_callbacks_t rec_cb;
+    std::memset(&rec_cb, 0, sizeof(rec_cb));
+    rec_cb.on_recording_state = Callbacks::on_recording_state;
+    sip_client_set_recording_callbacks(m_client, &rec_cb);
 
     sip_account_callbacks_t acc_cb;
     std::memset(&acc_cb, 0, sizeof(acc_cb));

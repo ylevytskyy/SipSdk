@@ -25,9 +25,11 @@
 		1014 /* MainSplitView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2014 /* MainSplitView.swift */; };
 		1015 /* call_session.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 2015 /* call_session.cpp */; };
 		1037 /* account_session.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 2037 /* account_session.cpp */; };
+		1038 /* call_recorder.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 2038 /* call_recorder.cpp */; };
 		1035 /* conference_mixer.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 2035 /* conference_mixer.cpp */; };
 		1016 /* engine.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 2016 /* engine.cpp */; };
 		1017 /* media_driver.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 2017 /* media_driver.cpp */; };
+		1039 /* mkv_writer.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 2039 /* mkv_writer.cpp */; };
 		1018 /* sip_abi.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 2018 /* sip_abi.cpp */; };
 		1020 /* AVFoundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 2020 /* AVFoundation.framework */; };
 		1021 /* VideoToolbox.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 2021 /* VideoToolbox.framework */; };
@@ -63,9 +65,11 @@
 		2014 /* MainSplitView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainSplitView.swift; sourceTree = "<group>"; };
 		2015 /* call_session.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = call_session.cpp; path = ../../../core/src/call_session.cpp; sourceTree = "<group>"; };
 		2037 /* account_session.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = account_session.cpp; path = ../../../core/src/account_session.cpp; sourceTree = "<group>"; };
+		2038 /* call_recorder.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = call_recorder.cpp; path = ../../../core/src/call_recorder.cpp; sourceTree = "<group>"; };
 		2035 /* conference_mixer.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = conference_mixer.cpp; path = ../../../core/src/conference_mixer.cpp; sourceTree = "<group>"; };
 		2016 /* engine.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = engine.cpp; path = ../../../core/src/engine.cpp; sourceTree = "<group>"; };
 		2017 /* media_driver.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = media_driver.cpp; path = ../../../core/src/media_driver.cpp; sourceTree = "<group>"; };
+		2039 /* mkv_writer.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = mkv_writer.cpp; path = ../../../core/src/mkv_writer.cpp; sourceTree = "<group>"; };
 		2018 /* sip_abi.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = sip_abi.cpp; path = ../../../core/src/sip_abi.cpp; sourceTree = "<group>"; };
 		2020 /* AVFoundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AVFoundation.framework; path = System/Library/Frameworks/AVFoundation.framework; sourceTree = SDKROOT; };
 		2021 /* VideoToolbox.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = VideoToolbox.framework; path = System/Library/Frameworks/VideoToolbox.framework; sourceTree = SDKROOT; };
@@ -134,9 +138,11 @@
 			children = (
 				2015 /* call_session.cpp */,
 				2037 /* account_session.cpp */,
+				2038 /* call_recorder.cpp */,
 				2035 /* conference_mixer.cpp */,
 				2016 /* engine.cpp */,
 				2017 /* media_driver.cpp */,
+				2039 /* mkv_writer.cpp */,
 				2018 /* sip_abi.cpp */,
 			);
 			name = Core;
@@ -285,9 +291,11 @@
 				1014 /* MainSplitView.swift in Sources */,
 				1015 /* call_session.cpp in Sources */,
 				1037 /* account_session.cpp in Sources */,
+				1038 /* call_recorder.cpp in Sources */,
 				1035 /* conference_mixer.cpp in Sources */,
 				1016 /* engine.cpp in Sources */,
 				1017 /* media_driver.cpp in Sources */,
+				1039 /* mkv_writer.cpp in Sources */,
 				1018 /* sip_abi.cpp in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

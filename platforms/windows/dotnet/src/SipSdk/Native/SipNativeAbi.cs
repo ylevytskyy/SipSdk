@@ -306,6 +306,40 @@ namespace SipSdk.Native
             UIntPtr bodyLen,
             out ulong messageId);
 
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        public delegate void NativeRecordingStateCallback(
+            IntPtr client,
+            IntPtr call,
+            int state,
+            IntPtr path,
+            int errorCode,
+            IntPtr userData);
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct SipRecordingCallbacksNative
+        {
+            public IntPtr OnRecordingState;
+        }
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int sip_client_set_recording_callbacks(IntPtr client, ref SipRecordingCallbacksNative callbacks);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int sip_call_start_recording(
+            IntPtr call,
+            [MarshalAs(UnmanagedType.LPStr)] string path,
+            int mode);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int sip_call_stop_recording(IntPtr call);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        [return: MarshalAs(UnmanagedType.I1)]
+        public static extern bool sip_call_is_recording(IntPtr call);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern IntPtr sip_call_get_recording_path(IntPtr call);
+
         [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
         public static extern int sip_client_set_account_callbacks(IntPtr client, ref SipAccountCallbacks callbacks);
 

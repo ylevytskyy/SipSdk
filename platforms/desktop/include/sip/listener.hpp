@@ -63,6 +63,11 @@ public:
         (void)calls;
     }
 
+    virtual void on_recording_state(std::shared_ptr<Call> call, RecordingState state,
+                                    const std::string &path, int error_code) {
+        (void)call; (void)state; (void)path; (void)error_code;
+    }
+
     virtual void on_account_registration_state(std::shared_ptr<Account> account,
                                                RegistrationState state,
                                                int code,

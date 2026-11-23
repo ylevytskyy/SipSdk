@@ -218,6 +218,23 @@ public struct SipIncomingMessage: Sendable, Hashable {
     }
 }
 
+/// Recording format and channel layout for local call recording.
+public enum SipRecordingMode: Int, Sendable, Equatable {
+    /// 48 kHz S16LE stereo WAV (left = local mic, right = remote peer).
+    case audioStereo = 0
+    /// 48 kHz S16LE mono WAV (local + remote mixed).
+    case audioMono = 1
+    /// Audio + remote video MP4 (via AVAssetWriter).
+    case audioVideo = 2
+}
+
+/// Recording lifecycle state reported for a call.
+public enum SipRecordingState: Int, Sendable, Equatable {
+    case idle = 0
+    case recording = 1
+    case failed = 2
+}
+
 /// Typed event dispatch streamed by `SipClient`.
 public enum SipEvent: Sendable {
     case registrationChanged(SipRegistrationState)
@@ -232,6 +249,7 @@ public enum SipEvent: Sendable {
     case messageStatusChanged(id: UInt64, status: SipMessageStatus, code: Int, reason: String)
     case callRejectedBusy(String)
     case conferenceChanged([SipCall])
+    case recordingStateChanged(SipCall, SipRecordingState, path: String, errorCode: Int)
     case accountRegistrationChanged(SipAccountSession, SipRegistrationState)
     case accountMessageReceived(SipAccountSession, SipIncomingMessage)
 }

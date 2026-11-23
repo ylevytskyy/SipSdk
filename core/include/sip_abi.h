@@ -548,6 +548,61 @@ SIP_ABI_EXPORT int sip_client_send_message(sip_client_t *client,
                                            uint64_t *message_id);
 
 /* ============================================================================
+ * Local Call Recording (Audio WAV + Video MP4/MKV)
+ * ============================================================================ */
+
+typedef enum {
+    SIP_RECORDING_AUDIO_STEREO = 0, /* 48 kHz S16LE 2ch WAV: left = local mic, right = remote peer */
+    SIP_RECORDING_AUDIO_MONO   = 1, /* 48 kHz S16LE 1ch WAV: local + remote mixed */
+    SIP_RECORDING_AUDIO_VIDEO  = 2  /* Audio + remote video (native driver MP4 or portable MKV fallback) */
+} sip_recording_mode_t;
+
+typedef enum {
+    SIP_RECORDING_STATE_IDLE      = 0,
+    SIP_RECORDING_STATE_RECORDING = 1,
+    SIP_RECORDING_STATE_FAILED    = 2
+} sip_recording_state_t;
+
+typedef struct sip_recording_callbacks_t {
+    void (*on_recording_state)(sip_client_t *client,
+                               sip_call_t *call,
+                               sip_recording_state_t state,
+                               const char *path,
+                               int error_code,
+                               void *user_data);
+} sip_recording_callbacks_t;
+
+/**
+ * Pluggable platform media recorder driver for SIP_RECORDING_AUDIO_VIDEO
+ * (e.g. AVAssetWriter on Apple, MediaCodec+MediaMuxer on Android, IMFSinkWriter on Windows).
+ * When no driver is registered, sip_core falls back to its built-in portable MKV writer.
+ */
+typedef struct sip_media_recorder_driver_t {
+    void *user_data;
+    int (*start)(void *user_data, const char *path, int sample_rate, int channels,
+                 int video_width, int video_height);
+    void (*write_audio)(void *user_data, const int16_t *pcm, size_t sample_count, uint64_t timestamp_ns);
+    void (*write_video)(void *user_data, const sip_video_frame_t *frame);
+    int (*stop)(void *user_data);
+} sip_media_recorder_driver_t;
+
+SIP_ABI_EXPORT int sip_client_set_recording_callbacks(sip_client_t *client,
+                                                      const sip_recording_callbacks_t *callbacks);
+
+SIP_ABI_EXPORT int sip_client_set_media_recorder_driver(sip_client_t *client,
+                                                        const sip_media_recorder_driver_t *driver);
+
+SIP_ABI_EXPORT int sip_call_start_recording(sip_call_t *call,
+                                            const char *path,
+                                            sip_recording_mode_t mode);
+
+SIP_ABI_EXPORT int sip_call_stop_recording(sip_call_t *call);
+
+SIP_ABI_EXPORT bool sip_call_is_recording(const sip_call_t *call);
+
+SIP_ABI_EXPORT const char *sip_call_get_recording_path(const sip_call_t *call);
+
+/* ============================================================================
  * Multi-Account Support (1..SIP_CLIENT_MAX_ACCOUNTS per sip_client_t)
  * ============================================================================ */
 

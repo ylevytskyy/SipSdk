@@ -89,10 +89,11 @@ public final class SipClient {
     /// Turnkey CallKit coordinator.
     public let callKit: SipCallKitCoordinator
 
-    /// Native video capture and rendering drivers.
+    /// Native video capture, rendering, and MP4 recording drivers.
     public let captureDriver = IosVideoCaptureDriver()
     public let remoteRendererDriver = IosVideoRendererDriver()
     public let localRendererDriver = IosVideoRendererDriver()
+    public let mediaRecorderDriver = AppleMediaRecorder()
 
     /// Async stream for reactive event handling.
     public let events: AsyncStream<SipEvent>
@@ -272,6 +273,17 @@ public final class SipClient {
             sdk.handleMessageStatus(id: messageId, status: status, code: Int(code), reason: reasonStr)
         }
         _ = sip_client_set_message_callbacks(client, &messageCallbacks)
+
+        var recordingCallbacks = sip_recording_callbacks_t()
+        recordingCallbacks.on_recording_state = { _, coreCall, state, pathPtr, errCode, userData in
+            guard let sdk = SipClient.unwrapClient(userData), let coreCall else { return }
+            let pathStr = pathPtr != nil ? String(cString: pathPtr!) : ""
+            sdk.handleRecordingState(coreCall: coreCall, state: state, path: pathStr, errorCode: Int(errCode))
+        }
+        _ = sip_client_set_recording_callbacks(client, &recordingCallbacks)
+
+        var cRecorder = mediaRecorderDriver.makeCDriver()
+        _ = sip_client_set_media_recorder_driver(client, &cRecorder)
 
         var accountCallbacks = sip_account_callbacks_t()
         accountCallbacks.on_account_reg_state = { _, accountHandle, state, code, reason, userData in
@@ -963,6 +975,14 @@ public final class SipClient {
     private func handleMessageStatus(id: UInt64, status: sip_message_status_t, code: Int, reason: String) {
         let newStatus = SipMessageStatus(rawValue: Int(status.rawValue)) ?? .failed
         eventContinuation.yield(.messageStatusChanged(id: id, status: newStatus, code: code, reason: reason))
+    }
+
+    private func handleRecordingState(coreCall: OpaquePointer, state: sip_recording_state_t, path: String, errorCode: Int) {
+        guard let call = calls.first(where: { $0.coreCall == coreCall }) else { return }
+        let recState = SipRecordingState(rawValue: Int(state.rawValue)) ?? .failed
+        call.isRecording = (recState == .recording)
+        call.recordingPath = (recState == .recording) ? path : nil
+        eventContinuation.yield(.recordingStateChanged(call, recState, path: path, errorCode: errorCode))
     }
 
     private func findOrCreateCall(for callHandle: OpaquePointer) -> SipCall {

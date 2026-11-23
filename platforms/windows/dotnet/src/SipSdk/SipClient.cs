@@ -31,6 +31,7 @@ namespace SipSdk
         private readonly NativeConferenceChangedCallback _conferenceChangedCallback;
         private readonly NativeMessageReceivedCallback _messageReceivedCallback;
         private readonly NativeMessageStatusCallback _messageStatusCallback;
+        private readonly SipNativeAbi.NativeRecordingStateCallback _recordingStateCallback;
         private readonly NativeAccountRegStateCallback _accountRegStateCallback;
         private readonly NativeAccountMessageReceivedCallback _accountMessageReceivedCallback;
 
@@ -83,6 +84,7 @@ namespace SipSdk
         public event EventHandler<ConferenceChangedEventArgs>? ConferenceChanged;
         public event EventHandler<MessageReceivedEventArgs>? MessageReceived;
         public event EventHandler<MessageStatusChangedEventArgs>? MessageStatusChanged;
+        public event EventHandler<RecordingStateChangedEventArgs>? RecordingStateChanged;
         public event EventHandler<SipAccountRegistrationStateEventArgs>? AccountRegistrationStateChanged;
         public event EventHandler<SipAccountMessageReceivedEventArgs>? AccountMessageReceived;
 
@@ -102,6 +104,7 @@ namespace SipSdk
             _conferenceChangedCallback = HandleNativeConferenceChanged;
             _messageReceivedCallback = HandleNativeMessageReceived;
             _messageStatusCallback = HandleNativeMessageStatus;
+            _recordingStateCallback = HandleNativeRecordingState;
             _accountRegStateCallback = HandleNativeAccountRegState;
             _accountMessageReceivedCallback = HandleNativeAccountMessageReceived;
 
@@ -134,6 +137,12 @@ namespace SipSdk
                 OnMessageStatus = Marshal.GetFunctionPointerForDelegate(_messageStatusCallback)
             };
             SipNativeAbi.sip_client_set_message_callbacks(_clientHandle, ref messageCallbacks);
+
+            var recordingCallbacks = new SipNativeAbi.SipRecordingCallbacksNative
+            {
+                OnRecordingState = Marshal.GetFunctionPointerForDelegate(_recordingStateCallback)
+            };
+            SipNativeAbi.sip_client_set_recording_callbacks(_clientHandle, ref recordingCallbacks);
 
             var accountCallbacks = new SipAccountCallbacks
             {
@@ -651,6 +660,16 @@ namespace SipSdk
             DispatchToUi(() =>
             {
                 MessageStatusChanged?.Invoke(this, args);
+            });
+        }
+
+        private void HandleNativeRecordingState(IntPtr client, IntPtr callHandle, int state, IntPtr path, int errorCode, IntPtr userData)
+        {
+            if (!_activeCalls.TryGetValue(callHandle, out var call)) return;
+            var args = new RecordingStateChangedEventArgs(call, (SipRecordingState)state, SipNativeAbi.PtrToStringUtf8(path) ?? string.Empty, errorCode);
+            DispatchToUi(() =>
+            {
+                RecordingStateChanged?.Invoke(this, args);
             });
         }
 

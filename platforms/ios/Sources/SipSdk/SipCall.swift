@@ -41,6 +41,12 @@ public final class SipCall: Identifiable {
     /// True if this call is currently part of the local audio conference.
     public internal(set) var isInConference: Bool = false
 
+    /// True while this call is being recorded to disk.
+    public internal(set) var isRecording: Bool = false
+
+    /// Active recording output file path, or nil when idle.
+    public internal(set) var recordingPath: String?
+
     /// Account session that owns this call (when multi-account API is used).
     public internal(set) var accountSession: SipAccountSession?
 
@@ -183,6 +189,33 @@ public final class SipCall: Identifiable {
         if rc != 0 {
             throw SipError.coreError(Int(rc), "Failed to \(accept ? "accept" : "reject") transfer")
         }
+    }
+
+    /// Starts local audio or audio+video recording for this call.
+    public func startRecording(to path: String, mode: SipRecordingMode = .audioStereo) throws {
+        guard let call = coreCall else {
+            throw SipError.invalidParameter("Call session handle is invalid")
+        }
+        let cMode = sip_recording_mode_t(rawValue: UInt32(mode.rawValue))
+        let rc = sip_call_start_recording(call, path, cMode)
+        if rc != 0 {
+            throw SipError.coreError(Int(rc), "Failed to start recording")
+        }
+        isRecording = true
+        recordingPath = path
+    }
+
+    /// Stops and finalizes local recording for this call.
+    public func stopRecording() throws {
+        guard let call = coreCall else {
+            throw SipError.invalidParameter("Call session handle is invalid")
+        }
+        let rc = sip_call_stop_recording(call)
+        if rc != 0 {
+            throw SipError.coreError(Int(rc), "Failed to stop recording")
+        }
+        isRecording = false
+        recordingPath = nil
     }
 
     /// Synchronously retrieves current call quality stats from the core engine.
