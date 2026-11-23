@@ -100,11 +100,14 @@ public:
     struct call *raw_call() const { return m_raw_call; }
     sip_client_t *owner() const { return m_owner; }
     sip_core::Engine *engine() const { return m_engine; }
+    sip_account_t *account() const;
+    void set_account(sip_account_t *account);
 
 private:
     sip_client_t *m_owner{nullptr};
     sip_core::Engine *m_engine{nullptr};
     struct call *m_raw_call{nullptr};
+    sip_account_t *m_account{nullptr};
 
     std::string m_id;
     std::string m_remote_uri;

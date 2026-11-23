@@ -331,6 +331,52 @@ struct Client::Callbacks {
             listener->on_conference_changed(members);
         }
     }
+
+    static void on_account_reg_state(sip_client_t *client, sip_account_t *account,
+                                     sip_reg_state_t state, int code, const char *reason,
+                                     void *user_data)
+    {
+        (void)client;
+        auto *self = static_cast<Client *>(user_data);
+        if (!self || !account) return;
+
+        auto acc_ptr = self->find_account(account);
+        std::shared_ptr<IClientListener> listener;
+        {
+            std::lock_guard<std::mutex> lock(self->m_mutex);
+            listener = self->m_listener;
+        }
+        if (listener && acc_ptr) {
+            listener->on_account_registration_state(acc_ptr, static_cast<RegistrationState>(state),
+                                                    code, reason ? reason : "");
+        }
+    }
+
+    static void on_account_message_received(sip_client_t *client, sip_account_t *account,
+                                            const char *from_uri, const char *content_type,
+                                            const uint8_t *body, size_t body_len,
+                                            void *user_data)
+    {
+        (void)client;
+        auto *self = static_cast<Client *>(user_data);
+        if (!self || !account) return;
+
+        auto acc_ptr = self->find_account(account);
+        std::shared_ptr<IClientListener> listener;
+        {
+            std::lock_guard<std::mutex> lock(self->m_mutex);
+            listener = self->m_listener;
+        }
+        if (listener && acc_ptr) {
+            IncomingMessage message;
+            message.from = from_uri ? from_uri : "";
+            message.content_type = content_type ? content_type : "text/plain";
+            if (body && body_len > 0) {
+                message.body.assign(reinterpret_cast<const char *>(body), body_len);
+            }
+            listener->on_account_message_received(acc_ptr, message);
+        }
+    }
 };
 
 Client::Client(std::string username, std::string domain)
@@ -394,6 +440,12 @@ int Client::start(const std::string &config_path)
     rec_cb.on_recording_state = Callbacks::on_recording_state;
     sip_client_set_recording_callbacks(m_client, &rec_cb);
 
+    sip_account_callbacks_t acc_cb;
+    std::memset(&acc_cb, 0, sizeof(acc_cb));
+    acc_cb.on_account_reg_state = Callbacks::on_account_reg_state;
+    acc_cb.on_account_message_received = Callbacks::on_account_message_received;
+    sip_client_set_account_callbacks(m_client, &acc_cb);
+
     std::string resolved_path = config_path.empty() ? ensure_default_config_dir() : config_path;
     int rc = sip_client_init(m_client, resolved_path.c_str());
     if (rc != 0) {
@@ -419,14 +471,22 @@ void Client::stop()
 {
     sip_client_t *c = nullptr;
     std::unordered_map<sip_call_t *, std::shared_ptr<Call>> calls_to_invalidate;
+    std::unordered_map<sip_account_t *, std::shared_ptr<Account>> accounts_to_invalidate;
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         c = m_client;
         m_client = nullptr;
         calls_to_invalidate = std::move(m_active_calls);
         m_active_calls.clear();
+        accounts_to_invalidate = std::move(m_accounts);
+        m_accounts.clear();
     }
     for (auto &pair : calls_to_invalidate) {
+        if (pair.second) {
+            pair.second->invalidate();
+        }
+    }
+    for (auto &pair : accounts_to_invalidate) {
         if (pair.second) {
             pair.second->invalidate();
         }
@@ -467,6 +527,109 @@ bool Client::is_registered() const
     return sip_client_is_registered(m_client);
 }
 
+int Client::add_account(const AccountConfig &config, std::shared_ptr<Account> &out_account)
+{
+    out_account.reset();
+    sip_client_t *cli = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        cli = m_client;
+    }
+    if (!cli) return EIO;
+
+    sip_account_config_t cfg{};
+    cfg.user = config.username.c_str();
+    cfg.domain = config.domain.c_str();
+    cfg.pwd = config.password.empty() ? nullptr : config.password.c_str();
+    cfg.transport = config.transport.empty() ? "udp" : config.transport.c_str();
+    cfg.port = config.port;
+    cfg.display_name = config.display_name.empty() ? nullptr : config.display_name.c_str();
+    cfg.outbound_proxy = config.outbound_proxy.empty() ? nullptr : config.outbound_proxy.c_str();
+    cfg.stun_server = config.stun_server.empty() ? nullptr : config.stun_server.c_str();
+    cfg.stun_user = config.stun_user.empty() ? nullptr : config.stun_user.c_str();
+    cfg.stun_pass = config.stun_pass.empty() ? nullptr : config.stun_pass.c_str();
+    cfg.media_nat = config.media_nat.empty() ? nullptr : config.media_nat.c_str();
+    cfg.reg_interval = config.reg_interval;
+    cfg.tls_ca_file = config.tls_ca_file.empty() ? nullptr : config.tls_ca_file.c_str();
+    cfg.verify_tls_cert = config.verify_tls_cert;
+    cfg.media_enc = config.media_enc.empty() ? nullptr : config.media_enc.c_str();
+    cfg.max_calls = config.max_calls;
+
+    sip_account_t *handle = nullptr;
+    int rc = sip_client_add_account(cli, &cfg, &handle);
+    if (rc != 0 || !handle) return rc != 0 ? rc : EIO;
+
+    auto acc = std::make_shared<Account>(handle);
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_accounts[handle] = acc;
+    }
+    out_account = std::move(acc);
+    return 0;
+}
+
+int Client::remove_account(const std::shared_ptr<Account> &account)
+{
+    if (!account || !account->raw_handle()) return EINVAL;
+    sip_client_t *cli = nullptr;
+    sip_account_t *handle = account->raw_handle();
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        cli = m_client;
+    }
+    if (!cli) return EIO;
+
+    int rc = sip_client_remove_account(cli, handle);
+    if (rc == 0) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_accounts.erase(handle);
+    }
+    return rc;
+}
+
+int Client::set_default_account(const std::shared_ptr<Account> &account)
+{
+    if (!account || !account->raw_handle()) return EINVAL;
+    sip_client_t *cli = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        cli = m_client;
+    }
+    if (!cli) return EIO;
+    return sip_client_set_default_account(cli, account->raw_handle());
+}
+
+std::shared_ptr<Account> Client::default_account() const
+{
+    sip_client_t *cli = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        cli = m_client;
+    }
+    if (!cli) return nullptr;
+    return find_account(sip_client_get_default_account(cli));
+}
+
+std::vector<std::shared_ptr<Account>> Client::accounts() const
+{
+    std::vector<std::shared_ptr<Account>> result;
+    sip_client_t *cli = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        cli = m_client;
+    }
+    if (!cli) return result;
+
+    sip_account_t *handles[SIP_CLIENT_MAX_ACCOUNTS]{};
+    size_t count = sip_client_get_accounts(cli, handles, SIP_CLIENT_MAX_ACCOUNTS);
+    result.reserve(count);
+    for (size_t i = 0; i < count; ++i) {
+        auto acc = find_account(handles[i]);
+        if (acc) result.push_back(std::move(acc));
+    }
+    return result;
+}
+
 std::shared_ptr<Call> Client::make_call(const std::string &target_uri, bool with_video)
 {
     std::shared_ptr<Call> out_call;
@@ -486,6 +649,19 @@ int Client::dial(const std::string &target_uri, bool with_video, std::shared_ptr
 
     sip_call_t *handle = nullptr;
     int rc = sip_call_dial(cli, target_uri.c_str(), with_video, &handle);
+    if (rc != 0 || !handle) return rc != 0 ? rc : EIO;
+
+    out_call = get_or_create_call(handle);
+    return 0;
+}
+
+int Client::dial(const std::shared_ptr<Account> &account, const std::string &target_uri, bool with_video, std::shared_ptr<Call> &out_call)
+{
+    out_call.reset();
+    if (!account || !account->raw_handle()) return EINVAL;
+
+    sip_call_t *handle = nullptr;
+    int rc = sip_account_dial(account->raw_handle(), target_uri.c_str(), with_video, &handle);
     if (rc != 0 || !handle) return rc != 0 ? rc : EIO;
 
     out_call = get_or_create_call(handle);
@@ -554,6 +730,21 @@ int Client::send_message(const std::string &target_uri,
                                    reinterpret_cast<const uint8_t *>(body.data()),
                                    body.size(),
                                    message_id);
+}
+
+int Client::send_message(const std::shared_ptr<Account> &account,
+                         const std::string &target_uri,
+                         const std::string &body,
+                         const std::string &content_type,
+                         uint64_t *message_id)
+{
+    if (!account || !account->raw_handle()) return EINVAL;
+    return sip_account_send_message(account->raw_handle(),
+                                    target_uri.c_str(),
+                                    content_type.c_str(),
+                                    reinterpret_cast<const uint8_t *>(body.data()),
+                                    body.size(),
+                                    message_id);
 }
 
 void Client::set_mic_muted(bool muted)
@@ -625,11 +816,31 @@ std::shared_ptr<Call> Client::get_or_create_call(sip_call_t *handle)
     std::lock_guard<std::mutex> lock(m_mutex);
     auto it = m_active_calls.find(handle);
     if (it != m_active_calls.end()) {
+        if (it->second && !it->second->m_account) {
+            sip_account_t *acc_h = sip_call_get_account(handle);
+            auto acc_it = m_accounts.find(acc_h);
+            if (acc_it != m_accounts.end()) {
+                it->second->m_account = acc_it->second;
+            }
+        }
         return it->second;
     }
     auto call_ptr = std::make_shared<Call>(handle);
+    sip_account_t *acc_h = sip_call_get_account(handle);
+    auto acc_it = m_accounts.find(acc_h);
+    if (acc_it != m_accounts.end()) {
+        call_ptr->m_account = acc_it->second;
+    }
     m_active_calls[handle] = call_ptr;
     return call_ptr;
+}
+
+std::shared_ptr<Account> Client::find_account(sip_account_t *handle) const
+{
+    if (!handle) return nullptr;
+    std::lock_guard<std::mutex> lock(m_mutex);
+    auto it = m_accounts.find(handle);
+    return it != m_accounts.end() ? it->second : nullptr;
 }
 
 void Client::remove_call(sip_call_t *handle)

@@ -6,8 +6,17 @@ class SipCall internal constructor(
     val remoteUri: String,
     val peerDisplayName: String? = null,
     hasVideo: Boolean = false,
-    val isOutgoing: Boolean = true
+    val isOutgoing: Boolean = true,
+    private val client: SipClient? = null
 ) {
+    val account: SipAccount?
+        get() {
+            if (nativeHandle == 0L) return null
+            val accountHandle = nativeCallGetAccount(nativeHandle)
+            if (accountHandle == 0L) return null
+            return client?.resolveAccount(accountHandle)
+        }
+
     val hasVideo: Boolean = hasVideo
         get() = if (nativeHandle != 0L) nativeHasVideo(nativeHandle) else field
     val isOnHold: Boolean
@@ -82,4 +91,5 @@ class SipCall internal constructor(
     private external fun nativeStopRecording(handle: Long): Int
     private external fun nativeIsRecording(handle: Long): Boolean
     private external fun nativeGetRecordingPath(handle: Long): String
+    private external fun nativeCallGetAccount(callHandle: Long): Long
 }

@@ -3,6 +3,7 @@
 // Bridging header exposing Objective-C++ adapter to Swift/SwiftUI
 //
 
+#import "SipMacAccount.h"
 #import "SipMacClient.h"
 #import "SipMacCall.h"
 #import "SipMacVideoView.h"

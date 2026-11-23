@@ -59,6 +59,16 @@ namespace SipSdk
         internal IntPtr NativeHandle => _callHandle;
         public uint Duration => _callHandle != IntPtr.Zero ? SipNativeAbi.sip_call_get_duration(_callHandle) : 0;
 
+        public SipAccount? Account
+        {
+            get
+            {
+                if (_callHandle == IntPtr.Zero) return null;
+                IntPtr accHandle = SipNativeAbi.sip_call_get_account(_callHandle);
+                return _client.ResolveAccount(accHandle);
+            }
+        }
+
         public event EventHandler<CallStateChangedEventArgs>? StateChanged;
         public event EventHandler<CallMediaChangedEventArgs>? MediaChanged;
         public event EventHandler<DtmfReceivedEventArgs>? DtmfReceived;

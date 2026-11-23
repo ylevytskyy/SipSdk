@@ -1,9 +1,12 @@
 #import "SipMacCall.h"
+#import "SipMacAccount.h"
+#import "SipMacClientInternal.h"
 #include <sip_abi.h>
 #include <mutex>
 
 @implementation SipMacCall {
     struct sip_call_t *_handle;
+    __weak SipMacClient *_client;
     std::mutex _mutex;
     NSString *_cachedCallId;
     NSString *_cachedRemoteUri;
@@ -11,9 +14,15 @@
 
 - (instancetype)initWithHandle:(struct sip_call_t *)handle
 {
+    return [self initWithHandle:handle client:nil];
+}
+
+- (instancetype)initWithHandle:(struct sip_call_t *)handle client:(nullable SipMacClient *)client
+{
     self = [super init];
     if (self) {
         _handle = handle;
+        _client = client;
         if (handle) {
             const char *cid = sip_call_get_id(handle);
             _cachedCallId = cid ? [NSString stringWithUTF8String:cid] : @"";
@@ -25,6 +34,23 @@
         }
     }
     return self;
+}
+
+- (nullable SipMacAccount *)account
+{
+    struct sip_account_t *accHandle = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(_mutex);
+        if (_handle) {
+            accHandle = sip_call_get_account(_handle);
+        }
+    }
+    if (!accHandle) return nil;
+    SipMacClient *client = _client;
+    if (client) {
+        return [client accountForHandle:accHandle];
+    }
+    return [[SipMacAccount alloc] initWithHandle:accHandle client:nil ownsHandle:NO];
 }
 
 - (struct sip_call_t *)handle

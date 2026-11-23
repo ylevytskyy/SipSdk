@@ -15,4 +15,6 @@ interface SipClientListener {
     fun onPushCallMissed(callId: String, callerUri: String) {}
     fun onConferenceChanged(calls: List<SipCall>) {}
     fun onRecordingStateChanged(call: SipCall, state: SipRecordingState, path: String, errorCode: Int) {}
+    fun onAccountRegistrationStateChanged(account: SipAccount, state: SipRegistrationState, code: Int, reason: String) {}
+    fun onAccountMessageReceived(account: SipAccount, message: SipIncomingMessage) {}
 }

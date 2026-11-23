@@ -1,4 +1,5 @@
 #import "SipMacClient.h"
+#import "SipMacClientInternal.h"
 #import <AVFoundation/AVFoundation.h>
 #import <CoreVideo/CoreVideo.h>
 #import <CoreMedia/CoreMedia.h>
@@ -7,6 +8,7 @@
 #include <sip_abi.h>
 
 #include <atomic>
+#include <cerrno>
 #include <cstdlib>
 #include <fstream>
 #include <iostream>
@@ -25,6 +27,7 @@
     sip_client_t *_client;
     std::mutex _mutex;
     std::unordered_map<sip_call_t *, SipMacCall *> _activeCalls;
+    std::unordered_map<sip_account_t *, SipMacAccount *> _activeAccounts;
 
     __weak SipMacVideoView *_remoteVideoView;
     __weak SipMacVideoView *_localPreviewView;
@@ -738,6 +741,46 @@ struct ClientCallbacks {
             }
         });
     }
+
+    static void on_account_reg_state(sip_client_t *c, sip_account_t *account, sip_reg_state_t state,
+                                     int code, const char *reason, void *user_data)
+    {
+        (void)c;
+        auto *self = (__bridge SipMacClient *)user_data;
+        if (!self || !account) return;
+
+        SipMacAccount *macAccount = [self accountForHandle:account];
+        if (!macAccount) return;
+        NSString *rStr = (reason ? [NSString stringWithUTF8String:reason] : nil) ?: @"";
+        SipMacRegistrationState regState = static_cast<SipMacRegistrationState>(state);
+
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if ([self.delegate respondsToSelector:@selector(client:account:didChangeRegistrationState:code:reason:)]) {
+                [self.delegate client:self account:macAccount didChangeRegistrationState:regState code:code reason:rStr];
+            }
+        });
+    }
+
+    static void on_account_message_received(sip_client_t *c, sip_account_t *account, const char *from_uri,
+                                            const char *content_type, const uint8_t *body, size_t body_len,
+                                            void *user_data)
+    {
+        (void)c;
+        auto *self = (__bridge SipMacClient *)user_data;
+        if (!self || !account) return;
+
+        SipMacAccount *macAccount = [self accountForHandle:account];
+        if (!macAccount) return;
+        NSString *from = (from_uri ? [NSString stringWithUTF8String:from_uri] : nil) ?: @"";
+        NSString *ctype = (content_type ? [NSString stringWithUTF8String:content_type] : nil) ?: @"text/plain";
+        NSData *data = (body && body_len > 0) ? [NSData dataWithBytes:body length:body_len] : [NSData data];
+
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if ([self.delegate respondsToSelector:@selector(client:account:didReceiveMessageFrom:contentType:body:)]) {
+                [self.delegate client:self account:macAccount didReceiveMessageFrom:from contentType:ctype body:data];
+            }
+        });
+    }
 };
 
 // MARK: - CoreAudio Device Helpers
@@ -922,6 +965,12 @@ static bool set_default_audio_device_by_name(NSString *targetName, bool is_input
     recCb.on_recording_state = ClientCallbacks::on_recording_state;
     sip_client_set_recording_callbacks(_client, &recCb);
 
+    sip_account_callbacks_t accCb;
+    std::memset(&accCb, 0, sizeof(accCb));
+    accCb.on_account_reg_state = ClientCallbacks::on_account_reg_state;
+    accCb.on_account_message_received = ClientCallbacks::on_account_message_received;
+    sip_client_set_account_callbacks(_client, &accCb);
+
     std::string path = configPath ? [configPath UTF8String] : ensure_default_config_dir();
     int rc = sip_client_init(_client, path.c_str());
     if (rc != 0) {
@@ -971,14 +1020,22 @@ static bool set_default_audio_device_by_name(NSString *targetName, bool is_input
 {
     sip_client_t *c = nullptr;
     std::unordered_map<sip_call_t *, SipMacCall *> calls;
+    std::unordered_map<sip_account_t *, SipMacAccount *> accounts;
     {
         std::lock_guard<std::mutex> lock(_mutex);
         c = _client;
         _client = nullptr;
         calls = std::move(_activeCalls);
         _activeCalls.clear();
+        accounts = std::move(_activeAccounts);
+        _activeAccounts.clear();
     }
     for (auto &pair : calls) {
+        if (pair.second) {
+            [pair.second invalidate];
+        }
+    }
+    for (auto &pair : accounts) {
         if (pair.second) {
             [pair.second invalidate];
         }
@@ -1070,7 +1127,28 @@ static bool set_default_audio_device_by_name(NSString *targetName, bool is_input
     cfg.media_enc = mediaEnc.length > 0 ? [mediaEnc UTF8String] : nullptr;
     cfg.max_calls = _maxCalls > 0 ? _maxCalls : 4;
 
-    return sip_client_register_account(_client, &cfg);
+    int rc = sip_client_register_account(_client, &cfg);
+    if (rc == 0) {
+        size_t count = sip_client_get_account_count(_client);
+        std::vector<sip_account_t *> live(count, nullptr);
+        size_t written = count > 0 ? sip_client_get_accounts(_client, live.data(), count) : 0;
+        for (auto it = _activeAccounts.begin(); it != _activeAccounts.end(); ) {
+            bool found = false;
+            for (size_t i = 0; i < written; ++i) {
+                if (live[i] == it->first) {
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                [it->second invalidate];
+                it = _activeAccounts.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+    return rc;
 }
 
 - (int)unregisterAccount
@@ -1085,6 +1163,140 @@ static bool set_default_audio_device_by_name(NSString *targetName, bool is_input
     std::lock_guard<std::mutex> lock(_mutex);
     if (!_client) return -1;
     return sip_client_reset_transports(_client, reRegister);
+}
+
+- (nullable SipMacAccount *)addAccountWithUsername:(NSString *)user
+                                            domain:(NSString *)domain
+                                          password:(NSString *)password
+                                         transport:(NSString *)transport
+                                              port:(int)port
+{
+    return [self addAccountWithUsername:user
+                                 domain:domain
+                               password:password
+                              transport:transport
+                                   port:port
+                            displayName:nil
+                          outboundProxy:nil
+                             stunServer:nil
+                               mediaNat:nil
+                            regInterval:0
+                              tlsCaFile:nil
+                          verifyTlsCert:YES
+                               mediaEnc:nil];
+}
+
+- (nullable SipMacAccount *)addAccountWithUsername:(NSString *)user
+                                            domain:(NSString *)domain
+                                          password:(NSString *)password
+                                         transport:(NSString *)transport
+                                              port:(int)port
+                                       displayName:(nullable NSString *)displayName
+                                     outboundProxy:(nullable NSString *)outboundProxy
+                                        stunServer:(nullable NSString *)stunServer
+                                          mediaNat:(nullable NSString *)mediaNat
+                                       regInterval:(uint32_t)regInterval
+                                         tlsCaFile:(nullable NSString *)tlsCaFile
+                                     verifyTlsCert:(BOOL)verifyTlsCert
+                                          mediaEnc:(nullable NSString *)mediaEnc
+{
+    std::lock_guard<std::mutex> lock(_mutex);
+    if (!_client || user.length == 0 || domain.length == 0) return nil;
+
+    sip_account_config_t cfg;
+    std::memset(&cfg, 0, sizeof(cfg));
+    cfg.user = [user UTF8String];
+    cfg.domain = [domain UTF8String];
+    cfg.pwd = password ? [password UTF8String] : "";
+    cfg.transport = transport.length > 0 ? [transport UTF8String] : "udp";
+    cfg.port = port;
+    cfg.display_name = displayName.length > 0 ? [displayName UTF8String] : nullptr;
+    cfg.outbound_proxy = outboundProxy.length > 0 ? [outboundProxy UTF8String] : nullptr;
+    cfg.stun_server = stunServer.length > 0 ? [stunServer UTF8String] : nullptr;
+    cfg.media_nat = mediaNat.length > 0 ? [mediaNat UTF8String] : nullptr;
+    cfg.reg_interval = regInterval;
+    cfg.tls_ca_file = tlsCaFile.length > 0 ? [tlsCaFile UTF8String] : nullptr;
+    cfg.verify_tls_cert = verifyTlsCert;
+    cfg.media_enc = mediaEnc.length > 0 ? [mediaEnc UTF8String] : nullptr;
+    cfg.max_calls = _maxCalls > 0 ? _maxCalls : 4;
+
+    sip_account_t *handle = nullptr;
+    int rc = sip_client_add_account(_client, &cfg, &handle);
+    if (rc != 0 || !handle) return nil;
+
+    SipMacAccount *account = [[SipMacAccount alloc] initWithHandle:handle client:self ownsHandle:YES];
+    _activeAccounts[handle] = account;
+    return account;
+}
+
+- (int)removeAccount:(SipMacAccount *)account
+{
+    if (!account) return EINVAL;
+    sip_account_t *handle = [account handle];
+    if (!handle) return EINVAL;
+
+    sip_client_t *c = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(_mutex);
+        c = _client;
+        _activeAccounts.erase(handle);
+    }
+    if (!c) return EIO;
+
+    int rc = sip_client_remove_account(c, handle);
+    [account invalidate];
+    return rc;
+}
+
+- (int)setDefaultAccount:(SipMacAccount *)account
+{
+    if (!account) return EINVAL;
+    sip_account_t *handle = [account handle];
+    if (!handle) return EINVAL;
+
+    std::lock_guard<std::mutex> lock(_mutex);
+    if (!_client) return EIO;
+    return sip_client_set_default_account(_client, handle);
+}
+
+- (nullable SipMacAccount *)defaultAccount
+{
+    std::lock_guard<std::mutex> lock(_mutex);
+    if (!_client) return nil;
+    sip_account_t *handle = sip_client_get_default_account(_client);
+    if (!handle) return nil;
+    auto it = _activeAccounts.find(handle);
+    if (it != _activeAccounts.end()) {
+        return it->second;
+    }
+    SipMacAccount *account = [[SipMacAccount alloc] initWithHandle:handle client:self ownsHandle:NO];
+    _activeAccounts[handle] = account;
+    return account;
+}
+
+- (NSArray<SipMacAccount *> *)accounts
+{
+    std::lock_guard<std::mutex> lock(_mutex);
+    if (!_client) return @[];
+    size_t count = sip_client_get_account_count(_client);
+    if (count == 0) return @[];
+
+    std::vector<sip_account_t *> raw(count, nullptr);
+    size_t written = sip_client_get_accounts(_client, raw.data(), count);
+    NSMutableArray<SipMacAccount *> *result = [NSMutableArray arrayWithCapacity:written];
+    for (size_t i = 0; i < written; ++i) {
+        sip_account_t *h = raw[i];
+        if (!h) continue;
+        auto it = _activeAccounts.find(h);
+        if (it != _activeAccounts.end()) {
+            [result addObject:it->second];
+        } else {
+            SipMacAccount *acc = [[SipMacAccount alloc] initWithHandle:h client:self ownsHandle:NO];
+            _activeAccounts[h] = acc;
+            [result addObject:acc];
+        }
+    }
+    return [result copy];
 }
 
 - (nullable SipMacCall *)makeCallToUri:(NSString *)uri withVideo:(BOOL)withVideo
@@ -1336,9 +1548,39 @@ static bool set_default_audio_device_by_name(NSString *targetName, bool is_input
     if (it != _activeCalls.end()) {
         return it->second;
     }
-    SipMacCall *call = [[SipMacCall alloc] initWithHandle:handle];
+    SipMacCall *call = [[SipMacCall alloc] initWithHandle:handle client:self];
     _activeCalls[handle] = call;
     return call;
+}
+
+- (nullable SipMacAccount *)accountForHandle:(struct sip_account_t *)handle
+{
+    if (!handle) return nil;
+    std::lock_guard<std::mutex> lock(_mutex);
+    auto it = _activeAccounts.find(handle);
+    if (it != _activeAccounts.end()) {
+        return it->second;
+    }
+    SipMacAccount *acc = [[SipMacAccount alloc] initWithHandle:handle client:self ownsHandle:NO];
+    bool active = false;
+    if (_client) {
+        size_t count = sip_client_get_account_count(_client);
+        if (count > 0) {
+            std::vector<sip_account_t *> raw(count, nullptr);
+            size_t written = sip_client_get_accounts(_client, raw.data(), count);
+            for (size_t i = 0; i < written; ++i) {
+                if (raw[i] == handle) {
+                    _activeAccounts[handle] = acc;
+                    active = true;
+                    break;
+                }
+            }
+        }
+    }
+    if (!active) {
+        [acc invalidate];
+    }
+    return acc;
 }
 
 - (void)removeCall:(sip_call_t *)handle

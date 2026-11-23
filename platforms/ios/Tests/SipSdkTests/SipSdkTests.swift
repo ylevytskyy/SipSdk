@@ -726,4 +726,72 @@ final class SipSdkTests: XCTestCase {
         try await Task.sleep(nanoseconds: 300_000_000)
         await client.stop()
     }
+
+    @MainActor
+    func testMultiAccountRegistrationAndRouting() async throws {
+        let client = SipClient()
+        try await client.start()
+
+        let acc1 = try await client.addAccount(SipAccount(
+            username: "1001",
+            domain: "127.0.0.1",
+            password: "test1001",
+            transport: .udp,
+            port: 5060
+        ))
+        let acc2 = try await client.addAccount(SipAccount(
+            username: "1003",
+            domain: "127.0.0.1",
+            password: "test1003",
+            transport: .udp,
+            port: 5060
+        ))
+        let initialCount = client.accounts.count
+        let initialDefaultId = client.defaultAccountSession?.id
+        let acc1Id = acc1.id
+        let acc2Id = acc2.id
+        XCTAssertEqual(initialCount, 2)
+        XCTAssertEqual(initialDefaultId, acc1Id)
+
+        var wait = 0
+        while wait < 80 {
+            let r1 = acc1.isRegistered
+            let r2 = acc2.isRegistered
+            if r1 && r2 { break }
+            try await Task.sleep(nanoseconds: 100_000_000)
+            wait += 1
+        }
+        let reg1 = acc1.isRegistered
+        let reg2 = acc2.isRegistered
+        XCTAssertTrue(reg1, "Account 1001 should register")
+        XCTAssertTrue(reg2, "Account 1003 should register")
+
+        let call = try await client.makeCall(from: acc2, to: "9001", withVideo: false)
+        let callAccId = call.accountSession?.id
+        XCTAssertEqual(callAccId, acc2Id)
+        var callWait = 0
+        while callWait < 80 {
+            let st = call.state
+            if st == .established || st.isClosed { break }
+            try await Task.sleep(nanoseconds: 100_000_000)
+            callWait += 1
+        }
+        let finalCallState = call.state
+        XCTAssertEqual(finalCallState, .established)
+        await call.hangup()
+
+        try client.setDefaultAccount(acc2)
+        let switchedDefaultId = client.defaultAccountSession?.id
+        XCTAssertEqual(switchedDefaultId, acc2Id)
+        try await client.removeAccount(acc2)
+        let afterRemoveCount = client.accounts.count
+        let reelectedDefaultId = client.defaultAccountSession?.id
+        XCTAssertEqual(afterRemoveCount, 1)
+        XCTAssertEqual(reelectedDefaultId, acc1Id)
+
+        try await client.removeAccount(acc1)
+        let emptyCount = client.accounts.count
+        XCTAssertEqual(emptyCount, 0)
+        await client.stop()
+    }
 }

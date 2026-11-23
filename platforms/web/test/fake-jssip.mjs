@@ -55,6 +55,7 @@ export function createFakeJsSIP() {
       this.config = config;
       this.started = false;
       this.stopped = false;
+      this.registerCalls = 0;
       this.unregisterCalls = [];
       this.outgoing = [];
       this.messages = [];
@@ -67,7 +68,7 @@ export function createFakeJsSIP() {
     }
     start() { this.started = true; }
     stop() { this.stopped = true; }
-    register() {}
+    register() { this.registerCalls++; }
     unregister(options) { this.unregisterCalls.push(options); }
     call(target, options) {
       const session = new FakeSession({ direction: 'outgoing', uri: target });

@@ -250,4 +250,49 @@ namespace SipSdk
             ErrorCode = errorCode;
         }
     }
+
+    /// <summary>
+    /// Event arguments for per-account SIP registration state changes.
+    /// </summary>
+    public class SipAccountRegistrationStateEventArgs : EventArgs
+    {
+        public SipAccount? Account { get; }
+        public SipRegistrationState State { get; }
+        public int Code { get; }
+        public int StatusCode => Code;
+        public string Reason { get; }
+
+        public SipAccountRegistrationStateEventArgs(SipAccount? account, SipRegistrationState state, int code, string reason)
+        {
+            Account = account;
+            State = state;
+            Code = code;
+            Reason = reason ?? string.Empty;
+        }
+    }
+
+    /// <summary>
+    /// Event arguments for a received SIP MESSAGE attributed to a specific account.
+    /// </summary>
+    public class SipAccountMessageReceivedEventArgs : EventArgs
+    {
+        public SipAccount? Account { get; }
+        public string FromUri { get; }
+        public string From => FromUri;
+        public string ContentType { get; }
+        public byte[] Body { get; }
+
+        /// <summary>Body as UTF-8 text for text/* content types; null otherwise.</summary>
+        public string? Text => ContentType.StartsWith("text/", StringComparison.OrdinalIgnoreCase)
+            ? System.Text.Encoding.UTF8.GetString(Body)
+            : null;
+
+        public SipAccountMessageReceivedEventArgs(SipAccount? account, string fromUri, string contentType, byte[] body)
+        {
+            Account = account;
+            FromUri = fromUri ?? string.Empty;
+            ContentType = contentType ?? string.Empty;
+            Body = body ?? Array.Empty<byte>();
+        }
+    }
 }

@@ -31,6 +31,7 @@ set_target_properties(re PROPERTIES
 add_library(sipcore SHARED
     sip_jni.cpp
     media_codec_driver.cpp
+    ${CORE_DIR}/src/account_session.cpp
     ${CORE_DIR}/src/call_recorder.cpp
     ${CORE_DIR}/src/call_session.cpp
     ${CORE_DIR}/src/conference_mixer.cpp

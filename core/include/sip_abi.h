@@ -25,6 +25,9 @@ extern "C" {
 
 typedef struct sip_client_t sip_client_t;
 typedef struct sip_call_t sip_call_t;
+typedef struct sip_account_t sip_account_t;
+
+#define SIP_CLIENT_MAX_ACCOUNTS 8
 
 typedef enum {
     SIP_REG_STATE_UNREGISTERED = 0,
@@ -598,6 +601,119 @@ SIP_ABI_EXPORT int sip_call_stop_recording(sip_call_t *call);
 SIP_ABI_EXPORT bool sip_call_is_recording(const sip_call_t *call);
 
 SIP_ABI_EXPORT const char *sip_call_get_recording_path(const sip_call_t *call);
+
+/* ============================================================================
+ * Multi-Account Support (1..SIP_CLIENT_MAX_ACCOUNTS per sip_client_t)
+ * ============================================================================ */
+
+typedef struct sip_account_callbacks_t {
+    /** Registration state changed for a specific account. */
+    void (*on_account_reg_state)(sip_client_t *client, sip_account_t *account,
+                                 sip_reg_state_t state, int code, const char *reason,
+                                 void *user_data);
+
+    /** A SIP MESSAGE arrived for a specific account. */
+    void (*on_account_message_received)(sip_client_t *client, sip_account_t *account,
+                                        const char *from_uri, const char *content_type,
+                                        const uint8_t *body, size_t body_len,
+                                        void *user_data);
+} sip_account_callbacks_t;
+
+/**
+ * Sets per-account callbacks without altering sip_callbacks_t or sip_message_callbacks_t.
+ * Pass nullptr to clear them.
+ */
+SIP_ABI_EXPORT int sip_client_set_account_callbacks(sip_client_t *client,
+                                                    const sip_account_callbacks_t *callbacks);
+
+/**
+ * Adds and registers a new SIP account on the client (up to SIP_CLIENT_MAX_ACCOUNTS).
+ * The first account added becomes the default account.
+ * Returns 0 on success, EINVAL on invalid args, EEXIST for duplicate active AOR,
+ * EBUSY when SIP_CLIENT_MAX_ACCOUNTS is reached, or EIO if not started.
+ */
+SIP_ABI_EXPORT int sip_client_add_account(sip_client_t *client,
+                                          const sip_account_config_t *config,
+                                          sip_account_t **out_account);
+
+/**
+ * Unregisters and removes an account from the client, hanging up any active calls on it.
+ * Caller still releases the handle via sip_account_destroy(account).
+ */
+SIP_ABI_EXPORT int sip_client_remove_account(sip_client_t *client, sip_account_t *account);
+
+/**
+ * Selects the default account used by single-account APIs (sip_call_dial, sip_client_send_message, etc.).
+ */
+SIP_ABI_EXPORT int sip_client_set_default_account(sip_client_t *client, sip_account_t *account);
+
+/**
+ * Returns the current default account handle, or nullptr if none is active.
+ */
+SIP_ABI_EXPORT sip_account_t *sip_client_get_default_account(const sip_client_t *client);
+
+/**
+ * Returns the number of active accounts registered on this client.
+ */
+SIP_ABI_EXPORT size_t sip_client_get_account_count(const sip_client_t *client);
+
+/**
+ * Copies up to max_count active account handles into out_accounts.
+ * Returns the number of handles written (or total count if out_accounts is nullptr).
+ */
+SIP_ABI_EXPORT size_t sip_client_get_accounts(const sip_client_t *client,
+                                              sip_account_t **out_accounts,
+                                              size_t max_count);
+
+/**
+ * Initiates or refreshes registration for a specific account.
+ */
+SIP_ABI_EXPORT int sip_account_reregister(sip_account_t *account);
+
+/**
+ * Unregisters a specific account without removing it from the client.
+ */
+SIP_ABI_EXPORT int sip_account_unregister(sip_account_t *account);
+
+/**
+ * Initiates an outgoing call using a specific account.
+ */
+SIP_ABI_EXPORT int sip_account_dial(sip_account_t *account,
+                                    const char *target_uri,
+                                    bool with_video,
+                                    sip_call_t **out_call);
+
+/**
+ * Sends a SIP MESSAGE from a specific account.
+ */
+SIP_ABI_EXPORT int sip_account_send_message(sip_account_t *account,
+                                            const char *peer_uri,
+                                            const char *content_type,
+                                            const uint8_t *body,
+                                            size_t body_len,
+                                            uint64_t *message_id);
+
+/**
+ * Returns the account handle that owns this call (both outgoing and incoming calls), or nullptr.
+ */
+SIP_ABI_EXPORT sip_account_t *sip_call_get_account(const sip_call_t *call);
+
+/**
+ * Account metadata and state accessors.
+ */
+SIP_ABI_EXPORT uint64_t sip_account_get_id(const sip_account_t *account);
+SIP_ABI_EXPORT const char *sip_account_get_aor(const sip_account_t *account);
+SIP_ABI_EXPORT const char *sip_account_get_user(const sip_account_t *account);
+SIP_ABI_EXPORT const char *sip_account_get_domain(const sip_account_t *account);
+SIP_ABI_EXPORT bool sip_account_is_registered(const sip_account_t *account);
+SIP_ABI_EXPORT sip_reg_state_t sip_account_get_reg_state(const sip_account_t *account);
+SIP_ABI_EXPORT void *sip_account_get_user_data(const sip_account_t *account);
+SIP_ABI_EXPORT void sip_account_set_user_data(sip_account_t *account, void *user_data);
+
+/**
+ * Releases the caller's reference to an account handle. Safe to pass nullptr.
+ */
+SIP_ABI_EXPORT void sip_account_destroy(sip_account_t *account);
 
 #ifdef __cplusplus
 }

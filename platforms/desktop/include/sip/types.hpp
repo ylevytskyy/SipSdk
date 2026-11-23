@@ -84,6 +84,25 @@ enum class RecordingState {
     Failed = 2
 };
 
+struct AccountConfig {
+    std::string username;
+    std::string domain;
+    std::string password;
+    std::string transport{"udp"};
+    int port{5060};
+    std::string display_name;
+    std::string outbound_proxy;
+    std::string stun_server;
+    std::string stun_user;
+    std::string stun_pass;
+    std::string media_nat;
+    uint32_t reg_interval{0};
+    std::string tls_ca_file;
+    bool verify_tls_cert{true};
+    std::string media_enc;
+    int max_calls{4};
+};
+
 inline const char *to_string(RegistrationState state) {
     switch (state) {
         case RegistrationState::Unregistered: return "Unregistered";

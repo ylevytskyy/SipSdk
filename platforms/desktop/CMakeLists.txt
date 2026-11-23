@@ -58,6 +58,7 @@ endif()
 
 # Desktop SDK static library
 set(SIP_DESKTOP_SOURCES
+    src/account.cpp
     src/call.cpp
     src/client.cpp
     src/audio_driver.cpp
@@ -169,6 +170,24 @@ target_include_directories(test_desktop_lifecycle
 )
 
 add_test(NAME desktop_lifecycle COMMAND test_desktop_lifecycle)
+
+add_executable(test_desktop_multi_account
+    tests/test_desktop_multi_account.cpp
+)
+
+target_link_libraries(test_desktop_multi_account
+    PRIVATE
+        sip::desktop
+)
+
+target_include_directories(test_desktop_multi_account
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../core/include
+        ${PREBUILT_INCLUDE_DIR}
+)
+
+add_test(NAME desktop_multi_account COMMAND test_desktop_multi_account)
 
 add_executable(test_audio_drivers
     tests/test_audio_drivers.cpp

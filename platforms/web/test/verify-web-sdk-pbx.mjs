@@ -122,6 +122,53 @@ async function main() {
       multi.e1 && multi.h1 && multi.e2 && multi.h2 && multi.r1 && !multi.c1HeldFinal && multi.c2HeldFinal,
       JSON.stringify(multi));
 
+    // Multi-account: add 1005 alongside 1002 on the same SipClient, verify registration & per-account MESSAGE
+    const multiAcc = await page.evaluate(async (host) => {
+      const c = window.sipClient;
+      const timeout = (ms) => new Promise((r) => setTimeout(() => r(null), ms));
+      const acc1 = c.defaultAccount;
+      const regDone = new Promise((resolve) => {
+        const off = c.on('accountRegistrationStateChanged', (e) => {
+          if (e.account.user === '1005' && e.state === 2) { off(); resolve(true); }
+          if (e.account.user === '1005' && e.state === 3) { off(); resolve(false); }
+        });
+      });
+      const acc2 = c.addAccount({
+        username: '1005',
+        domain: host,
+        password: 'test1005',
+        wsUri: `ws://${host}:8088/ws`,
+      });
+      const registered2 = await Promise.race([regDone, timeout(10000)]);
+      const countWhileTwo = c.accountCount;
+
+      const text = `multi-account msg ${Date.now()}`;
+      const msgReceived = new Promise((resolve) => {
+        const off = c.on('accountMessageReceived', (e) => {
+          if (e.body === text) { off(); resolve({ toUser: e.account.user, fromUri: e.fromUri, body: e.body }); }
+        });
+      });
+      acc2.sendMessage('1002', text);
+      const delivered = await Promise.race([msgReceived, timeout(10000)]);
+
+      c.removeAccount(acc2);
+      return {
+        acc1User: acc1?.user,
+        acc2User: acc2.user,
+        registered2,
+        countWhileTwo,
+        delivered,
+        countAfterRemove: c.accountCount,
+        defaultAfterRemove: c.defaultAccount?.user,
+      };
+    }, PBX_HOST);
+    expect('live Asterisk multi-account (1002 + 1005) registration & per-account MESSAGE',
+      multiAcc.acc1User === '1002' && multiAcc.acc2User === '1005' && multiAcc.registered2 === true &&
+        multiAcc.countWhileTwo === 2 && multiAcc.delivered?.toUser === '1002' &&
+        /^sip:1005@/.test(multiAcc.delivered?.fromUri || '') &&
+        multiAcc.countAfterRemove === 1 && multiAcc.defaultAfterRemove === '1002',
+      JSON.stringify(multiAcc));
+
     await page.click('#btnUnregister');
     expect('unregister reaches Unregistered (state 0)', await waitState('#regStatus', 0));
     expect('no console errors', consoleErrors.length === 0, consoleErrors.join(' | '));

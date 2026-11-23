@@ -250,6 +250,8 @@ public enum SipEvent: Sendable {
     case callRejectedBusy(String)
     case conferenceChanged([SipCall])
     case recordingStateChanged(SipCall, SipRecordingState, path: String, errorCode: Int)
+    case accountRegistrationChanged(SipAccountSession, SipRegistrationState)
+    case accountMessageReceived(SipAccountSession, SipIncomingMessage)
 }
 
 /// Strongly typed SIP error domain.

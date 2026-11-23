@@ -95,6 +95,19 @@ namespace SipSdk.Native
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     public delegate void NativeMessageStatusCallback(IntPtr client, ulong messageId, int status, int code, IntPtr reason, IntPtr userData);
 
+    [StructLayout(LayoutKind.Sequential)]
+    public struct SipAccountCallbacks
+    {
+        public IntPtr OnAccountRegState;
+        public IntPtr OnAccountMessageReceived;
+    }
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    public delegate void NativeAccountRegStateCallback(IntPtr client, IntPtr account, int state, int code, IntPtr reason, IntPtr userData);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    public delegate void NativeAccountMessageReceivedCallback(IntPtr client, IntPtr account, IntPtr fromUri, IntPtr contentType, IntPtr body, UIntPtr bodyLen, IntPtr userData);
+
     internal static class SipNativeAbi
     {
         public const string LibraryName = "sipcore";
@@ -326,6 +339,80 @@ namespace SipSdk.Native
 
         [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
         public static extern IntPtr sip_call_get_recording_path(IntPtr call);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int sip_client_set_account_callbacks(IntPtr client, ref SipAccountCallbacks callbacks);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int sip_client_add_account(IntPtr client, ref SipAccountConfigNative config, out IntPtr outAccount);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int sip_client_remove_account(IntPtr client, IntPtr account);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int sip_client_set_default_account(IntPtr client, IntPtr account);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern IntPtr sip_client_get_default_account(IntPtr client);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern UIntPtr sip_client_get_account_count(IntPtr client);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern UIntPtr sip_client_get_accounts(IntPtr client, [Out] IntPtr[]? outAccounts, UIntPtr maxCount);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int sip_account_reregister(IntPtr account);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int sip_account_unregister(IntPtr account);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int sip_account_dial(
+            IntPtr account,
+            [MarshalAs(UnmanagedType.LPStr)] string targetUri,
+            [MarshalAs(UnmanagedType.I1)] bool withVideo,
+            out IntPtr outCall);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int sip_account_send_message(
+            IntPtr account,
+            byte[] peerUriUtf8Z,
+            byte[] contentTypeUtf8Z,
+            byte[] body,
+            UIntPtr bodyLen,
+            out ulong messageId);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern IntPtr sip_call_get_account(IntPtr call);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern ulong sip_account_get_id(IntPtr account);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern IntPtr sip_account_get_aor(IntPtr account);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern IntPtr sip_account_get_user(IntPtr account);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern IntPtr sip_account_get_domain(IntPtr account);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        [return: MarshalAs(UnmanagedType.I1)]
+        public static extern bool sip_account_is_registered(IntPtr account);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int sip_account_get_reg_state(IntPtr account);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern IntPtr sip_account_get_user_data(IntPtr account);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern void sip_account_set_user_data(IntPtr account, IntPtr userData);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern void sip_account_destroy(IntPtr account);
 
         /// <summary>NUL-terminated UTF-8 bytes (netstandard2.0 has no LPUTF8Str marshalling).</summary>
         public static byte[] ToUtf8Z(string value)

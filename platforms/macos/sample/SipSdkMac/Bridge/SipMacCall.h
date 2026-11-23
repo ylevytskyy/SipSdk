@@ -23,12 +23,15 @@ typedef NS_ENUM(NSInteger, SipMacRecordingState) {
     SipMacRecordingStateFailed = 2
 };
 
+@class SipMacAccount;
+@class SipMacClient;
 struct sip_call_t;
 
 @interface SipMacCall : NSObject
 
 @property (nonatomic, readonly, copy) NSString *callId;
 @property (nonatomic, readonly, copy) NSString *remoteUri;
+@property (nonatomic, readonly, nullable) SipMacAccount *account;
 @property (nonatomic, readonly) BOOL hasVideo;
 @property (nonatomic, readonly) BOOL isOutgoing;
 @property (nonatomic, readonly) BOOL isOnHold;
@@ -45,6 +48,7 @@ struct sip_call_t;
 @property (nonatomic, readonly) uint32_t audioJitterMs;
 
 - (instancetype)initWithHandle:(struct sip_call_t *)handle;
+- (instancetype)initWithHandle:(struct sip_call_t *)handle client:(nullable SipMacClient *)client;
 
 - (int)answerWithVideo:(BOOL)withVideo;
 - (int)hangupWithCode:(int)code reason:(NSString *)reason;

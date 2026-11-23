@@ -1,6 +1,9 @@
 #include "engine.h"
+#include "account_session.h"
 #include "call_session.h"
 #include "media_driver.h"
+
+#include <algorithm>
 
 #include <re.h>
 #include <rem.h>
@@ -46,13 +49,25 @@ Engine::Engine(sip_client_t *owner, const sip_callbacks_t *callbacks, void *user
 Engine::~Engine()
 {
     destroy();
-    std::lock_guard<std::mutex> lock(m_calls_mutex);
-    for (auto *c : m_all_calls) {
-        if (c) {
-            c->release();
+    {
+        std::lock_guard<std::mutex> lock(m_calls_mutex);
+        for (auto *c : m_all_calls) {
+            if (c) {
+                c->release();
+            }
         }
+        m_all_calls.clear();
     }
-    m_all_calls.clear();
+    {
+        std::lock_guard<std::mutex> lock(m_accounts_mutex);
+        for (auto *a : m_accounts) {
+            if (a) {
+                a->release();
+            }
+        }
+        m_accounts.clear();
+        m_default_account = nullptr;
+    }
 }
 
 int Engine::init(const char *config_path)
@@ -347,11 +362,25 @@ void Engine::cleanup_on_loop_thread()
         m_events_registered = false;
     }
 
-    if (m_ua != nullptr) {
-        ua_destroy(m_ua);
-        m_ua = nullptr;
+    {
+        std::vector<sip_account_t *> to_destroy;
+        {
+            std::lock_guard<std::mutex> lock(m_accounts_mutex);
+            to_destroy.swap(m_accounts);
+            m_default_account = nullptr;
+        }
+        for (auto *acc : to_destroy) {
+            if (acc) {
+                acc->mark_removed();
+                acc->set_reg_state(SIP_REG_STATE_UNREGISTERED);
+                struct ua *u = acc->detach_raw_ua();
+                if (u != nullptr) {
+                    ua_destroy(u);
+                }
+                acc->release();
+            }
+        }
     }
-    m_is_registered.store(false);
 
     if (m_media_manager) {
         m_media_manager->unregister_baresip_plugins();
@@ -443,6 +472,437 @@ int Engine::configure_wss_tls_on_loop(bool verify_tls_cert, const std::string &c
     return add_wss_transport_on_loop();
 }
 
+static std::string build_canonical_aor(const AccountConfig &cfg,
+                                       std::string &lower_transport,
+                                       std::string &transport_param,
+                                       int &effective_port)
+{
+    lower_transport = cfg.transport;
+    for (auto &c : lower_transport) {
+        c = static_cast<char>(::tolower(static_cast<unsigned char>(c)));
+    }
+    if (lower_transport.empty()) {
+        lower_transport = "udp";
+    }
+    transport_param.clear();
+    if (lower_transport == "tcp") {
+        transport_param = ";transport=tcp";
+    } else if (lower_transport == "tls") {
+        transport_param = ";transport=tls";
+    } else if (lower_transport == "ws") {
+        transport_param = ";transport=ws";
+    } else if (lower_transport == "wss") {
+        transport_param = ";transport=wss";
+    }
+
+    effective_port = cfg.port;
+    if (effective_port <= 0) {
+        if (lower_transport == "tls") {
+            effective_port = 5061;
+        } else if (lower_transport == "ws") {
+            effective_port = 80;
+        } else if (lower_transport == "wss") {
+            effective_port = 443;
+        } else {
+            effective_port = 5060;
+        }
+    }
+
+    return "sip:" + cfg.user + "@" + cfg.domain + ":" + std::to_string(effective_port) + transport_param;
+}
+
+sip_account_t *Engine::find_account_by_ua(struct ua *u) const
+{
+    if (!u) return nullptr;
+    std::lock_guard<std::mutex> lock(m_accounts_mutex);
+    for (auto *acc : m_accounts) {
+        if (acc && acc->raw_ua() == u) {
+            return acc;
+        }
+    }
+    return nullptr;
+}
+
+sip_account_t *Engine::find_account_by_call(struct call *c) const
+{
+    if (!c) return nullptr;
+    std::lock_guard<std::mutex> lock(m_accounts_mutex);
+    for (auto *acc : m_accounts) {
+        if (!acc) continue;
+        struct ua *u = acc->raw_ua();
+        if (!u) continue;
+        struct list *calls = ua_calls(u);
+        for (struct le *le = list_head(calls); le != nullptr; le = le->next) {
+            if (le->data == c) {
+                return acc;
+            }
+        }
+    }
+    return nullptr;
+}
+
+struct ua *Engine::resolve_call_ua(const sip_call_t *call) const
+{
+    if (call) {
+        sip_account_t *acc = call->account();
+        if (acc) {
+            struct ua *u = acc->raw_ua();
+            if (u) return u;
+        }
+    }
+    std::lock_guard<std::mutex> lock(m_accounts_mutex);
+    if (m_default_account) {
+        return m_default_account->raw_ua();
+    }
+    for (auto *acc : m_accounts) {
+        if (acc && acc->raw_ua() != nullptr) {
+            return acc->raw_ua();
+        }
+    }
+    return nullptr;
+}
+
+bool Engine::is_account_active(const sip_account_t *account) const
+{
+    if (!account || account->is_removed()) return false;
+    std::lock_guard<std::mutex> lock(m_accounts_mutex);
+    return std::find(m_accounts.begin(), m_accounts.end(), account) != m_accounts.end();
+}
+
+int Engine::start_account_ua_on_loop(sip_account_t *account, const AccountConfig &cfg, int effective_max_calls)
+{
+    if (!account || account->is_removed()) {
+        return EINVAL;
+    }
+
+    struct config *bcfg = conf_config();
+    if (bcfg != nullptr) {
+        /* Keep Baresip's internal cap one above m_max_calls so the (cap+1)-th INVITE
+           reaches BEVENT_SIPSESS_CONN where Engine replies 486 and fires on_call_rejected_busy. */
+        bcfg->call.max_calls = static_cast<uint32_t>(effective_max_calls + 1);
+    }
+
+    struct ua *old_ua = account->detach_raw_ua();
+    if (old_ua != nullptr) {
+        ua_destroy(old_ua);
+    }
+
+    std::string lower_transport;
+    std::string transport_param;
+    int port = 0;
+    std::string aor = build_canonical_aor(cfg, lower_transport, transport_param, port);
+
+    auto notify_fail = [this, account](int code, const char *reason) {
+        account->set_reg_state(SIP_REG_STATE_FAILED);
+        dispatch_account_reg_state(account, SIP_REG_STATE_FAILED, code, reason);
+        if (get_default_account() == account) {
+            dispatch_reg_state(SIP_REG_STATE_FAILED, code, reason);
+        }
+    };
+
+    if (lower_transport == "tls") {
+        struct tls *t = uag_tls();
+        if (t != nullptr) {
+            if (!cfg.verify_tls_cert) {
+                tls_disable_verify_server(t);
+            }
+            if (!cfg.tls_ca_file.empty()) {
+                int ca_rc = tls_add_ca(t, cfg.tls_ca_file.c_str());
+                if (ca_rc != 0 && cfg.verify_tls_cert) {
+                    notify_fail(ca_rc, "Failed to load TLS CA certificate");
+                    return ca_rc;
+                }
+            }
+        }
+    } else if (lower_transport == "wss") {
+        int wss_rc = configure_wss_tls_on_loop(cfg.verify_tls_cert, cfg.tls_ca_file);
+        if (wss_rc != 0 && cfg.verify_tls_cert) {
+            notify_fail(wss_rc, "Failed to configure WSS TLS context");
+            return wss_rc;
+        }
+    }
+
+    struct ua *new_ua = nullptr;
+    int rc = ua_alloc(&new_ua, aor.c_str());
+    if (rc != 0 || new_ua == nullptr) {
+        notify_fail(rc != 0 ? rc : EINVAL, "Failed to allocate UA");
+        return rc != 0 ? rc : EINVAL;
+    }
+
+    account->attach_raw_ua(new_ua);
+
+    struct account *acc = ua_account(new_ua);
+    if (acc != nullptr) {
+        if (!cfg.display_name.empty()) {
+            (void)account_set_display_name(acc, cfg.display_name.c_str());
+        }
+        (void)account_set_auth_user(acc, cfg.user.c_str());
+        if (!cfg.pwd.empty()) {
+            (void)account_set_auth_pass(acc, cfg.pwd.c_str());
+        }
+        if (!cfg.outbound_proxy.empty()) {
+            (void)account_set_outbound(acc, cfg.outbound_proxy.c_str(), 0);
+        } else if (lower_transport == "tls" || lower_transport == "tcp" ||
+                   lower_transport == "ws" || lower_transport == "wss") {
+            std::string outbound = "sip:" + cfg.domain + ":" + std::to_string(port) + transport_param;
+            (void)account_set_outbound(acc, outbound.c_str(), 0);
+        }
+        if (!cfg.stun_server.empty()) {
+            (void)account_set_stun_uri(acc, cfg.stun_server.c_str());
+        }
+        if (!cfg.stun_user.empty()) {
+            (void)account_set_stun_user(acc, cfg.stun_user.c_str());
+        }
+        if (!cfg.stun_pass.empty()) {
+            (void)account_set_stun_pass(acc, cfg.stun_pass.c_str());
+        }
+        if (!cfg.media_nat.empty()) {
+            (void)account_set_medianat(acc, cfg.media_nat.c_str());
+        }
+        if (cfg.reg_interval > 0) {
+            (void)account_set_regint(acc, cfg.reg_interval);
+        }
+
+        std::string media_enc = cfg.media_enc;
+        if (media_enc.empty() && (lower_transport == "tls" || lower_transport == "wss")) {
+            media_enc = "srtp-mand";
+        }
+        if (!media_enc.empty() && media_enc != "none") {
+            (void)account_set_mediaenc(acc, media_enc.c_str());
+        }
+
+        (void)account_set_video_codecs(acc, "H264/packetization-mode=1");
+        if (aucodec_find(baresip_aucodecl(), "opus", 48000, 2) != nullptr) {
+            (void)account_set_audio_codecs(acc, "opus/48000/2,G722/16000/1,PCMU/8000/1,PCMA/8000/1");
+        } else {
+            (void)account_set_audio_codecs(acc, "G722/16000/1,PCMU/8000/1,PCMA/8000/1");
+        }
+    }
+
+    rc = ua_register(new_ua);
+    if (rc != 0) {
+        notify_fail(rc, "Registration submission failed");
+    }
+    return rc;
+}
+
+int Engine::set_account_callbacks(const sip_account_callbacks_t *callbacks)
+{
+    std::lock_guard<std::mutex> lock(m_account_cb_mutex);
+    if (callbacks) {
+        m_account_callbacks = *callbacks;
+    } else {
+        m_account_callbacks = sip_account_callbacks_t{};
+    }
+    return 0;
+}
+
+int Engine::add_account(const AccountConfig &config, sip_account_t **out_account)
+{
+    if (out_account) *out_account = nullptr;
+    if (!out_account || config.user.empty() || config.domain.empty() || config.port < 0 || config.port > 65535) {
+        return EINVAL;
+    }
+    if (!m_started.load()) {
+        return EIO;
+    }
+
+    std::string lower_transport;
+    std::string transport_param;
+    int port = 0;
+    std::string aor = build_canonical_aor(config, lower_transport, transport_param, port);
+
+    int effective_max_calls = config.max_calls == 0 ? m_max_calls.load() : config.max_calls;
+    if (effective_max_calls < 1) effective_max_calls = 1;
+    if (effective_max_calls > 8) effective_max_calls = 8;
+    m_max_calls.store(effective_max_calls);
+
+    sip_account_t *account = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(m_accounts_mutex);
+        if (m_accounts.size() >= SIP_CLIENT_MAX_ACCOUNTS) {
+            return EBUSY;
+        }
+        for (auto *existing : m_accounts) {
+            if (existing && !existing->is_removed() && existing->aor_str() == aor) {
+                return EEXIST;
+            }
+        }
+        uint64_t id = m_next_account_id.fetch_add(1);
+        account = new sip_account_t(m_owner, this, id, aor, config.user, config.domain, lower_transport);
+        // Engine retains 1 ref; caller receives 1 ref (initial refcount is 1, so retain once for engine).
+        account->retain();
+        m_accounts.push_back(account);
+        if (!m_default_account) {
+            m_default_account = account;
+        }
+    }
+
+    account->retain();
+    bool posted = post_task([this, account, cfg = config, effective_max_calls]() {
+        (void)start_account_ua_on_loop(account, cfg, effective_max_calls);
+        account->release();
+    });
+    if (!posted) {
+        {
+            std::lock_guard<std::mutex> lock(m_accounts_mutex);
+            auto it = std::find(m_accounts.begin(), m_accounts.end(), account);
+            if (it != m_accounts.end()) {
+                m_accounts.erase(it);
+                if (m_default_account == account) {
+                    m_default_account = m_accounts.empty() ? nullptr : m_accounts.front();
+                }
+                account->release(); // engine ref
+            }
+        }
+        account->release(); // task ref
+        account->release(); // caller ref
+        return EIO;
+    }
+
+    *out_account = account;
+    return 0;
+}
+
+int Engine::remove_account(sip_account_t *account)
+{
+    if (!account) return EINVAL;
+    {
+        std::lock_guard<std::mutex> lock(m_accounts_mutex);
+        auto it = std::find(m_accounts.begin(), m_accounts.end(), account);
+        if (it == m_accounts.end()) {
+            return EINVAL;
+        }
+        m_accounts.erase(it);
+        account->mark_removed();
+        if (m_default_account == account) {
+            m_default_account = m_accounts.empty() ? nullptr : m_accounts.front();
+        }
+    }
+
+    // Transfer engine's reference to the cleanup task on the loop thread.
+    bool posted = post_task([this, account]() {
+        struct ua *u = account->detach_raw_ua();
+        if (u != nullptr) {
+            std::vector<sip_call_t *> acc_calls;
+            {
+                std::lock_guard<std::mutex> lock(m_calls_mutex);
+                for (auto *sess : m_all_calls) {
+                    if (sess && !sess->is_closed() && sess->account() == account) {
+                        sess->retain();
+                        acc_calls.push_back(sess);
+                    }
+                }
+            }
+            for (auto *sess : acc_calls) {
+                struct call *c = sess->raw_call();
+                if (c != nullptr) {
+                    sess->latch_media_stats();
+                    ua_hangup(u, c, 0, "Account Removed");
+                }
+                sess->release();
+            }
+            ua_unregister(u);
+            ua_destroy(u);
+        }
+        account->set_reg_state(SIP_REG_STATE_UNREGISTERED);
+        dispatch_account_reg_state(account, SIP_REG_STATE_UNREGISTERED, 0, "Account Removed");
+        account->release(); // engine ref
+    });
+    if (!posted) {
+        account->set_reg_state(SIP_REG_STATE_UNREGISTERED);
+        account->release(); // engine ref
+        return EIO;
+    }
+    return 0;
+}
+
+int Engine::set_default_account(sip_account_t *account)
+{
+    if (!account) return EINVAL;
+    std::lock_guard<std::mutex> lock(m_accounts_mutex);
+    auto it = std::find(m_accounts.begin(), m_accounts.end(), account);
+    if (it == m_accounts.end() || account->is_removed()) {
+        return EINVAL;
+    }
+    m_default_account = account;
+    return 0;
+}
+
+sip_account_t *Engine::get_default_account() const
+{
+    std::lock_guard<std::mutex> lock(m_accounts_mutex);
+    return m_default_account;
+}
+
+size_t Engine::get_account_count() const
+{
+    std::lock_guard<std::mutex> lock(m_accounts_mutex);
+    return m_accounts.size();
+}
+
+size_t Engine::get_accounts(sip_account_t **out_accounts, size_t max_count) const
+{
+    std::lock_guard<std::mutex> lock(m_accounts_mutex);
+    if (!out_accounts) {
+        return m_accounts.size();
+    }
+    size_t count = std::min(max_count, m_accounts.size());
+    for (size_t i = 0; i < count; ++i) {
+        out_accounts[i] = m_accounts[i];
+    }
+    return count;
+}
+
+int Engine::reregister_account(sip_account_t *account)
+{
+    if (!is_account_active(account)) return EINVAL;
+    account->retain();
+    bool posted = post_task([this, account]() {
+        struct ua *u = account->raw_ua();
+        if (u != nullptr && !account->is_removed()) {
+            int rc = ua_register(u);
+            if (rc != 0) {
+                account->set_reg_state(SIP_REG_STATE_FAILED);
+                dispatch_account_reg_state(account, SIP_REG_STATE_FAILED, rc, "Registration submission failed");
+                if (get_default_account() == account) {
+                    dispatch_reg_state(SIP_REG_STATE_FAILED, rc, "Registration submission failed");
+                }
+            }
+        }
+        account->release();
+    });
+    if (!posted) {
+        account->release();
+        return EIO;
+    }
+    return 0;
+}
+
+int Engine::unregister_account(sip_account_t *account)
+{
+    if (!is_account_active(account)) return EINVAL;
+    account->set_reg_state(SIP_REG_STATE_UNREGISTERED);
+    account->retain();
+    bool posted = post_task([this, account]() {
+        struct ua *u = account->raw_ua();
+        if (u != nullptr) {
+            ua_unregister(u);
+        } else {
+            dispatch_account_reg_state(account, SIP_REG_STATE_UNREGISTERED, 0, "Unregistered");
+            if (get_default_account() == account) {
+                dispatch_reg_state(SIP_REG_STATE_UNREGISTERED, 0, "Unregistered");
+            }
+        }
+        account->release();
+    });
+    if (!posted) {
+        account->release();
+        return EIO;
+    }
+    return 0;
+}
+
 int Engine::register_account(const AccountConfig &config)
 {
     if (config.user.empty() || config.domain.empty() || config.port < 0 || config.port > 65535) {
@@ -454,132 +914,51 @@ int Engine::register_account(const AccountConfig &config)
     if (effective_max_calls > 8) effective_max_calls = 8;
     m_max_calls.store(effective_max_calls);
 
-    bool posted = post_task([this, cfg = config, effective_max_calls]() {
-        struct config *bcfg = conf_config();
-        if (bcfg != nullptr) {
-            /* Keep Baresip's internal cap one above m_max_calls so the (cap+1)-th INVITE
-               reaches BEVENT_SIPSESS_CONN where Engine replies 486 and fires on_call_rejected_busy. */
-            bcfg->call.max_calls = static_cast<uint32_t>(effective_max_calls + 1);
-        }
-        if (m_ua != nullptr) {
-            ua_destroy(m_ua);
-            m_ua = nullptr;
-        }
+    std::string lower_transport;
+    std::string transport_param;
+    int port = 0;
+    std::string aor = build_canonical_aor(config, lower_transport, transport_param, port);
 
-        std::string transport_param = "";
-        std::string lower_transport = cfg.transport;
-        for (auto &c : lower_transport) {
-            c = (char)::tolower(c);
+    sip_account_t *old_default = nullptr;
+    sip_account_t *new_default = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(m_accounts_mutex);
+        old_default = m_default_account;
+        if (old_default) {
+            auto it = std::find(m_accounts.begin(), m_accounts.end(), old_default);
+            if (it != m_accounts.end()) {
+                m_accounts.erase(it);
+            }
+            old_default->mark_removed();
         }
-        if (lower_transport == "tcp") {
-            transport_param = ";transport=tcp";
-        } else if (lower_transport == "tls") {
-            transport_param = ";transport=tls";
-        } else if (lower_transport == "ws") {
-            transport_param = ";transport=ws";
-        } else if (lower_transport == "wss") {
-            transport_param = ";transport=wss";
+        uint64_t id = m_next_account_id.fetch_add(1);
+        new_default = new sip_account_t(m_owner, this, id, aor, config.user, config.domain, lower_transport);
+        // Engine owns the sole reference for legacy register_account calls.
+        m_accounts.insert(m_accounts.begin(), new_default);
+        m_default_account = new_default;
+    }
+
+    new_default->retain();
+    bool posted = post_task([this, old_default, new_default, cfg = config, effective_max_calls]() {
+        if (old_default) {
+            struct ua *old_ua = old_default->detach_raw_ua();
+            if (old_ua != nullptr) {
+                ua_destroy(old_ua);
+            }
+            old_default->release();
         }
-        m_active_transport = lower_transport;
-
-        int port = cfg.port;
-        if (port <= 0) {
-            if (lower_transport == "tls") {
-                port = 5061;
-            } else if (lower_transport == "ws") {
-                port = 80;
-            } else if (lower_transport == "wss") {
-                port = 443;
-            } else {
-                port = 5060;
-            }
-        }
-
-        std::string aor = "sip:" + cfg.user + "@" + cfg.domain + ":" + std::to_string(port) + transport_param;
-
-        if (lower_transport == "tls") {
-            struct tls *t = uag_tls();
-            if (t != nullptr) {
-                if (!cfg.verify_tls_cert) {
-                    tls_disable_verify_server(t);
-                }
-                if (!cfg.tls_ca_file.empty()) {
-                    int ca_rc = tls_add_ca(t, cfg.tls_ca_file.c_str());
-                    if (ca_rc != 0 && cfg.verify_tls_cert) {
-                        dispatch_reg_state(SIP_REG_STATE_FAILED, ca_rc, "Failed to load TLS CA certificate");
-                        return;
-                    }
-                }
-            }
-        } else if (lower_transport == "wss") {
-            int wss_rc = configure_wss_tls_on_loop(cfg.verify_tls_cert, cfg.tls_ca_file);
-            if (wss_rc != 0 && cfg.verify_tls_cert) {
-                dispatch_reg_state(SIP_REG_STATE_FAILED, wss_rc, "Failed to configure WSS TLS context");
-                return;
-            }
-        }
-
-        int rc = ua_alloc(&m_ua, aor.c_str());
-        if (rc != 0 || m_ua == nullptr) {
-            dispatch_reg_state(SIP_REG_STATE_FAILED, rc != 0 ? rc : EINVAL, "Failed to allocate UA");
-            return;
-        }
-
-        struct account *acc = ua_account(m_ua);
-        if (acc != nullptr) {
-            if (!cfg.display_name.empty()) {
-                (void)account_set_display_name(acc, cfg.display_name.c_str());
-            }
-            (void)account_set_auth_user(acc, cfg.user.c_str());
-            if (!cfg.pwd.empty()) {
-                (void)account_set_auth_pass(acc, cfg.pwd.c_str());
-            }
-            if (!cfg.outbound_proxy.empty()) {
-                (void)account_set_outbound(acc, cfg.outbound_proxy.c_str(), 0);
-            } else if (lower_transport == "tls" || lower_transport == "tcp" ||
-                       lower_transport == "ws" || lower_transport == "wss") {
-                std::string outbound = "sip:" + cfg.domain + ":" + std::to_string(port) + transport_param;
-                (void)account_set_outbound(acc, outbound.c_str(), 0);
-            }
-            if (!cfg.stun_server.empty()) {
-                (void)account_set_stun_uri(acc, cfg.stun_server.c_str());
-            }
-            if (!cfg.stun_user.empty()) {
-                (void)account_set_stun_user(acc, cfg.stun_user.c_str());
-            }
-            if (!cfg.stun_pass.empty()) {
-                (void)account_set_stun_pass(acc, cfg.stun_pass.c_str());
-            }
-            if (!cfg.media_nat.empty()) {
-                (void)account_set_medianat(acc, cfg.media_nat.c_str());
-            }
-            if (cfg.reg_interval > 0) {
-                (void)account_set_regint(acc, cfg.reg_interval);
-            }
-
-            std::string media_enc = cfg.media_enc;
-            if (media_enc.empty() && (lower_transport == "tls" || lower_transport == "wss")) {
-                media_enc = "srtp-mand";
-            }
-            if (!media_enc.empty() && media_enc != "none") {
-                (void)account_set_mediaenc(acc, media_enc.c_str());
-            }
-
-            (void)account_set_video_codecs(acc, "H264/packetization-mode=1");
-            if (aucodec_find(baresip_aucodecl(), "opus", 48000, 2) != nullptr) {
-                (void)account_set_audio_codecs(acc, "opus/48000/2,G722/16000/1,PCMU/8000/1,PCMA/8000/1");
-            } else {
-                (void)account_set_audio_codecs(acc, "G722/16000/1,PCMU/8000/1,PCMA/8000/1");
-            }
-        }
-
-        rc = ua_register(m_ua);
-        if (rc != 0) {
-            dispatch_reg_state(SIP_REG_STATE_FAILED, rc, "Registration submission failed");
-        }
+        (void)start_account_ua_on_loop(new_default, cfg, effective_max_calls);
+        new_default->release();
     });
 
-    return posted ? 0 : EIO;
+    if (!posted) {
+        if (old_default) {
+            old_default->release();
+        }
+        new_default->release();
+        return EIO;
+    }
+    return 0;
 }
 
 int Engine::register_account(const char *user, const char *domain, const char *pwd, const char *transport, int port)
@@ -602,15 +981,37 @@ int Engine::register_account(const char *user, const char *domain, const char *p
 int Engine::reset_transports(bool re_register)
 {
     bool posted = post_task([this, re_register]() {
-        if (m_active_transport == "wss") {
+        bool has_wss = false;
+        std::vector<sip_account_t *> snapshot;
+        {
+            std::lock_guard<std::mutex> lock(m_accounts_mutex);
+            for (auto *acc : m_accounts) {
+                if (acc && !acc->is_removed()) {
+                    if (acc->transport_str() == "wss") has_wss = true;
+                    acc->retain();
+                    snapshot.push_back(acc);
+                }
+            }
+        }
+
+        if (has_wss) {
             (void)uag_reset_transp(false, false);
             (void)add_wss_transport_on_loop();
-            if (re_register && m_ua != nullptr) {
-                (void)ua_register(m_ua);
+            if (re_register) {
+                for (auto *acc : snapshot) {
+                    struct ua *u = acc->raw_ua();
+                    if (u != nullptr) {
+                        (void)ua_register(u);
+                    }
+                }
             }
         } else {
             (void)uag_reset_transp(re_register, true);
             (void)add_wss_transport_on_loop();
+        }
+
+        for (auto *acc : snapshot) {
+            acc->release();
         }
     });
     return posted ? 0 : EIO;
@@ -618,21 +1019,20 @@ int Engine::reset_transports(bool re_register)
 
 int Engine::unregister_account()
 {
-    m_is_registered.store(false);
+    sip_account_t *def = get_default_account();
+    if (def) {
+        return unregister_account(def);
+    }
     bool posted = post_task([this]() {
-        if (m_ua != nullptr) {
-            ua_unregister(m_ua);
-        } else {
-            dispatch_reg_state(SIP_REG_STATE_UNREGISTERED, 0, "Unregistered");
-        }
+        dispatch_reg_state(SIP_REG_STATE_UNREGISTERED, 0, "Unregistered");
     });
     return posted ? 0 : EIO;
 }
 
 bool Engine::is_registered() const
 {
-    std::lock_guard<std::mutex> lock(m_mutex);
-    return m_is_registered.load() && m_ua != nullptr && ua_isregistered(m_ua);
+    sip_account_t *def = get_default_account();
+    return def != nullptr && def->is_registered();
 }
 
 struct sdp_media_internal {
@@ -682,33 +1082,79 @@ void Engine::handle_ua_event(int ev, struct bevent *event)
 
     switch (ev) {
         case BEVENT_REGISTERING: {
-            dispatch_reg_state(SIP_REG_STATE_REGISTERING, 0, extract_reason("Registering").c_str());
+            struct ua *bua = bevent_get_ua(event);
+            sip_account_t *acc = find_account_by_ua(bua);
+            std::string reason = extract_reason("Registering");
+            if (acc) {
+                acc->set_reg_state(SIP_REG_STATE_REGISTERING);
+                dispatch_account_reg_state(acc, SIP_REG_STATE_REGISTERING, 0, reason.c_str());
+            }
+            if (!acc || acc == get_default_account()) {
+                dispatch_reg_state(SIP_REG_STATE_REGISTERING, 0, reason.c_str());
+            }
             break;
         }
         case BEVENT_REGISTER_OK: {
-            m_is_registered.store(true);
+            struct ua *bua = bevent_get_ua(event);
+            sip_account_t *acc = find_account_by_ua(bua);
             int scode = msg ? static_cast<int>(msg->scode) : 200;
-            dispatch_reg_state(SIP_REG_STATE_REGISTERED, scode, extract_reason("OK").c_str());
+            std::string reason = extract_reason("OK");
+            if (acc) {
+                acc->set_reg_state(SIP_REG_STATE_REGISTERED);
+                dispatch_account_reg_state(acc, SIP_REG_STATE_REGISTERED, scode, reason.c_str());
+            }
+            if (!acc || acc == get_default_account()) {
+                dispatch_reg_state(SIP_REG_STATE_REGISTERED, scode, reason.c_str());
+            }
             break;
         }
         case BEVENT_REGISTER_FAIL: {
-            m_is_registered.store(false);
+            struct ua *bua = bevent_get_ua(event);
+            sip_account_t *acc = find_account_by_ua(bua);
             int scode = msg ? static_cast<int>(msg->scode) : 401;
-            dispatch_reg_state(SIP_REG_STATE_FAILED, scode, extract_reason("Registration Failed").c_str());
+            std::string reason = extract_reason("Registration Failed");
+            if (acc) {
+                acc->set_reg_state(SIP_REG_STATE_FAILED);
+                dispatch_account_reg_state(acc, SIP_REG_STATE_FAILED, scode, reason.c_str());
+            }
+            if (!acc || acc == get_default_account()) {
+                dispatch_reg_state(SIP_REG_STATE_FAILED, scode, reason.c_str());
+            }
             break;
         }
         case BEVENT_UNREGISTERING: {
-            m_is_registered.store(false);
+            struct ua *bua = bevent_get_ua(event);
+            sip_account_t *acc = find_account_by_ua(bua);
             int scode = msg ? static_cast<int>(msg->scode) : 0;
-            dispatch_reg_state(SIP_REG_STATE_UNREGISTERED, scode, extract_reason("Unregistered").c_str());
+            std::string reason = extract_reason("Unregistered");
+            if (acc) {
+                acc->set_reg_state(SIP_REG_STATE_UNREGISTERED);
+                dispatch_account_reg_state(acc, SIP_REG_STATE_UNREGISTERED, scode, reason.c_str());
+            }
+            if (!acc || acc == get_default_account()) {
+                dispatch_reg_state(SIP_REG_STATE_UNREGISTERED, scode, reason.c_str());
+            }
             break;
         }
         case BEVENT_CALL_INCOMING: {
             if (bcall) {
+                sip_account_t *acc = find_account_by_call(bcall);
+                if (!acc) {
+                    acc = find_account_by_ua(bevent_get_ua(event));
+                }
+                if (!acc && msg) {
+                    acc = find_account_by_ua(uag_find_msg(msg));
+                }
+                if (!acc) {
+                    acc = get_default_account();
+                }
                 const char *peer_uri = call_peeruri(bcall);
                 bool with_video = call_has_video(bcall);
                 sip_call_t *sess = find_or_create_call_session(bcall, peer_uri, false, with_video);
                 sess->attach_raw_call(bcall);
+                if (acc) {
+                    sess->set_account(acc);
+                }
                 dispatch_incoming_call(sess);
                 dispatch_call_state(sess, SIP_CALL_STATE_INCOMING, 180, extract_reason("Incoming Call").c_str());
             }
@@ -798,8 +1244,9 @@ void Engine::handle_ua_event(int ev, struct bevent *event)
                             if (!consult->is_closed()) {
                                 consult->stop_stats_timer();
                                 struct call *cc = consult->raw_call();
-                                if (m_ua != nullptr && cc != nullptr) {
-                                    ua_hangup(m_ua, cc, 0, "Transfer completed");
+                                struct ua *cua = resolve_call_ua(consult);
+                                if (cua != nullptr && cc != nullptr) {
+                                    ua_hangup(cua, cc, 0, "Transfer completed");
                                 } else {
                                     consult->set_closed(0);
                                     dispatch_call_state(consult, SIP_CALL_STATE_CLOSED, 200, "Transfer completed");
@@ -885,8 +1332,11 @@ void Engine::handle_ua_event(int ev, struct bevent *event)
         }
         case BEVENT_SIPSESS_CONN: {
             struct ua *bua = bevent_get_ua(event);
+            if (!bua && msg) {
+                bua = uag_find_msg(msg);
+            }
             if (!bua) {
-                bua = m_ua;
+                bua = resolve_call_ua(nullptr);
             }
             if (bua && msg) {
                 int open_calls = 0;
@@ -963,6 +1413,64 @@ void Engine::dispatch_reg_state(sip_reg_state_t state, int code, const char *rea
 #endif
 }
 
+struct AccountRegStateTaskArgs {
+    sip_client_t *client{nullptr};
+    sip_account_t *account{nullptr};
+    sip_reg_state_t state{SIP_REG_STATE_UNREGISTERED};
+    int code{0};
+    std::string reason;
+    void (*on_account_reg_state)(sip_client_t *, sip_account_t *, sip_reg_state_t, int, const char *, void *){nullptr};
+    void *user_data{nullptr};
+};
+
+static void run_account_reg_state_task(void *arg)
+{
+    auto *args = static_cast<AccountRegStateTaskArgs *>(arg);
+    if (args) {
+        if (args->on_account_reg_state) {
+            args->on_account_reg_state(args->client, args->account, args->state, args->code,
+                                       args->reason.c_str(), args->user_data);
+        }
+        if (args->account) {
+            args->account->release();
+        }
+        delete args;
+    }
+}
+
+void Engine::dispatch_account_reg_state(sip_account_t *account, sip_reg_state_t state, int code, const char *reason)
+{
+    if (!account) return;
+    sip_account_callbacks_t cbs;
+    {
+        std::lock_guard<std::mutex> lock(m_account_cb_mutex);
+        cbs = m_account_callbacks;
+    }
+    if (!cbs.on_account_reg_state) return;
+
+    account->retain();
+    auto *args = new AccountRegStateTaskArgs{
+        m_owner,
+        account,
+        state,
+        code,
+        reason ? reason : "",
+        cbs.on_account_reg_state,
+        m_user_data
+    };
+
+    if (m_callbacks.dispatch_to_main) {
+        m_callbacks.dispatch_to_main(run_account_reg_state_task, args, m_user_data);
+        return;
+    }
+
+#if defined(__APPLE__)
+    dispatch_async_f(dispatch_get_main_queue(), args, run_account_reg_state_task);
+#else
+    run_account_reg_state_task(args);
+#endif
+}
+
 sip_call_t *Engine::make_call(const char *target_uri, bool with_video)
 {
     sip_call_t *call = nullptr;
@@ -976,6 +1484,11 @@ sip_call_t *Engine::make_call(const char *target_uri, bool with_video)
 
 int Engine::dial_call(const char *target_uri, bool with_video, sip_call_t **out_call)
 {
+    return dial_call_on_account(get_default_account(), target_uri, with_video, out_call);
+}
+
+int Engine::dial_call_on_account(sip_account_t *account, const char *target_uri, bool with_video, sip_call_t **out_call)
+{
     if (out_call) {
         *out_call = nullptr;
     }
@@ -984,6 +1497,9 @@ int Engine::dial_call(const char *target_uri, bool with_video, sip_call_t **out_
     }
     if (!m_started.load()) {
         return EIO;
+    }
+    if (account != nullptr && !is_account_active(account)) {
+        return EINVAL;
     }
 
     std::string uri_str = target_uri;
@@ -1000,17 +1516,23 @@ int Engine::dial_call(const char *target_uri, bool with_video, sip_call_t **out_
             return EBUSY;
         }
         call_session = new sip_call_t(m_owner, this, nullptr, uri_str.c_str(), true, with_video);
+        if (account) {
+            call_session->set_account(account);
+        }
         m_all_calls.push_back(call_session);
     }
 
     prepare_audio_session();
 
     call_session->retain();
-    bool posted = post_task([this, call_session, uri_str, with_video]() {
-        if (!m_ua) {
+    if (account) account->retain();
+    bool posted = post_task([this, account, call_session, uri_str, with_video]() {
+        struct ua *bua = account ? account->raw_ua() : resolve_call_ua(nullptr);
+        if (!bua) {
             call_session->set_closed(0);
             dispatch_call_state(call_session, SIP_CALL_STATE_CLOSED, EINVAL, "No UA available");
             release_audio_session_if_idle();
+            if (account) account->release();
             call_session->release();
             return;
         }
@@ -1019,21 +1541,24 @@ int Engine::dial_call(const char *target_uri, bool with_video, sip_call_t **out_
 
         struct call *baresip_call = nullptr;
         enum vidmode vmode = with_video ? VIDMODE_ON : VIDMODE_OFF;
-        int rc = ua_connect(m_ua, &baresip_call, nullptr, uri_str.c_str(), vmode);
+        int rc = ua_connect(bua, &baresip_call, nullptr, uri_str.c_str(), vmode);
         if (rc != 0 || baresip_call == nullptr) {
             call_session->set_closed(0);
             dispatch_call_state(call_session, SIP_CALL_STATE_CLOSED, rc != 0 ? rc : EIO, "Connect failed");
             release_audio_session_if_idle();
+            if (account) account->release();
             call_session->release();
             return;
         }
 
         call_session->attach_raw_call(baresip_call);
         dispatch_call_state(call_session, SIP_CALL_STATE_CONNECTING, 100, "Connecting");
+        if (account) account->release();
         call_session->release();
     });
 
     if (!posted) {
+        if (account) account->release();
         call_session->set_closed(0);
         destroy_call(call_session);
         call_session->release();
@@ -1054,10 +1579,11 @@ int Engine::answer_call(sip_call_t *call, bool with_video)
     call->retain();
     bool posted = post_task([this, call, with_video]() {
         struct call *c = call->raw_call();
-        if (m_ua != nullptr && c != nullptr) {
+        struct ua *bua = resolve_call_ua(call);
+        if (bua != nullptr && c != nullptr) {
             auto_hold_other_calls(call);
             enum vidmode vmode = with_video ? VIDMODE_ON : VIDMODE_OFF;
-            (void)ua_answer(m_ua, c, vmode);
+            (void)ua_answer(bua, c, vmode);
         } else {
             release_audio_session_if_idle();
         }
@@ -1087,9 +1613,10 @@ int Engine::hangup_call(sip_call_t *call, int code, const char *reason)
             stop_recording(call);
         }
         struct call *c = call->raw_call();
-        if (m_ua != nullptr && c != nullptr) {
+        struct ua *bua = resolve_call_ua(call);
+        if (bua != nullptr && c != nullptr) {
             call->latch_media_stats();
-            ua_hangup(m_ua, c, scode, reason_str.empty() ? nullptr : reason_str.c_str());
+            ua_hangup(bua, c, scode, reason_str.empty() ? nullptr : reason_str.c_str());
         } else {
             call->set_closed(0);
             dispatch_call_state(call, SIP_CALL_STATE_CLOSED, scode, reason_str.c_str());
@@ -1458,14 +1985,18 @@ int Engine::accept_transfer(sip_call_t *call, bool accept)
                         clean_uri = clean_uri.substr(1, clean_uri.size() - 2);
                     }
                     struct call *call2 = nullptr;
+                    struct ua *bua = resolve_call_ua(call);
                     enum vidmode vmode = call_has_video(c) ? VIDMODE_ON : VIDMODE_OFF;
-                    int err = ua_call_alloc(&call2, m_ua, vmode, nullptr, c, call_localuri(c), true);
+                    int err = bua ? ua_call_alloc(&call2, bua, vmode, nullptr, c, call_localuri(c), true) : EINVAL;
                     if (err == 0 && call2 != nullptr) {
                         struct pl pl;
                         pl_set_str(&pl, clean_uri.c_str());
                         err = call_connect(call2, &pl);
                         if (err == 0) {
-                            (void)find_or_create_call_session(call2, clean_uri.c_str(), true, call_has_video(call2));
+                            sip_call_t *sess2 = find_or_create_call_session(call2, clean_uri.c_str(), true, call_has_video(call2));
+                            if (sess2 && call->account()) {
+                                sess2->set_account(call->account());
+                            }
                         } else {
                             (void)call_notify_sipfrag(c, 500, "Connect Error");
                             mem_deref(call2);
@@ -1787,9 +2318,10 @@ int Engine::leave_conference()
                 if (au) {
                     audio_set_conference(au, false);
                 }
-                if (m_ua && !sess->is_closed()) {
+                struct ua *bua = resolve_call_ua(sess);
+                if (bua && !sess->is_closed()) {
                     sess->latch_media_stats();
-                    ua_hangup(m_ua, c, 0, "Conference Ended");
+                    ua_hangup(bua, c, 0, "Conference Ended");
                 }
             }
             sess->release();
@@ -2689,12 +3221,19 @@ int Engine::stop_recording(sip_call_t *call)
 int Engine::send_message(const char *peer_uri, const char *content_type, const uint8_t *body, size_t body_len,
                          uint64_t *message_id)
 {
+    return send_message_on_account(get_default_account(), peer_uri, content_type, body, body_len, message_id);
+}
+
+int Engine::send_message_on_account(sip_account_t *account, const char *peer_uri, const char *content_type,
+                                    const uint8_t *body, size_t body_len, uint64_t *message_id)
+{
     if (!peer_uri || peer_uri[0] == '\0' || has_control_chars(peer_uri)) return EINVAL;
     const char *ctype = content_type ? content_type : SIP_MESSAGE_CONTENT_TYPE_TEXT;
     if (!is_valid_content_type(ctype)) return EINVAL;
     if (!body || body_len == 0) return EINVAL;
     if (body_len > SIP_MESSAGE_MAX_BODY_SIZE) return EMSGSIZE;
     if (!m_started.load()) return EIO;
+    if (account != nullptr && !is_account_active(account)) return EINVAL;
 
     uint64_t id = m_next_message_id.fetch_add(1);
     std::string uri_str = peer_uri;
@@ -2705,13 +3244,16 @@ int Engine::send_message(const char *peer_uri, const char *content_type, const u
     // status callback can run before this function returns.
     if (message_id) *message_id = id;
 
-    bool posted = post_task([this, id, uri_str, ctype_str, payload]() {
-        if (m_ua == nullptr) {
+    if (account) account->retain();
+    bool posted = post_task([this, account, id, uri_str, ctype_str, payload]() {
+        struct ua *bua = account ? account->raw_ua() : resolve_call_ua(nullptr);
+        if (bua == nullptr) {
             dispatch_message_status(id, SIP_MESSAGE_STATUS_FAILED, 0, "No account registered");
+            if (account) account->release();
             return;
         }
         uintptr_t token = register_pending_message(this, id);
-        int rc = sip_req_send(m_ua, "MESSAGE", uri_str.c_str(), message_response_handler,
+        int rc = sip_req_send(bua, "MESSAGE", uri_str.c_str(), message_response_handler,
                               reinterpret_cast<void *>(token),
                               "Accept: text/plain\r\n"
                               "Content-Type: %s\r\n"
@@ -2724,8 +3266,10 @@ int Engine::send_message(const char *peer_uri, const char *content_type, const u
                 dispatch_message_status(id, SIP_MESSAGE_STATUS_FAILED, 0, std::strerror(rc));
             }
         }
+        if (account) account->release();
     });
     if (!posted) {
+        if (account) account->release();
         if (message_id) *message_id = 0;
         return EIO;
     }
@@ -2743,7 +3287,9 @@ bool Engine::handle_incoming_message(const struct sip_msg *msg)
     if (!msg || pl_strcmp(&msg->met, "MESSAGE") != 0) {
         return false;
     }
-    if (m_ua == nullptr || uag_find_msg(msg) != m_ua) {
+    struct ua *bua = uag_find_msg(msg);
+    sip_account_t *acc = find_account_by_ua(bua);
+    if (acc == nullptr) {
         return false;
     }
 
@@ -2766,6 +3312,7 @@ bool Engine::handle_incoming_message(const struct sip_msg *msg)
     // Stateful reply: the server transaction absorbs UDP retransmissions of this
     // request, so a lost 200 OK does not deliver the message twice.
     (void)sip_treply(nullptr, uag_sip(), msg, 200, "OK");
+    dispatch_account_message_received(acc, from, ctype, body);
     dispatch_message_received(std::move(from), std::move(ctype), std::move(body));
     return true;
 }
@@ -2872,6 +3419,68 @@ void Engine::dispatch_message_received(std::string from_uri, std::string content
     dispatch_async_f(dispatch_get_main_queue(), args, run_message_received_task);
 #else
     run_message_received_task(args);
+#endif
+}
+
+struct AccountMessageReceivedTaskArgs {
+    sip_client_t *client{nullptr};
+    sip_account_t *account{nullptr};
+    std::string from;
+    std::string content_type;
+    std::string body;
+    void (*on_account_message_received)(sip_client_t *, sip_account_t *, const char *, const char *,
+                                        const uint8_t *, size_t, void *){nullptr};
+    void *user_data{nullptr};
+};
+
+static void run_account_message_received_task(void *arg)
+{
+    auto *args = static_cast<AccountMessageReceivedTaskArgs *>(arg);
+    if (args) {
+        if (args->on_account_message_received) {
+            args->on_account_message_received(args->client, args->account, args->from.c_str(),
+                                              args->content_type.c_str(),
+                                              reinterpret_cast<const uint8_t *>(args->body.data()),
+                                              args->body.size(), args->user_data);
+        }
+        if (args->account) {
+            args->account->release();
+        }
+        delete args;
+    }
+}
+
+void Engine::dispatch_account_message_received(sip_account_t *account, std::string from_uri,
+                                               std::string content_type, std::string body)
+{
+    if (!account) return;
+    sip_account_callbacks_t cbs;
+    {
+        std::lock_guard<std::mutex> lock(m_account_cb_mutex);
+        cbs = m_account_callbacks;
+    }
+    if (!cbs.on_account_message_received) return;
+
+    account->retain();
+    auto *args = new AccountMessageReceivedTaskArgs{
+        m_owner,
+        account,
+        std::move(from_uri),
+        std::move(content_type),
+        std::move(body),
+        cbs.on_account_message_received,
+        m_user_data
+    };
+
+    if (m_callbacks.dispatch_to_main) {
+        m_callbacks.dispatch_to_main(run_account_message_received_task, args, m_user_data);
+        return;
+    }
+
+#if defined(__APPLE__)
+    dispatch_async_f(dispatch_get_main_queue(), args, run_account_message_received_task);
+#else
+    run_account_message_received_task(args);
 #endif
 }
 
