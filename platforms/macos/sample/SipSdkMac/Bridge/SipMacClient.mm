@@ -637,8 +637,8 @@ struct ClientCallbacks {
         auto *self = (__bridge SipMacClient *)user_data;
         if (!self || !call) return;
 
-        SipMacCall *macCall = [self findOrWrapCall:call];
-        NSString *pStr = path ? [NSString stringWithUTF8String:path] : @"";
+        SipMacCall *macCall = [self getOrCreateCall:call];
+        NSString *pStr = (path ? [NSString stringWithUTF8String:path] : nil) ?: @"";
         SipMacRecordingState recState = static_cast<SipMacRecordingState>(state);
         dispatch_async(dispatch_get_main_queue(), ^{
             if ([self.delegate respondsToSelector:@selector(client:call:didChangeRecordingState:path:errorCode:)]) {
