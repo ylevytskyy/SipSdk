@@ -14,4 +14,6 @@ interface SipClientListener {
     fun onCallRejectedBusy(callerUri: String) {}
     fun onPushCallMissed(callId: String, callerUri: String) {}
     fun onConferenceChanged(calls: List<SipCall>) {}
+    fun onAccountRegistrationStateChanged(account: SipAccount, state: SipRegistrationState, code: Int, reason: String) {}
+    fun onAccountMessageReceived(account: SipAccount, message: SipIncomingMessage) {}
 }

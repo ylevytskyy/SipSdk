@@ -238,4 +238,155 @@ class SipClientRegistrationTest {
             client.destroy()
         }
     }
+
+    @Test
+    fun testMultiAccountRegistrationCallingMessagingAndLifecycle() {
+        val client = SipClient("1001", TestConfig.host, context)
+
+        val reg1001Latch = CountDownLatch(1)
+        val reg1003Latch = CountDownLatch(1)
+        val incomingCallLatch = CountDownLatch(1)
+        val establishedLatch = CountDownLatch(2)
+        val msgReceivedLatch = CountDownLatch(1)
+
+        var incomingCall: SipCall? = null
+        var incomingCallAccount: SipAccount? = null
+        var msgAccount: SipAccount? = null
+        var msgIncoming: SipIncomingMessage? = null
+        var looperIsMainOnAccountReg = false
+        val establishedHandles = java.util.Collections.synchronizedSet(mutableSetOf<Long>())
+
+        client.listener = object : SipClientListener {
+            override fun onAccountRegistrationStateChanged(
+                account: SipAccount,
+                state: SipRegistrationState,
+                code: Int,
+                reason: String
+            ) {
+                if (Looper.myLooper() == Looper.getMainLooper()) {
+                    looperIsMainOnAccountReg = true
+                }
+                if (state == SipRegistrationState.REGISTERED && code == 200) {
+                    when (account.user) {
+                        "1001" -> reg1001Latch.countDown()
+                        "1003" -> reg1003Latch.countDown()
+                    }
+                }
+            }
+
+            override fun onIncomingCall(call: SipCall) {
+                incomingCall = call
+                incomingCallAccount = call.account
+                incomingCallLatch.countDown()
+            }
+
+            override fun onCallStateChanged(call: SipCall, state: SipCallState, code: Int, reason: String) {
+                if (state == SipCallState.ESTABLISHED && establishedHandles.add(call.nativeHandle)) {
+                    establishedLatch.countDown()
+                }
+            }
+
+            override fun onAccountMessageReceived(account: SipAccount, message: SipIncomingMessage) {
+                if (account.user == "1003") {
+                    msgAccount = account
+                    msgIncoming = message
+                    msgReceivedLatch.countDown()
+                }
+            }
+        }
+
+        var acc1001: SipAccount? = null
+        var acc1003: SipAccount? = null
+        try {
+            assertEquals(0, client.start())
+            TestConfig.configureAudioDriverForDevice(client)
+
+            acc1001 = client.addAccount(
+                SipAccountConfig(
+                    username = "1001",
+                    domain = TestConfig.host,
+                    password = "test1001",
+                    transport = "udp",
+                    port = 5060
+                )
+            )
+            acc1003 = client.addAccount(
+                SipAccountConfig(
+                    username = "1003",
+                    domain = TestConfig.host,
+                    password = "test1003",
+                    transport = "udp",
+                    port = 5060
+                )
+            )
+
+            assertTrue("Timeout waiting for 1001 registration", reg1001Latch.await(10, TimeUnit.SECONDS))
+            assertTrue("Timeout waiting for 1003 registration", reg1003Latch.await(10, TimeUnit.SECONDS))
+            assertTrue("Account registration callback must run on Main Looper", looperIsMainOnAccountReg)
+            assertEquals(2, client.accountCount)
+            assertEquals(2, client.accounts.size)
+            assertEquals(acc1001, client.defaultAccount)
+            assertTrue(acc1001.isRegistered)
+            assertTrue(acc1003.isRegistered)
+            assertEquals(SipRegistrationState.REGISTERED, acc1001.registrationState)
+            assertEquals(SipRegistrationState.REGISTERED, acc1003.registrationState)
+
+            // Duplicate AOR rejection
+            var dupRejected = false
+            try {
+                client.addAccount(
+                    SipAccountConfig(
+                        username = "1001",
+                        domain = TestConfig.host,
+                        password = "test1001",
+                        transport = "udp",
+                        port = 5060
+                    )
+                )
+            } catch (_: IllegalStateException) {
+                dupRejected = true
+            }
+            assertTrue("Expected duplicate AOR to be rejected", dupRejected)
+
+            // Dial 1003 from 1001 on the same SipClient and verify call.account attribution
+            val outCall = acc1001.dial("sip:1003@${TestConfig.host}:5060", withVideo = false)
+            assertEquals(acc1001, outCall.account)
+            assertTrue("Timeout waiting for incoming call on 1003", incomingCallLatch.await(10, TimeUnit.SECONDS))
+            val inCall = incomingCall
+            assertTrue("Incoming call must not be null", inCall != null)
+            assertEquals(acc1003, incomingCallAccount)
+            assertEquals(acc1003, inCall!!.account)
+
+            assertEquals(0, inCall.answer(withVideo = false))
+            assertTrue("Timeout waiting for both call legs to establish", establishedLatch.await(10, TimeUnit.SECONDS))
+
+            outCall.hangup()
+            inCall.hangup()
+            Thread.sleep(300)
+
+            // Send SIP MESSAGE from 1001 to 1003
+            val msgId = acc1001.sendMessage("1003", "hello multi-account")
+            assertTrue("Expected positive message id", msgId > 0)
+            assertTrue("Timeout waiting for message on 1003", msgReceivedLatch.await(10, TimeUnit.SECONDS))
+            assertEquals(acc1003, msgAccount)
+            assertEquals("text/plain", msgIncoming?.contentType)
+            assertEquals("hello multi-account", msgIncoming?.text)
+
+            // Switch default account to 1003
+            assertEquals(0, client.setDefaultAccount(acc1003))
+            assertEquals(acc1003, client.defaultAccount)
+
+            // Remove 1003 and verify default re-election to 1001
+            assertEquals(0, client.removeAccount(acc1003))
+            assertEquals(1, client.accountCount)
+            assertEquals(1, client.accounts.size)
+            assertEquals(acc1001, client.defaultAccount)
+            acc1003.close()
+            acc1003 = null
+        } finally {
+            acc1003?.close()
+            acc1001?.close()
+            client.destroy()
+        }
+    }
 }

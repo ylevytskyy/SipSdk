@@ -1,4 +1,5 @@
 #include "sip_abi.h"
+#include "account_session.h"
 #include "engine.h"
 #include "call_session.h"
 #include "media_driver.h"
@@ -432,6 +433,148 @@ SIP_ABI_EXPORT int sip_client_send_message(sip_client_t *client,
 {
     if (!client || !client->engine) return EINVAL;
     return client->engine->send_message(peer_uri, content_type, body, body_len, message_id);
+}
+
+static sip_core::AccountConfig to_core_account_config(const sip_account_config_t *config)
+{
+    sip_core::AccountConfig cfg;
+    cfg.user = config->user ? config->user : "";
+    cfg.domain = config->domain ? config->domain : "";
+    cfg.pwd = config->pwd ? config->pwd : "";
+    cfg.transport = config->transport ? config->transport : "udp";
+    cfg.port = config->port > 0 ? config->port : 0;
+    cfg.display_name = config->display_name ? config->display_name : "";
+    cfg.outbound_proxy = config->outbound_proxy ? config->outbound_proxy : "";
+    cfg.stun_server = config->stun_server ? config->stun_server : "";
+    cfg.stun_user = config->stun_user ? config->stun_user : "";
+    cfg.stun_pass = config->stun_pass ? config->stun_pass : "";
+    cfg.media_nat = config->media_nat ? config->media_nat : "";
+    cfg.reg_interval = config->reg_interval;
+    cfg.tls_ca_file = config->tls_ca_file ? config->tls_ca_file : "";
+    cfg.verify_tls_cert = config->verify_tls_cert;
+    cfg.media_enc = config->media_enc ? config->media_enc : "";
+    cfg.max_calls = config->max_calls;
+    return cfg;
+}
+
+SIP_ABI_EXPORT int sip_client_set_account_callbacks(sip_client_t *client, const sip_account_callbacks_t *callbacks)
+{
+    if (!client || !client->engine) return EINVAL;
+    return client->engine->set_account_callbacks(callbacks);
+}
+
+SIP_ABI_EXPORT int sip_client_add_account(sip_client_t *client, const sip_account_config_t *config, sip_account_t **out_account)
+{
+    if (out_account) *out_account = nullptr;
+    if (!client || !client->engine || !config || !out_account) return EINVAL;
+    return client->engine->add_account(to_core_account_config(config), out_account);
+}
+
+SIP_ABI_EXPORT int sip_client_remove_account(sip_client_t *client, sip_account_t *account)
+{
+    if (!client || !client->engine || !account) return EINVAL;
+    return client->engine->remove_account(account);
+}
+
+SIP_ABI_EXPORT int sip_client_set_default_account(sip_client_t *client, sip_account_t *account)
+{
+    if (!client || !client->engine || !account) return EINVAL;
+    return client->engine->set_default_account(account);
+}
+
+SIP_ABI_EXPORT sip_account_t *sip_client_get_default_account(const sip_client_t *client)
+{
+    if (!client || !client->engine) return nullptr;
+    return client->engine->get_default_account();
+}
+
+SIP_ABI_EXPORT size_t sip_client_get_account_count(const sip_client_t *client)
+{
+    if (!client || !client->engine) return 0;
+    return client->engine->get_account_count();
+}
+
+SIP_ABI_EXPORT size_t sip_client_get_accounts(const sip_client_t *client, sip_account_t **out_accounts, size_t max_count)
+{
+    if (!client || !client->engine) return 0;
+    return client->engine->get_accounts(out_accounts, max_count);
+}
+
+SIP_ABI_EXPORT int sip_account_reregister(sip_account_t *account)
+{
+    if (!account || !account->engine()) return EINVAL;
+    return account->engine()->reregister_account(account);
+}
+
+SIP_ABI_EXPORT int sip_account_unregister(sip_account_t *account)
+{
+    if (!account || !account->engine()) return EINVAL;
+    return account->engine()->unregister_account(account);
+}
+
+SIP_ABI_EXPORT int sip_account_dial(sip_account_t *account, const char *target_uri, bool with_video, sip_call_t **out_call)
+{
+    if (out_call) *out_call = nullptr;
+    if (!account || !account->engine() || !out_call) return EINVAL;
+    return account->engine()->dial_call_on_account(account, target_uri, with_video, out_call);
+}
+
+SIP_ABI_EXPORT int sip_account_send_message(sip_account_t *account, const char *peer_uri, const char *content_type,
+                                            const uint8_t *body, size_t body_len, uint64_t *message_id)
+{
+    if (!account || !account->engine()) return EINVAL;
+    return account->engine()->send_message_on_account(account, peer_uri, content_type, body, body_len, message_id);
+}
+
+SIP_ABI_EXPORT sip_account_t *sip_call_get_account(const sip_call_t *call)
+{
+    if (!call) return nullptr;
+    return call->account();
+}
+
+SIP_ABI_EXPORT uint64_t sip_account_get_id(const sip_account_t *account)
+{
+    return account ? account->get_id() : 0;
+}
+
+SIP_ABI_EXPORT const char *sip_account_get_aor(const sip_account_t *account)
+{
+    return account ? account->get_aor() : "";
+}
+
+SIP_ABI_EXPORT const char *sip_account_get_user(const sip_account_t *account)
+{
+    return account ? account->get_user() : "";
+}
+
+SIP_ABI_EXPORT const char *sip_account_get_domain(const sip_account_t *account)
+{
+    return account ? account->get_domain() : "";
+}
+
+SIP_ABI_EXPORT bool sip_account_is_registered(const sip_account_t *account)
+{
+    return account ? account->is_registered() : false;
+}
+
+SIP_ABI_EXPORT sip_reg_state_t sip_account_get_reg_state(const sip_account_t *account)
+{
+    return account ? account->get_reg_state() : SIP_REG_STATE_UNREGISTERED;
+}
+
+SIP_ABI_EXPORT void *sip_account_get_user_data(const sip_account_t *account)
+{
+    return account ? account->get_user_data() : nullptr;
+}
+
+SIP_ABI_EXPORT void sip_account_set_user_data(sip_account_t *account, void *user_data)
+{
+    if (account) account->set_user_data(user_data);
+}
+
+SIP_ABI_EXPORT void sip_account_destroy(sip_account_t *account)
+{
+    if (account) account->release();
 }
 
 } // extern "C"

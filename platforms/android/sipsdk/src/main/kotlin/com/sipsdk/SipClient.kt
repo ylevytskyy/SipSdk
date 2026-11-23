@@ -43,8 +43,28 @@ class SipClient(
 
     private val activeCallsMap = ConcurrentHashMap<Long, SipCall>()
     private val pendingPushHandles = ConcurrentHashMap<String, SipPushCallHandle>()
+    private val accountsMap = ConcurrentHashMap<Long, SipAccount>()
+    private val ownedAccountsMap = ConcurrentHashMap<Long, SipAccount>()
     val activeCalls: List<SipCall>
         get() = activeCallsMap.values.filter { !it.isClosed }
+
+    val accounts: List<SipAccount>
+        get() {
+            if (nativeHandle == 0L) return accountsMap.values.toList()
+            val handles = nativeGetAccounts(nativeHandle)
+            return handles.asList().mapNotNull { resolveAccount(it) }
+        }
+
+    val accountCount: Int
+        get() = if (nativeHandle != 0L) nativeGetAccountCount(nativeHandle) else accountsMap.size
+
+    val defaultAccount: SipAccount?
+        get() {
+            if (nativeHandle == 0L) return null
+            val accHandle = nativeGetDefaultAccount(nativeHandle)
+            if (accHandle == 0L) return null
+            return resolveAccount(accHandle)
+        }
 
     val audioManager: SipAudioManager? = context?.let { SipAudioManager(it) }
 
@@ -224,6 +244,10 @@ class SipClient(
     fun stop() {
         if (nativeHandle != 0L) {
             activeCallsMap.clear()
+            accountsMap.clear()
+            val toClose = ownedAccountsMap.values.toList()
+            ownedAccountsMap.clear()
+            toClose.forEach { it.close() }
             cameraCapture?.stop()
             cameraCapture = null
             audioManager?.releaseAudioSession()
@@ -302,6 +326,109 @@ class SipClient(
         return if (nativeHandle != 0L) nativeResetTransports(nativeHandle, reRegister) else -1
     }
 
+    fun addAccount(config: SipAccountConfig): SipAccount {
+        require(config.username.isNotBlank()) { "Account username cannot be empty" }
+        require(config.domain.isNotBlank()) { "Account domain cannot be empty" }
+        require(config.port in 0..65535) { "Account port must be in 0..65535" }
+        if (nativeHandle == 0L) {
+            val rc = start()
+            check(rc == 0) { "Failed to start SipClient (error $rc)" }
+        }
+        val statusOut = IntArray(1)
+        val accountHandle = nativeAddAccount(
+            handle = nativeHandle,
+            user = config.username,
+            domain = config.domain,
+            pwd = config.password,
+            displayName = config.displayName ?: "",
+            transport = config.transport,
+            port = config.port,
+            tlsCaFile = config.tlsCaFile ?: "",
+            verifyTlsCert = config.verifyTlsCert,
+            mediaEnc = config.mediaEnc,
+            maxCalls = config.maxCalls.coerceIn(1, 8),
+            outboundProxy = config.outboundProxy ?: "",
+            stunServer = config.stunServer ?: "",
+            stunUser = config.stunUser ?: "",
+            stunPass = config.stunPass ?: "",
+            mediaNat = config.mediaNat ?: "",
+            regInterval = config.regInterval,
+            outStatus = statusOut
+        )
+        val status = statusOut[0]
+        if (accountHandle == 0L || status != 0) {
+            when (status) {
+                16 -> throw SipBusyException("Maximum concurrent accounts reached")
+                17 -> throw IllegalStateException("Duplicate active account AOR (EEXIST)")
+                22 -> throw IllegalArgumentException("Invalid account configuration (EINVAL)")
+                else -> throw IllegalStateException("Failed to add account ${config.username}@${config.domain} (error $status)")
+            }
+        }
+        val account = SipAccount(
+            client = this,
+            nativeHandle = accountHandle,
+            ownsNativeHandle = true
+        )
+        accountsMap[accountHandle] = account
+        ownedAccountsMap[accountHandle] = account
+        return account
+    }
+
+    fun removeAccount(account: SipAccount): Int {
+        val accHandle = account.nativeHandle
+        if (nativeHandle == 0L || accHandle == 0L) return -1
+        val rc = nativeRemoveAccount(nativeHandle, accHandle)
+        if (rc == 0) {
+            accountsMap.remove(accHandle)
+        }
+        return rc
+    }
+
+    fun setDefaultAccount(account: SipAccount): Int {
+        val accHandle = account.nativeHandle
+        if (nativeHandle == 0L || accHandle == 0L) return -1
+        return nativeSetDefaultAccount(nativeHandle, accHandle)
+    }
+
+    internal fun resolveAccount(accountHandle: Long): SipAccount? {
+        if (accountHandle == 0L) return null
+        accountsMap[accountHandle]?.let { return it }
+        ownedAccountsMap[accountHandle]?.let { return it }
+        val active = nativeHandle != 0L && nativeGetAccounts(nativeHandle).any { it == accountHandle }
+        val acc = SipAccount(client = this, nativeHandle = accountHandle, ownsNativeHandle = false)
+        if (!active) {
+            acc.close()
+        }
+        return acc
+    }
+
+    internal fun onAccountClosed(accountHandle: Long, account: SipAccount) {
+        accountsMap.remove(accountHandle, account)
+        ownedAccountsMap.remove(accountHandle, account)
+    }
+
+    internal fun dialOnAccount(account: SipAccount, targetUri: String, withVideo: Boolean = false): SipCall {
+        val call = makeCallOnAccount(account, targetUri, withVideo)
+        if (call != null) return call
+        if (lastDialErrorCode == 16) {
+            throw SipBusyException("Maximum concurrent calls reached ($maxCalls)")
+        }
+        throw IllegalStateException("Failed to dial $targetUri on ${account.aor} (error $lastDialErrorCode)")
+    }
+
+    internal fun makeCallOnAccount(account: SipAccount, targetUri: String, withVideo: Boolean = false): SipCall? {
+        val accHandle = account.nativeHandle
+        if (nativeHandle == 0L || accHandle == 0L) {
+            lastDialErrorCode = 22
+            return null
+        }
+        val statusOut = IntArray(1)
+        val callHandle = account.dialNative(targetUri, withVideo, statusOut)
+        lastDialErrorCode = statusOut[0]
+        if (callHandle == 0L) return null
+        return registerOutgoingCall(callHandle, targetUri, withVideo)
+    }
+
     fun dial(uri: String, withVideo: Boolean = false): SipCall {
         val call = makeCall(uri, withVideo)
         if (call != null) return call
@@ -323,6 +450,10 @@ class SipClient(
         val callHandle = nativeDialCall(nativeHandle, uri, withVideo, statusOut)
         lastDialErrorCode = statusOut[0]
         if (callHandle == 0L) return null
+        return registerOutgoingCall(callHandle, uri, withVideo)
+    }
+
+    private fun registerOutgoingCall(callHandle: Long, uri: String, withVideo: Boolean): SipCall {
         if (withVideo && cameraCapture == null) {
             cameraCapture = SipCameraCapture(context, nativeHandle)
             val cur = localVideoView?.currentSurface
@@ -342,7 +473,8 @@ class SipClient(
                 remoteUri = nativeCallGetRemoteUri(callHandle),
                 peerDisplayName = nativeCallGetPeerDisplayName(callHandle),
                 hasVideo = withVideo,
-                isOutgoing = true
+                isOutgoing = true,
+                client = this
             )
         }
         telecomCoordinator?.addCall(
@@ -452,7 +584,8 @@ class SipClient(
                 remoteUri = nativeCallGetRemoteUri(callHandle),
                 peerDisplayName = nativeCallGetPeerDisplayName(callHandle),
                 hasVideo = nativeCallHasVideo(callHandle),
-                isOutgoing = nativeCallIsOutgoing(callHandle)
+                isOutgoing = nativeCallIsOutgoing(callHandle),
+                client = this
             )
         }
         val callState = SipCallState.fromInt(state)
@@ -513,7 +646,8 @@ class SipClient(
                 remoteUri = nativeCallGetRemoteUri(callHandle),
                 peerDisplayName = nativeCallGetPeerDisplayName(callHandle),
                 hasVideo = nativeCallHasVideo(callHandle),
-                isOutgoing = false
+                isOutgoing = false,
+                client = this
             )
         }
         val handle = pendingPushHandles.remove(call.callId)
@@ -540,13 +674,14 @@ class SipClient(
                 remoteVideoView?.setVideoDimensions(width, height)
                 remoteVideoView?.incrementRenderedFrameCount()
             }
-            val call = SipCall(
+            val call = activeCallsMap[callHandle] ?: SipCall(
                 nativeHandle = callHandle,
                 callId = nativeCallGetId(callHandle),
                 remoteUri = nativeCallGetRemoteUri(callHandle),
                 peerDisplayName = nativeCallGetPeerDisplayName(callHandle),
                 hasVideo = nativeCallHasVideo(callHandle) || (width > 0 && height > 0),
-                isOutgoing = nativeCallIsOutgoing(callHandle)
+                isOutgoing = nativeCallIsOutgoing(callHandle),
+                client = this
             )
             listener?.onCallMediaChanged(call, width, height, onHold, isMuted)
         }
@@ -561,13 +696,14 @@ class SipClient(
 
     @JvmSynthetic
     fun onNativeDtmfDigit(callHandle: Long, digit: String) {
-        val call = SipCall(
+        val call = activeCallsMap[callHandle] ?: SipCall(
             nativeHandle = callHandle,
             callId = nativeCallGetId(callHandle),
             remoteUri = nativeCallGetRemoteUri(callHandle),
             peerDisplayName = nativeCallGetPeerDisplayName(callHandle),
             hasVideo = nativeCallHasVideo(callHandle),
-            isOutgoing = nativeCallIsOutgoing(callHandle)
+            isOutgoing = nativeCallIsOutgoing(callHandle),
+            client = this
         )
         listener?.onDtmfDigit(call, digit)
     }
@@ -586,13 +722,14 @@ class SipClient(
         videoFps: Int,
         videoCodec: String
     ) {
-        val call = SipCall(
+        val call = activeCallsMap[callHandle] ?: SipCall(
             nativeHandle = callHandle,
             callId = nativeCallGetId(callHandle),
             remoteUri = nativeCallGetRemoteUri(callHandle),
             peerDisplayName = nativeCallGetPeerDisplayName(callHandle),
             hasVideo = nativeCallHasVideo(callHandle),
-            isOutgoing = nativeCallIsOutgoing(callHandle)
+            isOutgoing = nativeCallIsOutgoing(callHandle),
+            client = this
         )
         val stats = SipCallStats(
             audioLossRate = audioLossRate,
@@ -611,26 +748,28 @@ class SipClient(
 
     @JvmSynthetic
     fun onNativeTransferStatus(callHandle: Long, code: Int, reason: String) {
-        val call = SipCall(
+        val call = activeCallsMap[callHandle] ?: SipCall(
             nativeHandle = callHandle,
             callId = nativeCallGetId(callHandle),
             remoteUri = nativeCallGetRemoteUri(callHandle),
             peerDisplayName = nativeCallGetPeerDisplayName(callHandle),
             hasVideo = nativeCallHasVideo(callHandle),
-            isOutgoing = nativeCallIsOutgoing(callHandle)
+            isOutgoing = nativeCallIsOutgoing(callHandle),
+            client = this
         )
         listener?.onTransferStatus(call, code, reason)
     }
 
     @JvmSynthetic
     fun onNativeTransferRequest(callHandle: Long, target: String) {
-        val call = SipCall(
+        val call = activeCallsMap[callHandle] ?: SipCall(
             nativeHandle = callHandle,
             callId = nativeCallGetId(callHandle),
             remoteUri = nativeCallGetRemoteUri(callHandle),
             peerDisplayName = nativeCallGetPeerDisplayName(callHandle),
             hasVideo = nativeCallHasVideo(callHandle),
-            isOutgoing = nativeCallIsOutgoing(callHandle)
+            isOutgoing = nativeCallIsOutgoing(callHandle),
+            client = this
         )
         listener?.onTransferRequest(call, target)
     }
@@ -646,6 +785,22 @@ class SipClient(
     @JvmSynthetic
     fun onNativeMessageStatus(messageId: Long, status: Int, code: Int, reason: ByteArray) {
         listener?.onMessageStatusChanged(messageId, SipMessageStatus.fromInt(status), code, String(reason, Charsets.UTF_8))
+    }
+
+    @JvmSynthetic
+    fun onNativeAccountRegState(accountHandle: Long, state: Int, code: Int, reason: ByteArray) {
+        val account = resolveAccount(accountHandle) ?: return
+        val regState = SipRegistrationState.fromInt(state)
+        listener?.onAccountRegistrationStateChanged(account, regState, code, String(reason, Charsets.UTF_8))
+    }
+
+    @JvmSynthetic
+    fun onNativeAccountMessageReceived(accountHandle: Long, from: ByteArray, contentType: ByteArray, body: ByteArray) {
+        val account = resolveAccount(accountHandle) ?: return
+        listener?.onAccountMessageReceived(
+            account,
+            SipIncomingMessage(String(from, Charsets.UTF_8), String(contentType, Charsets.UTF_8), body)
+        )
     }
 
     @JvmSynthetic
@@ -738,4 +893,30 @@ class SipClient(
 
     private external fun nativeSetAudioDriver(handle: Long, srcMod: String, srcDev: String, playMod: String, playDev: String): Int
     private external fun nativeGetAudioDriver(handle: Long): Array<String>?
+
+    private external fun nativeAddAccount(
+        handle: Long,
+        user: String,
+        domain: String,
+        pwd: String,
+        displayName: String,
+        transport: String,
+        port: Int,
+        tlsCaFile: String,
+        verifyTlsCert: Boolean,
+        mediaEnc: String,
+        maxCalls: Int,
+        outboundProxy: String,
+        stunServer: String,
+        stunUser: String,
+        stunPass: String,
+        mediaNat: String,
+        regInterval: Int,
+        outStatus: IntArray
+    ): Long
+    private external fun nativeRemoveAccount(handle: Long, accountHandle: Long): Int
+    private external fun nativeSetDefaultAccount(handle: Long, accountHandle: Long): Int
+    private external fun nativeGetDefaultAccount(handle: Long): Long
+    private external fun nativeGetAccountCount(handle: Long): Int
+    private external fun nativeGetAccounts(handle: Long): LongArray
 }

@@ -38,6 +38,11 @@ platforms/web/test/evidence/
 # Windows prebuilts
 platforms/windows/prebuilt/
 
+# Android ABI prebuilts (prebuilt/include/ stays tracked)
+platforms/android/sipsdk/prebuilt/arm64-v8a
+platforms/android/sipsdk/prebuilt/armeabi-v7a
+platforms/android/sipsdk/prebuilt/x86_64
+
 # Local workspace runtime state and debug logs
 .workspace/
 .logs/

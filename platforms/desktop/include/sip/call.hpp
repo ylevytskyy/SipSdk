@@ -11,6 +11,7 @@ struct sip_call_t;
 
 namespace sip {
 
+class Account;
 class Client;
 
 class Call {
@@ -35,6 +36,7 @@ public:
     bool is_closed() const;
     bool is_secure() const;
     bool is_in_conference() const;
+    std::shared_ptr<Account> account() const { return m_account; }
     uint32_t get_duration() const;
     /** Counts of what the call received; complete once the call is closed. */
     CallMediaStats get_media_stats() const;
@@ -53,11 +55,13 @@ public:
     void invalidate();
 
 private:
+    friend class Account;
     friend class Client;
     sip_call_t *m_handle{nullptr};
     bool m_owns_handle{false};
     std::string m_cached_id;
     std::string m_cached_remote_uri;
+    std::shared_ptr<Account> m_account;
 };
 
 } // namespace sip

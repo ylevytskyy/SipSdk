@@ -25,6 +25,9 @@ cmake --build "$BUILD_DIR" --parallel
 echo "==> Running macOS desktop CTest suite..."
 (cd "$BUILD_DIR" && ctest --output-on-failure -V)
 
+echo "==> Running core C ABI multi-account tests against Asterisk..."
+"$BUILD_DIR/core/sip_core_multi_account_test"
+
 echo "==> Running core C ABI registration & SIP MESSAGE tests against Asterisk..."
 "$BUILD_DIR/core/sip_core_registration_test"
 

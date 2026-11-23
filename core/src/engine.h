@@ -61,6 +61,22 @@ public:
     bool is_registered() const;
     int reset_transports(bool re_register);
 
+    int set_account_callbacks(const sip_account_callbacks_t *callbacks);
+    int add_account(const AccountConfig &config, sip_account_t **out_account);
+    int remove_account(sip_account_t *account);
+    int set_default_account(sip_account_t *account);
+    sip_account_t *get_default_account() const;
+    size_t get_account_count() const;
+    size_t get_accounts(sip_account_t **out_accounts, size_t max_count) const;
+    int reregister_account(sip_account_t *account);
+    int unregister_account(sip_account_t *account);
+    int dial_call_on_account(sip_account_t *account, const char *target_uri, bool with_video, sip_call_t **out_call);
+    int send_message_on_account(sip_account_t *account, const char *peer_uri, const char *content_type,
+                                const uint8_t *body, size_t body_len, uint64_t *message_id);
+    void dispatch_account_reg_state(sip_account_t *account, sip_reg_state_t state, int code, const char *reason);
+    void dispatch_account_message_received(sip_account_t *account, std::string from_uri,
+                                           std::string content_type, std::string body);
+
     sip_call_t *make_call(const char *target_uri, bool with_video);
     int dial_call(const char *target_uri, bool with_video, sip_call_t **out_call);
     int answer_call(sip_call_t *call, bool with_video);
@@ -149,6 +165,11 @@ private:
     void hold_single_call_on_loop(sip_call_t *call, bool hold);
     void remove_from_conference_on_loop(sip_call_t *call, bool hold_removed);
     void sync_conference_mixer_on_loop();
+    int start_account_ua_on_loop(sip_account_t *account, const AccountConfig &cfg, int effective_max_calls);
+    sip_account_t *find_account_by_ua(struct ua *u) const;
+    sip_account_t *find_account_by_call(struct call *c) const;
+    struct ua *resolve_call_ua(const sip_call_t *call) const;
+    bool is_account_active(const sip_account_t *account) const;
 
     static void mqueue_callback(int id, void *data, void *arg);
     static bool sip_request_handler(const struct sip_msg *msg, void *arg);
@@ -167,16 +188,21 @@ private:
     std::atomic<bool> m_stopping{false};
     std::atomic<bool> m_mic_muted{false};
     std::atomic<bool> m_audio_session_active{false};
-    std::atomic<bool> m_is_registered{false};
     std::atomic<int> m_max_calls{4};
 
     struct mqueue *m_mq{nullptr};
-    struct ua *m_ua{nullptr};
     struct tls *m_wss_tls{nullptr};
-    std::string m_active_transport;
     bool m_events_registered{false};
     int m_start_result{0};
     bool m_start_signaled{false};
+
+    mutable std::mutex m_accounts_mutex;
+    std::vector<sip_account_t *> m_accounts;
+    sip_account_t *m_default_account{nullptr};
+    std::atomic<uint64_t> m_next_account_id{1};
+
+    mutable std::mutex m_account_cb_mutex;
+    sip_account_callbacks_t m_account_callbacks{};
 
     mutable std::mutex m_calls_mutex;
     std::vector<sip_call_t *> m_all_calls;

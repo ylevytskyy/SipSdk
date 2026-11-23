@@ -2,6 +2,7 @@
 #define SIP_DESKTOP_HPP
 
 #include "types.hpp"
+#include "account.hpp"
 #include "listener.hpp"
 #include "call.hpp"
 #include "client.hpp"

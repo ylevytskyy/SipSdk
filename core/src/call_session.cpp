@@ -1,4 +1,5 @@
 #include "call_session.h"
+#include "account_session.h"
 #include "engine.h"
 
 #include <re.h>
@@ -56,9 +57,34 @@ sip_call_t::~sip_call_t()
         m_consult_call->release();
         m_consult_call = nullptr;
     }
+    if (m_account) {
+        m_account->release();
+        m_account = nullptr;
+    }
     m_stats_tmr = static_cast<struct tmr *>(mem_deref(m_stats_tmr));
     m_hold_check_tmr = static_cast<struct tmr *>(mem_deref(m_hold_check_tmr));
     m_raw_call = nullptr;
+}
+
+sip_account_t *sip_call_t::account() const
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_account;
+}
+
+void sip_call_t::set_account(sip_account_t *account)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (m_account == account) {
+        return;
+    }
+    if (m_account) {
+        m_account->release();
+    }
+    m_account = account;
+    if (m_account) {
+        m_account->retain();
+    }
 }
 
 const char *sip_call_t::get_id() const

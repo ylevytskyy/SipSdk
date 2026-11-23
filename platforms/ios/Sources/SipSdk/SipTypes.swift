@@ -232,6 +232,8 @@ public enum SipEvent: Sendable {
     case messageStatusChanged(id: UInt64, status: SipMessageStatus, code: Int, reason: String)
     case callRejectedBusy(String)
     case conferenceChanged([SipCall])
+    case accountRegistrationChanged(SipAccountSession, SipRegistrationState)
+    case accountMessageReceived(SipAccountSession, SipIncomingMessage)
 }
 
 /// Strongly typed SIP error domain.

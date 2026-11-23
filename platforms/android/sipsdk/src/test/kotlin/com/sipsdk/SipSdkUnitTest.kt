@@ -313,4 +313,102 @@ class SipSdkUnitTest {
         assertFalse(dupSecond.isMissed)
         assertTrue(dupFirst.isMissed)
     }
+
+    @Test
+    fun testMultiAccountConfigModelAndValidation() {
+        val cfg = SipAccountConfig(username = "1001", domain = "10.0.2.2", password = "secret")
+        assertEquals("1001", cfg.username)
+        assertEquals("10.0.2.2", cfg.domain)
+        assertEquals("secret", cfg.password)
+        assertEquals("udp", cfg.transport)
+        assertEquals(5060, cfg.port)
+        assertTrue(cfg.verifyTlsCert)
+        assertEquals("", cfg.mediaEnc)
+        assertEquals(4, cfg.maxCalls)
+
+        val client = SipClient("1001", "10.0.2.2")
+        assertTrue(client.accounts.isEmpty())
+        assertEquals(0, client.accountCount)
+        assertEquals(null, client.defaultAccount)
+
+        try {
+            client.addAccount(SipAccountConfig(username = "", domain = "10.0.2.2"))
+            org.junit.Assert.fail("Expected IllegalArgumentException for empty username")
+        } catch (_: IllegalArgumentException) {}
+
+        try {
+            client.addAccount(SipAccountConfig(username = "1001", domain = ""))
+            org.junit.Assert.fail("Expected IllegalArgumentException for empty domain")
+        } catch (_: IllegalArgumentException) {}
+
+        try {
+            client.addAccount(SipAccountConfig(username = "1001", domain = "10.0.2.2", port = 70000))
+            org.junit.Assert.fail("Expected IllegalArgumentException for out-of-range port")
+        } catch (_: IllegalArgumentException) {}
+
+        val acc = SipAccount(
+            client = client,
+            nativeHandle = 0L,
+            ownsNativeHandle = false,
+            cachedId = 42L,
+            cachedAor = "sip:1001@10.0.2.2:5060",
+            cachedUser = "1001",
+            cachedDomain = "10.0.2.2"
+        )
+        assertEquals(42L, acc.id)
+        assertEquals("sip:1001@10.0.2.2:5060", acc.aor)
+        assertEquals("1001", acc.user)
+        assertEquals("10.0.2.2", acc.domain)
+        assertFalse(acc.isRegistered)
+        assertEquals(SipRegistrationState.UNREGISTERED, acc.registrationState)
+        assertEquals(-1, acc.reregister())
+        assertEquals(-1, acc.unregister())
+        assertEquals(-1, client.removeAccount(acc))
+        assertEquals(-1, client.setDefaultAccount(acc))
+
+        try {
+            acc.sendMessage("", "hello")
+            org.junit.Assert.fail("Expected IllegalArgumentException for empty peerUri")
+        } catch (_: IllegalArgumentException) {}
+
+        try {
+            acc.sendMessage("1003", "")
+            org.junit.Assert.fail("Expected IllegalArgumentException for empty text")
+        } catch (_: IllegalArgumentException) {}
+
+        try {
+            acc.sendMessage("1003", "hello")
+            org.junit.Assert.fail("Expected IllegalStateException when account handle is closed")
+        } catch (_: IllegalStateException) {}
+
+        acc.close()
+        acc.destroy()
+
+        val call = SipCall(nativeHandle = 0L, callId = "c1", remoteUri = "sip:1003@10.0.2.2", client = client)
+        assertEquals(null, call.account)
+
+        var regCallbackAccount: SipAccount? = null
+        var msgCallbackAccount: SipAccount? = null
+        var msgCallbackText: String? = null
+        val listener = object : SipClientListener {
+            override fun onAccountRegistrationStateChanged(
+                account: SipAccount,
+                state: SipRegistrationState,
+                code: Int,
+                reason: String
+            ) {
+                regCallbackAccount = account
+            }
+
+            override fun onAccountMessageReceived(account: SipAccount, message: SipIncomingMessage) {
+                msgCallbackAccount = account
+                msgCallbackText = message.text
+            }
+        }
+        listener.onAccountRegistrationStateChanged(acc, SipRegistrationState.REGISTERED, 200, "OK")
+        listener.onAccountMessageReceived(acc, SipIncomingMessage("sip:1003@pbx", "text/plain", "hi".toByteArray()))
+        assertEquals(acc, regCallbackAccount)
+        assertEquals(acc, msgCallbackAccount)
+        assertEquals("hi", msgCallbackText)
+    }
 }

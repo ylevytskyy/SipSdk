@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using System.Threading;
 using SipSdk.Native;
@@ -15,6 +16,7 @@ namespace SipSdk
         private IntPtr _clientHandle;
         private readonly SynchronizationContext? _syncContext;
         private readonly ConcurrentDictionary<IntPtr, SipCall> _activeCalls = new();
+        private readonly ConcurrentDictionary<IntPtr, SipAccount> _accounts = new();
 
         // Pinned delegate references to prevent GC collection of native callback pointers
         private readonly NativeRegStateCallback _regCallback;
@@ -29,6 +31,8 @@ namespace SipSdk
         private readonly NativeConferenceChangedCallback _conferenceChangedCallback;
         private readonly NativeMessageReceivedCallback _messageReceivedCallback;
         private readonly NativeMessageStatusCallback _messageStatusCallback;
+        private readonly NativeAccountRegStateCallback _accountRegStateCallback;
+        private readonly NativeAccountMessageReceivedCallback _accountMessageReceivedCallback;
 
         private GCHandle _gcHandle;
         private bool _disposed;
@@ -44,12 +48,43 @@ namespace SipSdk
         public bool IsMicMuted => _clientHandle != IntPtr.Zero && SipNativeAbi.sip_client_is_mic_muted(_clientHandle);
         public string AccountAor => _accountAor;
 
+        public SipAccount? DefaultAccount
+        {
+            get
+            {
+                if (_clientHandle == IntPtr.Zero) return null;
+                IntPtr handle = SipNativeAbi.sip_client_get_default_account(_clientHandle);
+                return ResolveAccount(handle);
+            }
+        }
+
+        public IReadOnlyList<SipAccount> Accounts
+        {
+            get
+            {
+                if (_clientHandle == IntPtr.Zero) return Array.Empty<SipAccount>();
+                int count = (int)SipNativeAbi.sip_client_get_account_count(_clientHandle);
+                if (count <= 0) return Array.Empty<SipAccount>();
+                IntPtr[] handles = new IntPtr[count];
+                int written = (int)SipNativeAbi.sip_client_get_accounts(_clientHandle, handles, (UIntPtr)count);
+                var list = new List<SipAccount>(written);
+                for (int i = 0; i < written; i++)
+                {
+                    var acc = ResolveAccount(handles[i]);
+                    if (acc != null) list.Add(acc);
+                }
+                return list;
+            }
+        }
+
         public event EventHandler<RegistrationStateChangedEventArgs>? RegistrationStateChanged;
         public event EventHandler<IncomingCallEventArgs>? IncomingCall;
         public event EventHandler<CallRejectedBusyEventArgs>? CallRejectedBusy;
         public event EventHandler<ConferenceChangedEventArgs>? ConferenceChanged;
         public event EventHandler<MessageReceivedEventArgs>? MessageReceived;
         public event EventHandler<MessageStatusChangedEventArgs>? MessageStatusChanged;
+        public event EventHandler<SipAccountRegistrationStateEventArgs>? AccountRegistrationStateChanged;
+        public event EventHandler<SipAccountMessageReceivedEventArgs>? AccountMessageReceived;
 
         public SipClient()
         {
@@ -67,6 +102,8 @@ namespace SipSdk
             _conferenceChangedCallback = HandleNativeConferenceChanged;
             _messageReceivedCallback = HandleNativeMessageReceived;
             _messageStatusCallback = HandleNativeMessageStatus;
+            _accountRegStateCallback = HandleNativeAccountRegState;
+            _accountMessageReceivedCallback = HandleNativeAccountMessageReceived;
 
             _gcHandle = GCHandle.Alloc(this);
             IntPtr userData = GCHandle.ToIntPtr(_gcHandle);
@@ -97,6 +134,13 @@ namespace SipSdk
                 OnMessageStatus = Marshal.GetFunctionPointerForDelegate(_messageStatusCallback)
             };
             SipNativeAbi.sip_client_set_message_callbacks(_clientHandle, ref messageCallbacks);
+
+            var accountCallbacks = new SipAccountCallbacks
+            {
+                OnAccountRegState = Marshal.GetFunctionPointerForDelegate(_accountRegStateCallback),
+                OnAccountMessageReceived = Marshal.GetFunctionPointerForDelegate(_accountMessageReceivedCallback)
+            };
+            SipNativeAbi.sip_client_set_account_callbacks(_clientHandle, ref accountCallbacks);
         }
 
         public int Start(string? configPath = null)
@@ -154,6 +198,109 @@ namespace SipSdk
         {
             ThrowIfDisposed();
             return SipNativeAbi.sip_client_unregister(_clientHandle);
+        }
+
+        public SipAccount AddAccount(SipAccountConfig config)
+        {
+            ThrowIfDisposed();
+            if (config == null) throw new ArgumentNullException(nameof(config));
+            if (string.IsNullOrEmpty(config.Username)) throw new ArgumentException("Username cannot be empty", nameof(config));
+            if (string.IsNullOrEmpty(config.Domain)) throw new ArgumentException("Domain cannot be empty", nameof(config));
+
+            int maxCalls = config.MaxCalls > 0 ? config.MaxCalls : MaxCalls;
+            var nativeCfg = new SipNativeAbi.SipAccountConfigNative
+            {
+                User = config.Username,
+                Domain = config.Domain,
+                Pwd = config.Password,
+                Transport = string.IsNullOrEmpty(config.Transport) ? "udp" : config.Transport,
+                Port = config.Port,
+                DisplayName = config.DisplayName,
+                OutboundProxy = config.OutboundProxy,
+                StunServer = config.StunServer,
+                StunUser = config.StunUser,
+                StunPass = config.StunPass,
+                MediaNat = config.MediaNat,
+                RegInterval = config.RegInterval,
+                TlsCaFile = config.TlsCaFile,
+                VerifyTlsCert = config.VerifyTlsCert,
+                MediaEnc = config.MediaEnc,
+                MaxCalls = maxCalls
+            };
+
+            int rc = SipNativeAbi.sip_client_add_account(_clientHandle, ref nativeCfg, out IntPtr accountHandle);
+            if (rc == 16)
+            {
+                throw new SipBusyException("Maximum concurrent accounts reached (8).");
+            }
+            if (rc == 17)
+            {
+                throw new InvalidOperationException($"Account {config.Username}@{config.Domain} is already added (EEXIST).");
+            }
+            if (rc != 0 || accountHandle == IntPtr.Zero)
+            {
+                throw new InvalidOperationException($"Failed to add account {config.Username}@{config.Domain} (error {rc}).");
+            }
+
+            var account = _accounts.GetOrAdd(accountHandle, h => new SipAccount(h, this, ownsHandle: true));
+            account.PromoteToOwned();
+            return account;
+        }
+
+        public SipAccount AddAccount(
+            string username,
+            string domain,
+            string password,
+            string transport = "udp",
+            int port = 5060,
+            string? tlsCaFile = null,
+            bool verifyTlsCert = true,
+            string? mediaEnc = null,
+            int? maxCalls = null)
+        {
+            if (maxCalls.HasValue)
+            {
+                MaxCalls = maxCalls.Value;
+            }
+
+            return AddAccount(new SipAccountConfig
+            {
+                Username = username,
+                Domain = domain,
+                Password = password,
+                Transport = transport,
+                Port = port,
+                TlsCaFile = tlsCaFile,
+                VerifyTlsCert = verifyTlsCert,
+                MediaEnc = mediaEnc,
+                MaxCalls = MaxCalls
+            });
+        }
+
+        public void RemoveAccount(SipAccount account)
+        {
+            ThrowIfDisposed();
+            if (account == null) throw new ArgumentNullException(nameof(account));
+            account.ThrowIfDisposed();
+
+            int rc = SipNativeAbi.sip_client_remove_account(_clientHandle, account.NativeHandle);
+            if (rc != 0)
+            {
+                throw new InvalidOperationException($"Failed to remove account {account.Aor} (error {rc}).");
+            }
+        }
+
+        public void SetDefaultAccount(SipAccount account)
+        {
+            ThrowIfDisposed();
+            if (account == null) throw new ArgumentNullException(nameof(account));
+            account.ThrowIfDisposed();
+
+            int rc = SipNativeAbi.sip_client_set_default_account(_clientHandle, account.NativeHandle);
+            if (rc != 0)
+            {
+                throw new InvalidOperationException($"Failed to set default account {account.Aor} (error {rc}).");
+            }
         }
 
         public SipCall Dial(string targetUri, bool withVideo = false)
@@ -292,9 +439,55 @@ namespace SipSdk
             return SipNativeAbi.sip_client_is_local_preview_active(_clientHandle);
         }
 
+        internal SipCall RegisterCall(IntPtr callHandle)
+        {
+            var call = new SipCall(callHandle, this);
+            _activeCalls[callHandle] = call;
+            return call;
+        }
+
         internal void RemoveCall(IntPtr callHandle)
         {
             _activeCalls.TryRemove(callHandle, out _);
+        }
+
+        internal SipAccount? ResolveAccount(IntPtr accountHandle)
+        {
+            if (accountHandle == IntPtr.Zero) return null;
+            if (_accounts.TryGetValue(accountHandle, out var existing))
+            {
+                return existing;
+            }
+            bool isActive = false;
+            if (_clientHandle != IntPtr.Zero)
+            {
+                nuint count = SipNativeAbi.sip_client_get_account_count(_clientHandle);
+                if (count > 0)
+                {
+                    var handles = new IntPtr[(int)count];
+                    nuint written = SipNativeAbi.sip_client_get_accounts(_clientHandle, handles, count);
+                    for (int i = 0; i < (int)written; i++)
+                    {
+                        if (handles[i] == accountHandle)
+                        {
+                            isActive = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            if (isActive)
+            {
+                return _accounts.GetOrAdd(accountHandle, h => new SipAccount(h, this, ownsHandle: false));
+            }
+            var transient = new SipAccount(accountHandle, this, ownsHandle: false);
+            transient.DetachHandle();
+            return transient;
+        }
+
+        internal void RemoveAccountEntry(IntPtr accountHandle)
+        {
+            _accounts.TryRemove(accountHandle, out _);
         }
 
         internal void DispatchToUi(Action action)
@@ -461,6 +654,37 @@ namespace SipSdk
             });
         }
 
+        private void HandleNativeAccountRegState(IntPtr client, IntPtr accountHandle, int state, int code, IntPtr reason, IntPtr userData)
+        {
+            var account = ResolveAccount(accountHandle);
+            var args = new SipAccountRegistrationStateEventArgs(
+                account,
+                (SipRegistrationState)state,
+                code,
+                SipNativeAbi.PtrToStringUtf8(reason) ?? string.Empty);
+            DispatchToUi(() =>
+            {
+                AccountRegistrationStateChanged?.Invoke(this, args);
+            });
+        }
+
+        private void HandleNativeAccountMessageReceived(IntPtr client, IntPtr accountHandle, IntPtr fromUri, IntPtr contentType, IntPtr body, UIntPtr bodyLen, IntPtr userData)
+        {
+            var account = ResolveAccount(accountHandle);
+            string from = SipNativeAbi.PtrToStringUtf8(fromUri) ?? string.Empty;
+            string ctype = SipNativeAbi.PtrToStringUtf8(contentType) ?? "text/plain";
+            byte[] bytes = new byte[(int)bodyLen];
+            if (body != IntPtr.Zero && bytes.Length > 0)
+            {
+                Marshal.Copy(body, bytes, 0, bytes.Length);
+            }
+            var args = new SipAccountMessageReceivedEventArgs(account, from, ctype, bytes);
+            DispatchToUi(() =>
+            {
+                AccountMessageReceived?.Invoke(this, args);
+            });
+        }
+
         private void ThrowIfDisposed()
         {
             if (_disposed || _clientHandle == IntPtr.Zero)
@@ -479,6 +703,12 @@ namespace SipSdk
                     kvp.Value.Dispose();
                 }
                 _activeCalls.Clear();
+
+                foreach (var kvp in _accounts)
+                {
+                    kvp.Value.Dispose();
+                }
+                _accounts.Clear();
 
                 Stop();
 
