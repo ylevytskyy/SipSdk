@@ -390,42 +390,8 @@ public final class SipClient {
 
         var handle: OpaquePointer?
         var rc: Int32 = 0
-        var cConfig = sip_account_config_t()
-        account.username.withCString { userPtr in
-            account.domain.withCString { domainPtr in
-                account.password.withCString { pwdPtr in
-                    account.transport.rawValue.withCString { tpPtr in
-                        cConfig.user = userPtr
-                        cConfig.domain = domainPtr
-                        cConfig.pwd = pwdPtr
-                        cConfig.transport = tpPtr
-                        cConfig.port = Int32(account.port)
-                        cConfig.reg_interval = account.regInterval
-                        cConfig.verify_tls_cert = account.verifyTlsCert
-                        cConfig.max_calls = Int32(account.maxCalls)
-
-                        let dname = account.displayName?.cString(using: .utf8)
-                        let ob = account.outboundProxy?.cString(using: .utf8)
-                        let stun = account.stunServer?.cString(using: .utf8)
-                        let stunUser = account.stunUser?.cString(using: .utf8)
-                        let stunPass = account.stunPassword?.cString(using: .utf8)
-                        let nat = account.mediaNat?.cString(using: .utf8)
-                        let tlsCa = account.tlsCaFile?.cString(using: .utf8)
-                        let menc = account.mediaEnc?.cString(using: .utf8)
-
-                        dname?.withUnsafeBufferPointer { cConfig.display_name = $0.baseAddress }
-                        ob?.withUnsafeBufferPointer { cConfig.outbound_proxy = $0.baseAddress }
-                        stun?.withUnsafeBufferPointer { cConfig.stun_server = $0.baseAddress }
-                        stunUser?.withUnsafeBufferPointer { cConfig.stun_user = $0.baseAddress }
-                        stunPass?.withUnsafeBufferPointer { cConfig.stun_pass = $0.baseAddress }
-                        nat?.withUnsafeBufferPointer { cConfig.media_nat = $0.baseAddress }
-                        tlsCa?.withUnsafeBufferPointer { cConfig.tls_ca_file = $0.baseAddress }
-                        menc?.withUnsafeBufferPointer { cConfig.media_enc = $0.baseAddress }
-
-                        rc = sip_client_add_account(client, &cConfig, &handle)
-                    }
-                }
-            }
+        account.withCAccountConfig { cConfig in
+            rc = sip_client_add_account(client, &cConfig, &handle)
         }
 
         if rc == EBUSY {
@@ -835,8 +801,6 @@ public final class SipClient {
         eventContinuation.yield(.callStateChanged(sipCall, newState))
 
         if newState.isClosed {
-            let endedReason: CXCallEndedReason = (code == 486 || code == 603) ? .declinedElsewhere : .remoteEnded
-            callKit.reportCallEnded(uuid: sipCall.id, reason: endedReason)
             calls.removeAll(where: { $0.id == sipCall.id })
             sip_call_destroy(callHandle)
             sipCall.coreCall = nil
