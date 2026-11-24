@@ -86,6 +86,7 @@ add_library(sip_core_dll SHARED
     ${CORE_DIR}/src/sip_abi.cpp
     src/media/mf_capture.cpp
     src/media/mf_codec.cpp
+    src/media/mf_codec_baresip.cpp
     src/media/mf_renderer.cpp
 )
 
@@ -210,6 +211,7 @@ add_executable(test_mf_drivers
     tests/test_mf_drivers.cpp
     src/media/mf_capture.cpp
     src/media/mf_codec.cpp
+    src/media/mf_codec_baresip.cpp
     src/media/mf_renderer.cpp
 )
 
