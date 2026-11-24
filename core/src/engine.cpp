@@ -217,6 +217,10 @@ int Engine::init_on_loop_thread(const char *config_path)
         }
         cfg->video.enc_fmt = VID_FMT_YUV420P;
         cfg->avt.rxmode = RECEIVE_MODE_MAIN;
+
+        std::lock_guard<std::mutex> audio_driver_lock(m_audio_driver_mutex);
+        m_audio_src_mod = cfg->audio.src_mod;
+        m_audio_play_mod = cfg->audio.play_mod;
     }
 
     rc = baresip_init(conf_config());
@@ -671,7 +675,13 @@ int Engine::start_account_ua_on_loop(sip_account_t *account, const AccountConfig
             (void)account_set_mediaenc(acc, media_enc.c_str());
         }
 
+#if defined(__APPLE__)
+        // The VideoToolbox codecs do not match a "packetization-mode=1" filter, and the
+        // offer then carries no video. Offer H264 as the Apple codecs register it.
+        (void)account_set_video_codecs(acc, "H264");
+#else
         (void)account_set_video_codecs(acc, "H264/packetization-mode=1");
+#endif
         if (aucodec_find(baresip_aucodecl(), "opus", 48000, 2) != nullptr) {
             (void)account_set_audio_codecs(acc, "opus/48000/2,G722/16000/1,PCMU/8000/1,PCMA/8000/1");
         } else {
@@ -1556,7 +1566,6 @@ int Engine::dial_call_on_account(sip_account_t *account, const char *target_uri,
         if (account) account->release();
         call_session->release();
     });
-
     if (!posted) {
         if (account) account->release();
         call_session->set_closed(0);
@@ -1589,7 +1598,6 @@ int Engine::answer_call(sip_call_t *call, bool with_video)
         }
         call->release();
     });
-
     if (!posted) {
         release_audio_session_if_idle();
         call->release();
@@ -1624,7 +1632,6 @@ int Engine::hangup_call(sip_call_t *call, int code, const char *reason)
         }
         call->release();
     });
-
     if (!posted) {
         call->release();
         return EIO;
@@ -1807,7 +1814,6 @@ int Engine::hold_call(sip_call_t *call, bool hold)
         hold_call_on_loop(call, hold);
         call->release();
     });
-
     if (!posted) {
         call->release();
         return EIO;
@@ -1872,7 +1878,6 @@ int Engine::mute_call(sip_call_t *call, bool muted)
         }
         call->release();
     });
-
     if (!posted) {
         call->release();
         return EIO;
@@ -1898,7 +1903,6 @@ int Engine::send_dtmf(sip_call_t *call, const char *digits)
         }
         call->release();
     });
-
     if (!posted) {
         call->release();
         return EIO;
@@ -2336,31 +2340,73 @@ bool Engine::is_client_mic_muted() const
     return m_mic_muted.load();
 }
 
+namespace {
+
+/// One set_audio_driver request. A null argument keeps the current value; an
+/// empty module name keeps the configured module.
+struct AudioDriverChange {
+    bool has_src_mod{false};
+    bool has_src_dev{false};
+    bool has_play_mod{false};
+    bool has_play_dev{false};
+    std::string src_mod;
+    std::string src_dev;
+    std::string play_mod;
+    std::string play_dev;
+};
+
+void write_audio_config(struct config *cfg, const AudioDriverChange &change)
+{
+    if (change.has_src_mod && !change.src_mod.empty()) {
+        snprintf(cfg->audio.src_mod, sizeof(cfg->audio.src_mod), "%s", change.src_mod.c_str());
+    }
+    if (change.has_src_dev) {
+        snprintf(cfg->audio.src_dev, sizeof(cfg->audio.src_dev), "%s", change.src_dev.c_str());
+    }
+    if (change.has_play_mod && !change.play_mod.empty()) {
+        snprintf(cfg->audio.play_mod, sizeof(cfg->audio.play_mod), "%s", change.play_mod.c_str());
+    }
+    if (change.has_play_dev) {
+        snprintf(cfg->audio.play_dev, sizeof(cfg->audio.play_dev), "%s", change.play_dev.c_str());
+    }
+}
+
+} // namespace
+
 int Engine::set_audio_driver(const char *src_mod, const char *src_dev, const char *play_mod, const char *play_dev)
 {
-    struct config *cfg = conf_config();
-    if (!cfg) return -1;
-    if (src_mod && std::strlen(src_mod) > 0) {
-        snprintf(cfg->audio.src_mod, sizeof(cfg->audio.src_mod), "%s", src_mod);
-    }
-    if (src_dev) {
-        snprintf(cfg->audio.src_dev, sizeof(cfg->audio.src_dev), "%s", src_dev);
-    }
-    if (play_mod && std::strlen(play_mod) > 0) {
-        snprintf(cfg->audio.play_mod, sizeof(cfg->audio.play_mod), "%s", play_mod);
-    }
-    if (play_dev) {
-        snprintf(cfg->audio.play_dev, sizeof(cfg->audio.play_dev), "%s", play_dev);
+    if (!conf_config()) return -1;
+
+    AudioDriverChange change;
+    change.has_src_mod = src_mod != nullptr;
+    change.has_src_dev = src_dev != nullptr;
+    change.has_play_mod = play_mod != nullptr;
+    change.has_play_dev = play_dev != nullptr;
+    change.src_mod = src_mod ? src_mod : "";
+    change.src_dev = src_dev ? src_dev : "";
+    change.play_mod = play_mod ? play_mod : "";
+    change.play_dev = play_dev ? play_dev : "";
+
+    {
+        std::lock_guard<std::mutex> lock(m_audio_driver_mutex);
+        if (!change.src_mod.empty()) m_audio_src_mod = change.src_mod;
+        if (!change.play_mod.empty()) m_audio_play_mod = change.play_mod;
     }
 
-    std::string s_mod = src_mod ? src_mod : (cfg ? cfg->audio.src_mod : "");
-    std::string s_dev = src_dev ? src_dev : (cfg ? cfg->audio.src_dev : "");
-    std::string p_mod = play_mod ? play_mod : (cfg ? cfg->audio.play_mod : "");
-    std::string p_dev = play_dev ? play_dev : (cfg ? cfg->audio.play_dev : "");
-    bool has_src = (src_mod != nullptr || src_dev != nullptr);
-    bool has_play = (play_mod != nullptr || play_dev != nullptr);
+    // Baresip reads its config on the SIP thread without a lock, so only that
+    // thread may change it while the engine runs.
+    bool posted = post_task([this, change]() {
+        struct config *cfg = conf_config();
+        if (!cfg) return;
+        write_audio_config(cfg, change);
 
-    post_task([this, s_mod, s_dev, p_mod, p_dev, has_src, has_play]() {
+        std::string s_mod = change.has_src_mod ? change.src_mod : cfg->audio.src_mod;
+        std::string s_dev = change.has_src_dev ? change.src_dev : cfg->audio.src_dev;
+        std::string p_mod = change.has_play_mod ? change.play_mod : cfg->audio.play_mod;
+        std::string p_dev = change.has_play_dev ? change.play_dev : cfg->audio.play_dev;
+        bool has_src = change.has_src_mod || change.has_src_dev;
+        bool has_play = change.has_play_mod || change.has_play_dev;
+
         std::lock_guard<std::mutex> lock(m_calls_mutex);
         for (auto *sess : m_all_calls) {
             if (!sess || sess->raw_call() == nullptr || sess->is_closed()) continue;
@@ -2377,18 +2423,24 @@ int Engine::set_audio_driver(const char *src_mod, const char *src_dev, const cha
         }
     });
 
+    // Not running yet: no SIP thread reads the config, so write it here. A call
+    // made while the engine starts or stops is not supported.
+    if (!posted && !m_stopping.load()) {
+        write_audio_config(conf_config(), change);
+    }
+
     return 0;
 }
 
 int Engine::get_audio_driver(char *src_mod, size_t src_mod_sz, char *play_mod, size_t play_mod_sz) const
 {
-    struct config *cfg = conf_config();
-    if (!cfg) return -1;
+    if (!conf_config()) return -1;
+    std::lock_guard<std::mutex> lock(m_audio_driver_mutex);
     if (src_mod && src_mod_sz > 0) {
-        snprintf(src_mod, src_mod_sz, "%s", cfg->audio.src_mod);
+        snprintf(src_mod, src_mod_sz, "%s", m_audio_src_mod.c_str());
     }
     if (play_mod && play_mod_sz > 0) {
-        snprintf(play_mod, play_mod_sz, "%s", cfg->audio.play_mod);
+        snprintf(play_mod, play_mod_sz, "%s", m_audio_play_mod.c_str());
     }
     return 0;
 }
@@ -2410,6 +2462,12 @@ void Engine::destroy_call(sip_call_t *call)
 
 bool Engine::prepare_audio_session()
 {
+    std::lock_guard<std::mutex> audio_lock(m_audio_session_mutex);
+    if (m_audio_session_active.load()) {
+        // Already prepared for the current calls; release_audio_session_if_idle()
+        // releases it once when the last call ends.
+        return true;
+    }
     if (m_callbacks.prepare_audio_session) {
         bool ok = m_callbacks.prepare_audio_session(m_owner, m_user_data);
         if (ok) {
@@ -2446,6 +2504,9 @@ bool Engine::prepare_audio_session()
 
 void Engine::release_audio_session_if_idle()
 {
+    // Checked under the audio lock, so a call that starts meanwhile either is
+    // seen here or prepares the session again after this release.
+    std::lock_guard<std::mutex> audio_lock(m_audio_session_mutex);
     {
         std::lock_guard<std::mutex> lock(m_calls_mutex);
         for (auto *c : m_all_calls) {
@@ -3486,64 +3547,32 @@ void Engine::dispatch_account_message_received(sip_account_t *account, std::stri
 
 int Engine::set_video_capture_driver(std::shared_ptr<IVideoCaptureDriver> driver)
 {
-    if (m_started.load()) {
-        post_task([this, driver]() {
-            if (m_media_manager) {
-                m_media_manager->set_capture_driver(driver);
-            }
-        });
-    } else {
-        if (m_media_manager) {
-            m_media_manager->set_capture_driver(driver);
-        }
+    if (m_media_manager) {
+        m_media_manager->set_capture_driver(driver);
     }
     return 0;
 }
 
 int Engine::set_remote_renderer(std::shared_ptr<IVideoRendererDriver> renderer)
 {
-    if (m_started.load()) {
-        post_task([this, renderer]() {
-            if (m_media_manager) {
-                m_media_manager->set_remote_renderer(renderer);
-            }
-        });
-    } else {
-        if (m_media_manager) {
-            m_media_manager->set_remote_renderer(renderer);
-        }
+    if (m_media_manager) {
+        m_media_manager->set_remote_renderer(renderer);
     }
     return 0;
 }
 
 int Engine::set_local_renderer(std::shared_ptr<IVideoRendererDriver> renderer)
 {
-    if (m_started.load()) {
-        post_task([this, renderer]() {
-            if (m_media_manager) {
-                m_media_manager->set_local_renderer(renderer);
-            }
-        });
-    } else {
-        if (m_media_manager) {
-            m_media_manager->set_local_renderer(renderer);
-        }
+    if (m_media_manager) {
+        m_media_manager->set_local_renderer(renderer);
     }
     return 0;
 }
 
 int Engine::set_video_codec_driver(std::shared_ptr<IVideoCodecDriver> driver)
 {
-    if (m_started.load()) {
-        post_task([this, driver]() {
-            if (m_media_manager) {
-                m_media_manager->set_codec_driver(driver);
-            }
-        });
-    } else {
-        if (m_media_manager) {
-            m_media_manager->set_codec_driver(driver);
-        }
+    if (m_media_manager) {
+        m_media_manager->set_codec_driver(driver);
     }
     return 0;
 }

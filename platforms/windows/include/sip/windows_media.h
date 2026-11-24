@@ -8,6 +8,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace sip::windows {
@@ -45,6 +46,7 @@ private:
     std::atomic<bool> m_enabled{true};
     std::atomic<bool> m_using_synthetic{false};
     std::atomic<uint64_t> m_frame_count{0};
+    std::atomic<int> m_camera_index{0};
 
     int m_width{640};
     int m_height{480};
@@ -54,9 +56,12 @@ private:
     void *m_handler_arg{nullptr};
 
     std::mutex m_mutex;
+    std::thread m_worker_thread;
     std::vector<uint8_t> m_y_plane;
     std::vector<uint8_t> m_u_plane;
     std::vector<uint8_t> m_v_plane;
+    void *m_source_reader{nullptr};
+    void *m_media_source{nullptr};
 };
 
 /**

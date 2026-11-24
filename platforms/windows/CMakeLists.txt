@@ -84,6 +84,10 @@ add_library(sip_core_dll SHARED
     ${CORE_DIR}/src/media_driver.cpp
     ${CORE_DIR}/src/mkv_writer.cpp
     ${CORE_DIR}/src/sip_abi.cpp
+    src/media/mf_capture.cpp
+    src/media/mf_codec.cpp
+    src/media/mf_codec_baresip.cpp
+    src/media/mf_renderer.cpp
 )
 
 set_target_properties(sip_core_dll PROPERTIES
@@ -122,8 +126,11 @@ if(WIN32 OR MINGW)
             crypt32
             bcrypt
             mfplat
+            mf
             mfuuid
             mfreadwrite
+            wmcodecdspuuid
+            ole32
             strmiids
             d3d11
             dxgi
@@ -207,6 +214,7 @@ add_executable(test_mf_drivers
     tests/test_mf_drivers.cpp
     src/media/mf_capture.cpp
     src/media/mf_codec.cpp
+    src/media/mf_codec_baresip.cpp
     src/media/mf_renderer.cpp
 )
 

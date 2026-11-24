@@ -1,4 +1,5 @@
 #include "sip/windows_media.h"
+#include "mf_codec_baresip.h"
 
 #if defined(_WIN32) || defined(__CYGWIN__)
 #include <windows.h>
@@ -31,6 +32,7 @@ int MfVideoCodecDriver::register_codec()
     if (SUCCEEDED(hr) && encoder) {
         encoder->Release();
     }
+    sip_windows_register_h264_codecs();
 #endif
 
     m_registered.store(true);
@@ -39,7 +41,10 @@ int MfVideoCodecDriver::register_codec()
 
 void MfVideoCodecDriver::unregister_codec()
 {
-    m_registered.store(false);
+    if (!m_registered.exchange(false)) {
+        return;
+    }
+    sip_windows_unregister_h264_codecs();
 }
 
 static int c_codec_register(void *user_data)

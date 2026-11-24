@@ -18,6 +18,7 @@ Pods/
 
 # SwiftPM build products
 .build/
+.build-asan/
 platforms/desktop/prebuilt/
 
 # macOS

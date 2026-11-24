@@ -4,6 +4,7 @@
 //
 
 import Foundation
+import SipCore
 
 /// SIP registration states.
 public enum SipRegistrationState: Equatable, Sendable, CustomStringConvertible {
@@ -141,6 +142,57 @@ public struct SipAccount: Sendable, Codable, Hashable {
         case .udp: tp = ""
         }
         return "sip:\(username)@\(domain):\(port)\(tp)"
+    }
+
+    /// Scopes all required and optional C strings for the duration of `body` so no pointer escapes prematurely.
+    internal func withCAccountConfig<R>(_ body: (inout sip_account_config_t) -> R) -> R {
+        func withOptionalCString<T>(_ string: String?, _ closure: (UnsafePointer<CChar>?) -> T) -> T {
+            guard let string else { return closure(nil) }
+            return string.withCString { closure($0) }
+        }
+
+        return username.withCString { userPtr in
+            domain.withCString { domainPtr in
+                password.withCString { pwdPtr in
+                    transport.rawValue.withCString { tpPtr in
+                        withOptionalCString(displayName) { dnamePtr in
+                            withOptionalCString(outboundProxy) { obPtr in
+                                withOptionalCString(stunServer) { stunPtr in
+                                    withOptionalCString(stunUser) { stunUserPtr in
+                                        withOptionalCString(stunPassword) { stunPassPtr in
+                                            withOptionalCString(mediaNat) { natPtr in
+                                            withOptionalCString(tlsCaFile) { tlsCaPtr in
+                                            withOptionalCString(mediaEnc) { mencPtr in
+                                                var cConfig = sip_account_config_t()
+                                                cConfig.user = userPtr
+                                                cConfig.domain = domainPtr
+                                                cConfig.pwd = pwdPtr
+                                                cConfig.transport = tpPtr
+                                                cConfig.port = Int32(port)
+                                                cConfig.reg_interval = regInterval
+                                                cConfig.display_name = dnamePtr
+                                                cConfig.outbound_proxy = obPtr
+                                                cConfig.stun_server = stunPtr
+                                                cConfig.stun_user = stunUserPtr
+                                                cConfig.stun_pass = stunPassPtr
+                                                cConfig.media_nat = natPtr
+                                                cConfig.tls_ca_file = tlsCaPtr
+                                                cConfig.media_enc = mencPtr
+                                                cConfig.verify_tls_cert = verifyTlsCert
+                                                cConfig.max_calls = Int32(maxCalls)
+                                                return body(&cConfig)
+                                            }
+                                            }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 

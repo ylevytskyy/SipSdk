@@ -5,6 +5,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <list>
 #include <cstdint>
 #include <mutex>
 #include <string>
@@ -76,6 +77,8 @@ public:
     void set_hold_confirmed(bool val) { m_hold_confirmed.store(val); }
     bool is_hold_confirmed() const { return m_hold_confirmed.load(); }
     void attach_raw_call(struct call *c);
+    // Updates the call identity strings; empty or null values are ignored.
+    void update_identity(const char *call_id, const char *peer_name, const char *peer_uri);
     void detach_raw_call();
 
     void retain();
@@ -109,9 +112,18 @@ private:
     struct call *m_raw_call{nullptr};
     sip_account_t *m_account{nullptr};
 
-    std::string m_id;
-    std::string m_remote_uri;
-    std::string m_peer_display_name;
+    // Publishes value as the current string of slot. Requires m_mutex.
+    void publish_locked(std::atomic<const char *> &slot, const char *value);
+
+    // Strings handed out through the C ABI. A published string is never changed
+    // or freed while the call exists, so pointers returned by get_id(),
+    // get_remote_uri() and get_peer_display_name() stay valid until the call is
+    // destroyed. An update publishes the new value; the list holds each distinct
+    // value once. Guarded by m_mutex.
+    std::list<std::string> m_published_strings;
+    std::atomic<const char *> m_id{""};
+    std::atomic<const char *> m_remote_uri{""};
+    std::atomic<const char *> m_peer_display_name{""};
 
     bool m_is_outgoing{false};
     bool m_has_video{false};

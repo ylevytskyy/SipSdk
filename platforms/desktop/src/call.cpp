@@ -120,7 +120,7 @@ uint32_t Call::get_duration() const
 CallMediaStats Call::get_media_stats() const
 {
     CallMediaStats out;
-    if (!m_handle) return out;
+    if (!m_handle) return m_has_final_media_stats ? m_final_media_stats : out;
     sip_call_media_stats_t s = m_handle->get_media_stats();
     out.video_frames_decoded = s.video_frames_decoded;
     out.video_rtp_received = s.video_rtp_received;
@@ -216,6 +216,10 @@ int Call::stop_recording()
 
 void Call::invalidate()
 {
+    if (m_handle) {
+        m_final_media_stats = get_media_stats();
+        m_has_final_media_stats = true;
+    }
     m_handle = nullptr;
     m_owns_handle = false;
 }

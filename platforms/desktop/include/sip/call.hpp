@@ -65,6 +65,10 @@ private:
     bool m_owns_handle{false};
     std::string m_cached_id;
     std::string m_cached_remote_uri;
+    // The media counts kept when the call closes, so they can be read after the
+    // core call is destroyed.
+    CallMediaStats m_final_media_stats{};
+    bool m_has_final_media_stats{false};
     std::shared_ptr<Account> m_account;
 };
 

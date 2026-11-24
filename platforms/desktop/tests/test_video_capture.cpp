@@ -95,13 +95,97 @@ int main() {
 
     // Test 5: Client Video Driver Wiring
     std::printf("--- Test 5: Client Video Driver Integration ---\n");
+    class SpyCaptureDriver : public sip_core::IVideoCaptureDriver {
+    public:
+        sip_core::SyntheticVideoCaptureDriver inner;
+        std::atomic<int> start_count{0};
+        std::atomic<int> stop_count{0};
+        std::atomic<int> frame_count{0};
+
+        int start(int width, int height, int fps) override {
+            start_count++;
+            return inner.start(width, height, fps);
+        }
+        void stop() override {
+            stop_count++;
+            inner.stop();
+        }
+        void set_frame_handler(sip_core::FrameHandler handler) override {
+            inner.set_frame_handler([this, handler](const sip_core::VideoFrame &vf) {
+                frame_count++;
+                if (handler) handler(vf);
+            });
+        }
+        void switch_camera() override { inner.switch_camera(); }
+        void set_camera(int position) override { inner.set_camera(position); }
+        void set_enabled(bool enabled) override { inner.set_enabled(enabled); }
+        bool is_enabled() const override { return inner.is_enabled(); }
+    };
+
+    auto spy_driver = std::make_shared<SpyCaptureDriver>();
     auto client = std::make_shared<sip::Client>("1001", "127.0.0.1");
-    client->set_video_capture_driver(synthetic_driver);
-    client->use_synthetic_video_capture();
+    client->set_video_capture_driver(spy_driver);
     rc = client->start();
     TEST_ASSERT(rc == 0, "client->start() failed");
+
+    rc = client->start_local_preview();
+    TEST_ASSERT(rc == 0, "client->start_local_preview() failed");
+    TEST_ASSERT(client->is_local_preview_active(), "Local preview should be active");
+    TEST_ASSERT(spy_driver->start_count.load() == 1, "Custom capture driver start() was not invoked by sip_core");
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(120));
+    TEST_ASSERT(spy_driver->frame_count.load() >= 1, "Custom capture driver did not deliver frames to sip_core");
+
+    rc = client->stop_local_preview();
+    TEST_ASSERT(rc == 0, "client->stop_local_preview() failed");
+    TEST_ASSERT(!client->is_local_preview_active(), "Local preview should not be active after stop");
+    TEST_ASSERT(spy_driver->stop_count.load() == 1, "Custom capture driver stop() was not invoked by sip_core");
+
     client->stop();
     std::printf("PASS: Client video driver wiring verified\n");
+
+    // Test 6: Given a started client that is the only owner of capture driver A,
+    // when the app replaces A with driver B,
+    // then the engine does not call A after the client has released it.
+    std::printf("--- Test 6: Replacing the Client Capture Driver ---\n");
+    class ReleaseTrackingDriver : public sip_core::IVideoCaptureDriver {
+    public:
+        std::atomic<bool> released{false};
+        std::atomic<int> calls_after_release{0};
+
+        void note_call() {
+            if (released.load()) calls_after_release++;
+        }
+        int start(int, int, int) override { note_call(); return 0; }
+        void stop() override { note_call(); }
+        void set_frame_handler(sip_core::FrameHandler) override { note_call(); }
+        void switch_camera() override { note_call(); }
+        void set_camera(int) override { note_call(); }
+        void set_enabled(bool) override { note_call(); }
+        bool is_enabled() const override { return true; }
+    };
+
+    // The deleter only marks driver A as released and keeps its memory, so a
+    // late call is counted instead of touching freed memory.
+    auto *driver_a = new ReleaseTrackingDriver();
+    {
+        auto replace_client = std::make_shared<sip::Client>("1001", "127.0.0.1");
+        rc = replace_client->start();
+        TEST_ASSERT(rc == 0, "replace_client->start() failed");
+
+        replace_client->set_video_capture_driver(std::shared_ptr<sip_core::IVideoCaptureDriver>(
+            driver_a, [](sip_core::IVideoCaptureDriver *d) {
+                static_cast<ReleaseTrackingDriver *>(d)->released.store(true);
+            }));
+        replace_client->set_video_capture_driver(std::make_shared<sip_core::SyntheticVideoCaptureDriver>());
+
+        TEST_ASSERT(driver_a->released.load(), "Client should release the replaced capture driver");
+        TEST_ASSERT(driver_a->calls_after_release.load() == 0,
+                    "Engine called the replaced capture driver after the client released it");
+        replace_client->stop();
+    }
+    delete driver_a;
+    std::printf("PASS: Replaced capture driver is not called after release\n");
 
     std::printf("=================================================================\n");
     std::printf("ALL VIDEO CAPTURE DRIVER TESTS PASSED\n");

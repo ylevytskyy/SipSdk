@@ -60,6 +60,11 @@
     std::atomic<bool> _enabled;
     std::atomic<bool> _syntheticMode;
     std::recursive_mutex _driverMutex;
+    // Held while a frame is handed to _frameHandler, and while _frameHandler
+    // changes. -stop takes it after the state change, so it returns only once
+    // an in-flight frame has finished. Lock order: _driverMutex, then
+    // _deliveryMutex. A frame handler must not call back into this driver.
+    std::recursive_mutex _deliveryMutex;
     uint32_t _syntheticTick;
 
     AVCaptureSession *_session;
@@ -70,6 +75,7 @@
 - (instancetype)init;
 - (int)startWithWidth:(int)width height:(int)height fps:(int)fps;
 - (void)stop;
+- (void)setFrameHandler:(void (*)(const sip_video_frame_t *frame, void *arg))handler arg:(void *)arg;
 - (void)setSyntheticMode:(BOOL)synthetic;
 - (void)setCameraDeviceId:(NSString *)deviceId;
 - (NSArray<AVCaptureDevice *> *)availableDevices;
@@ -160,7 +166,7 @@
     __weak SipMacCameraDriver *weakSelf = self;
     dispatch_source_set_event_handler(_syntheticTimer, ^{
         SipMacCameraDriver *strongSelf = weakSelf;
-        if (!strongSelf || !strongSelf->_running.load() || !strongSelf->_enabled.load() || !strongSelf->_frameHandler) {
+        if (!strongSelf || !strongSelf->_running.load() || !strongSelf->_enabled.load()) {
             return;
         }
 
@@ -223,7 +229,7 @@
         frame.v_stride = uv_w;
         frame.timestamp_ns = (uint64_t)tick * intervalNs;
 
-        strongSelf->_frameHandler(&frame, strongSelf->_frameHandlerArg);
+        [strongSelf deliverFrame:&frame];
     });
 
     dispatch_resume(_syntheticTimer);
@@ -309,6 +315,31 @@
         [_session stopRunning];
         _session = nil;
     }
+
+    // Frames check _running under _deliveryMutex, so none start after this.
+    [self waitForInFlightDelivery];
+}
+
+- (void)setFrameHandler:(void (*)(const sip_video_frame_t *frame, void *arg))handler arg:(void *)arg
+{
+    // Waits for an in-flight frame before the handler changes.
+    std::lock_guard<std::recursive_mutex> lock(_deliveryMutex);
+    _frameHandler = handler;
+    _frameHandlerArg = arg;
+}
+
+// Hands a frame to the frame handler unless the driver was stopped or
+// disabled, or the handler was cleared, meanwhile.
+- (void)deliverFrame:(const sip_video_frame_t *)frame
+{
+    std::lock_guard<std::recursive_mutex> lock(_deliveryMutex);
+    if (!_running.load() || !_enabled.load() || !_frameHandler) return;
+    _frameHandler(frame, _frameHandlerArg);
+}
+
+- (void)waitForInFlightDelivery
+{
+    std::lock_guard<std::recursive_mutex> lock(_deliveryMutex);
 }
 
 - (void)captureOutput:(AVCaptureOutput *)output
@@ -317,7 +348,7 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
 {
     (void)output;
     (void)connection;
-    if (!_running.load() || !_enabled.load() || !_frameHandler) {
+    if (!_running.load() || !_enabled.load()) {
         return;
     }
 
@@ -368,7 +399,7 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
         }
         frame.timestamp_ns = ts_ns;
 
-        _frameHandler(&frame, _frameHandlerArg);
+        [self deliverFrame:&frame];
     }
 
     CVPixelBufferUnlockBaseAddress(imageBuffer, kCVPixelBufferLock_ReadOnly);
@@ -395,10 +426,7 @@ static void camera_driver_stop(void *user_data)
 static void camera_driver_set_frame_handler(void *user_data, void (*handler)(const sip_video_frame_t *, void *), void *arg)
 {
     auto *driver = (__bridge SipMacCameraDriver *)user_data;
-    if (driver) {
-        driver->_frameHandler = handler;
-        driver->_frameHandlerArg = arg;
-    }
+    if (driver) [driver setFrameHandler:handler arg:arg];
 }
 
 static void camera_driver_switch_camera(void *user_data) { (void)user_data; }
@@ -1034,6 +1062,9 @@ static bool set_default_audio_device_by_name(NSString *targetName, bool is_input
         if (pair.second) {
             [pair.second invalidate];
         }
+        if (pair.first) {
+            sip_call_destroy(pair.first);
+        }
     }
     for (auto &pair : accounts) {
         if (pair.second) {
@@ -1585,8 +1616,20 @@ static bool set_default_audio_device_by_name(NSString *targetName, bool is_input
 
 - (void)removeCall:(sip_call_t *)handle
 {
-    std::lock_guard<std::mutex> lock(_mutex);
-    _activeCalls.erase(handle);
+    if (!handle) return;
+    SipMacCall *removed = nil;
+    {
+        std::lock_guard<std::mutex> lock(_mutex);
+        auto it = _activeCalls.find(handle);
+        if (it != _activeCalls.end()) {
+            removed = it->second;
+            _activeCalls.erase(it);
+        }
+    }
+    if (removed) {
+        [removed invalidate];
+    }
+    sip_call_destroy(handle);
 }
 
 @end

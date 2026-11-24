@@ -56,6 +56,65 @@ final class SipSdkTests: XCTestCase {
         XCTAssertEqual(fullAccount.outboundProxy, "sip:proxy.provider.com:5060")
         XCTAssertEqual(fullAccount.mediaNat, "ice")
         XCTAssertEqual(fullAccount.regInterval, 1800)
+
+        fullAccount.withCAccountConfig { cConfig in
+            XCTAssertEqual(String(cString: cConfig.user), "alice")
+            XCTAssertEqual(String(cString: cConfig.domain), "sip.provider.com")
+            XCTAssertEqual(String(cString: cConfig.pwd), "secret")
+            XCTAssertEqual(String(cString: cConfig.transport), "udp")
+            XCTAssertEqual(cConfig.port, 5060)
+            XCTAssertEqual(String(cString: cConfig.display_name), "Alice")
+            XCTAssertEqual(String(cString: cConfig.outbound_proxy), "sip:proxy.provider.com:5060")
+            XCTAssertEqual(String(cString: cConfig.stun_server), "stun:stun.l.google.com:19302")
+            XCTAssertNil(cConfig.stun_user)
+            XCTAssertNil(cConfig.stun_pass)
+            XCTAssertEqual(String(cString: cConfig.media_nat), "ice")
+            XCTAssertEqual(cConfig.reg_interval, 1800)
+        }
+    }
+
+    @MainActor
+    func testRegisterWithOptionalAccountFieldsOverLoopback() async throws {
+        let peer = LoopbackPeer(port: 15091)
+        peer.start()
+        defer { peer.stop() }
+
+        var boundWait = 0
+        while !peer.isBound && boundWait < 20 {
+            try await Task.sleep(nanoseconds: 50_000_000)
+            boundWait += 1
+        }
+        XCTAssertTrue(peer.isBound)
+
+        let client = SipClient()
+        try await client.start()
+
+        let account = SipAccount(
+            username: "alice",
+            domain: "sip.example.invalid",
+            transport: .udp,
+            port: 15091,
+            displayName: "Alice Wonderland",
+            outboundProxy: "sip:127.0.0.1:15091",
+            stunServer: "stun:127.0.0.1:3478",
+            stunUser: "stunuser",
+            stunPassword: "stunpass",
+            mediaNat: "stun",
+            regInterval: 600
+        )
+
+        try await client.register(account)
+
+        var waitReg = 0
+        while peer.lastRegisterRequest.isEmpty && waitReg < 30 {
+            try await Task.sleep(nanoseconds: 100_000_000)
+            waitReg += 1
+        }
+
+        XCTAssertTrue(peer.lastRegisterRequest.contains("REGISTER sip:sip.example.invalid:15091 SIP/2.0"))
+        XCTAssertTrue(peer.lastRegisterRequest.contains("\"Alice Wonderland\""))
+
+        await client.stop()
     }
 
     @MainActor
@@ -120,6 +179,488 @@ final class SipSdkTests: XCTestCase {
 
         captureDriver.stop()
         XCTAssertFalse(captureDriver.isRunning)
+
+        // stop() waits for the in-flight frame, so no frame arrives after it returns.
+        let countAtStop = ctx.deliveredCount
+        Thread.sleep(forTimeInterval: 0.2)
+        XCTAssertEqual(ctx.deliveredCount, countAtStop)
+    }
+
+    // MARK: - Callback lifetimes (RES-4)
+
+    /// Blocks the main thread so events the core worker posts stay queued on the main queue.
+    private func blockMainQueue(seconds: TimeInterval) {
+        Thread.sleep(forTimeInterval: seconds)
+    }
+
+    @MainActor
+    private func startRegisteredClient(peer: LoopbackPeer) async throws -> SipClient {
+        peer.start()
+        var boundWait = 0
+        while !peer.isBound && boundWait < 20 {
+            try await Task.sleep(nanoseconds: 50_000_000)
+            boundWait += 1
+        }
+        XCTAssertTrue(peer.isBound)
+
+        let client = SipClient()
+        try await client.start()
+        try await client.register(SipAccount(username: "bob", domain: "127.0.0.1", transport: .udp, port: Int(peer.port)))
+
+        var regWait = 0
+        while !client.registrationState.isRegistered && regWait < 50 {
+            try await Task.sleep(nanoseconds: 100_000_000)
+            regWait += 1
+        }
+        XCTAssertTrue(client.registrationState.isRegistered)
+        return client
+    }
+
+    @MainActor
+    func testIncomingCallIsTrackedWhileRunning() async throws {
+        let peer = LoopbackPeer(port: 15093)
+        defer { peer.stop() }
+        let client = try await startRegisteredClient(peer: peer)
+
+        peer.sendInvite()
+
+        var wait = 0
+        while client.calls.isEmpty && wait < 50 {
+            try await Task.sleep(nanoseconds: 100_000_000)
+            wait += 1
+        }
+        XCTAssertEqual(client.calls.count, 1)
+        XCTAssertEqual(client.calls.first?.state, .incoming)
+        XCTAssertEqual(client.calls.first?.isOutgoing, false)
+
+        await client.stop()
+    }
+
+    @MainActor
+    func testOutgoingCallStateUpdatesTheSameSipCall() async throws {
+        let peer = LoopbackPeer(port: 15094)
+        defer { peer.stop() }
+        let client = try await startRegisteredClient(peer: peer)
+
+        let call = try await client.makeCall(to: "sip:echo@127.0.0.1:15094", withVideo: true)
+
+        var wait = 0
+        while call.state != .established && !call.state.isClosed && wait < 50 {
+            try await Task.sleep(nanoseconds: 100_000_000)
+            wait += 1
+        }
+        XCTAssertEqual(call.state, .established)
+        XCTAssertEqual(client.calls.count, 1)
+        XCTAssertTrue(client.calls.first === call)
+
+        await call.hangup()
+        wait = 0
+        while !call.state.isClosed && wait < 50 {
+            try await Task.sleep(nanoseconds: 100_000_000)
+            wait += 1
+        }
+        XCTAssertTrue(call.state.isClosed)
+        XCTAssertTrue(client.calls.isEmpty)
+
+        await client.stop()
+    }
+
+    // Given two overlapping outgoing calls,
+    // when both calls end,
+    // then the shared audio manager holds no more active calls than before the calls.
+    @MainActor
+    func testAudioSessionIsReleasedAfterOverlappingCallsEnd() async throws {
+        let peer = LoopbackPeer(port: 15096)
+        defer { peer.stop() }
+        let client = try await startRegisteredClient(peer: peer)
+        let audio = IosAudioManager.shared
+        let countBefore = audio.activeCallCount
+
+        // The loopback peer always answers with audio and video, so offer both.
+        let first = try await client.makeCall(to: "sip:echo@127.0.0.1:15096", withVideo: true)
+        let second = try await client.makeCall(to: "sip:echo2@127.0.0.1:15096", withVideo: true)
+
+        var wait = 0
+        while (first.state != .established || second.state != .established) && wait < 50 {
+            try await Task.sleep(nanoseconds: 100_000_000)
+            wait += 1
+        }
+        XCTAssertEqual(first.state, .established)
+        XCTAssertEqual(second.state, .established)
+
+        await first.hangup()
+        await second.hangup()
+        wait = 0
+        while (!first.state.isClosed || !second.state.isClosed || audio.activeCallCount != countBefore) && wait < 50 {
+            try await Task.sleep(nanoseconds: 100_000_000)
+            wait += 1
+        }
+        XCTAssertTrue(first.state.isClosed)
+        XCTAssertTrue(second.state.isClosed)
+        XCTAssertEqual(audio.activeCallCount, countBefore, "audio session still counts a call after both calls ended")
+
+        await client.stop()
+    }
+
+    // MARK: - CallKit end reports (RES-9)
+
+    /// Starts a registered client whose CallKit calls go to a fake instead of the system.
+    @MainActor
+    private func startClientWithFakeCallKit(peer: LoopbackPeer) async throws -> (SipClient, FakeCallKitSystem) {
+        let client = try await startRegisteredClient(peer: peer)
+        let callKit = FakeCallKitSystem()
+        client.callKit.system = callKit
+        client.callKit.isEnabled = true
+        return (client, callKit)
+    }
+
+    /// Polls on the main actor until `condition` holds or about five seconds pass.
+    @MainActor
+    private func waitUntil(_ condition: () -> Bool) async throws {
+        var wait = 0
+        while !condition() && wait < 50 {
+            try await Task.sleep(nanoseconds: 100_000_000)
+            wait += 1
+        }
+    }
+
+    // Given an incoming call that was reported to CallKit,
+    // when the caller cancels it before the answer,
+    // then CallKit is told once that the call ended.
+    @MainActor
+    func testCallKitIsToldWhenCallerCancelsIncomingCall() async throws {
+        let peer = LoopbackPeer(port: 15097)
+        defer { peer.stop() }
+        let (client, callKit) = try await startClientWithFakeCallKit(peer: peer)
+
+        peer.sendInvite()
+        try await waitUntil { !callKit.reportedIncoming.isEmpty }
+        guard let call = client.calls.first else {
+            XCTFail("the incoming call never arrived")
+            await client.stop()
+            return
+        }
+        XCTAssertEqual(callKit.reportedIncoming, [call.id])
+
+        peer.sendCancel()
+        try await waitUntil { call.state.isClosed }
+        XCTAssertTrue(call.state.isClosed)
+        XCTAssertEqual(callKit.endedCalls, [.init(uuid: call.id, reason: .remoteEnded)])
+
+        await client.stop()
+    }
+
+    // Given an outgoing call placed with `makeCall`, which CallKit never saw,
+    // when the call ends,
+    // then CallKit is not told about it.
+    @MainActor
+    func testCallKitIsNotToldAboutCallItNeverSaw() async throws {
+        let peer = LoopbackPeer(port: 15098)
+        defer { peer.stop() }
+        let (client, callKit) = try await startClientWithFakeCallKit(peer: peer)
+
+        // The loopback peer always answers with audio and video, so offer both.
+        let call = try await client.makeCall(to: "sip:echo@127.0.0.1:15098", withVideo: true)
+        try await waitUntil { call.state == .established || call.state.isClosed }
+        XCTAssertEqual(call.state, .established)
+
+        await call.hangup()
+        try await waitUntil { call.state.isClosed }
+        XCTAssertTrue(call.state.isClosed)
+        XCTAssertEqual(callKit.endedCalls, [])
+
+        await client.stop()
+    }
+
+    // Given an incoming call that was reported to CallKit,
+    // when the user ends it from the CallKit UI,
+    // then CallKit is not told a second time that the call ended.
+    @MainActor
+    func testCallKitIsNotToldAgainWhenItEndedTheCall() async throws {
+        let peer = LoopbackPeer(port: 15099)
+        defer { peer.stop() }
+        let (client, callKit) = try await startClientWithFakeCallKit(peer: peer)
+
+        peer.sendInvite()
+        try await waitUntil { !callKit.reportedIncoming.isEmpty }
+        guard let call = client.calls.first else {
+            XCTFail("the incoming call never arrived")
+            await client.stop()
+            return
+        }
+
+        client.callKit.provider(client.callKit.provider, perform: CXEndCallAction(call: call.id))
+        try await waitUntil { call.state.isClosed }
+        XCTAssertTrue(call.state.isClosed)
+        XCTAssertEqual(callKit.endedCalls, [])
+
+        await client.stop()
+    }
+
+    // Given an outgoing call started through CallKit,
+    // when the app hangs it up directly instead of through CallKit,
+    // then CallKit is told that the call ended.
+    @MainActor
+    func testCallKitIsToldWhenAppHangsUpCallStartedThroughCallKit() async throws {
+        let peer = LoopbackPeer(port: 15100)
+        defer { peer.stop() }
+        let (client, callKit) = try await startClientWithFakeCallKit(peer: peer)
+
+        // The loopback peer always answers with audio and video, so offer both.
+        let call = try await client.callKit.startCall(to: "sip:echo@127.0.0.1:15100", withVideo: true)
+        try await waitUntil { call.state == .established || call.state.isClosed }
+        XCTAssertEqual(call.state, .established)
+
+        await call.hangup()
+        try await waitUntil { call.state.isClosed }
+        XCTAssertTrue(call.state.isClosed)
+        XCTAssertEqual(callKit.endedCalls.map(\.uuid), [call.id])
+
+        await client.stop()
+    }
+
+    // Given an incoming call that was reported to CallKit,
+    // when the app stops the client during the call,
+    // then CallKit is told once that the call ended, with reason failed.
+    @MainActor
+    func testCallKitIsToldWhenClientStopsDuringCall() async throws {
+        let peer = LoopbackPeer(port: 15102)
+        defer { peer.stop() }
+        let (client, callKit) = try await startClientWithFakeCallKit(peer: peer)
+
+        peer.sendInvite()
+        try await waitUntil { !callKit.reportedIncoming.isEmpty }
+        guard let call = client.calls.first else {
+            XCTFail("the incoming call never arrived")
+            await client.stop()
+            return
+        }
+
+        await client.stop()
+
+        XCTAssertEqual(callKit.endedCalls, [.init(uuid: call.id, reason: .failed)])
+    }
+
+    /// A coordinator whose CallKit calls go to a fake, with no SIP engine behind it.
+    @MainActor
+    private func makeCoordinatorWithFakeCallKit() -> (SipCallKitCoordinator, FakeCallKitSystem) {
+        let coordinator = SipCallKitCoordinator(localizedName: "TestCoordinator")
+        let callKit = FakeCallKitSystem()
+        coordinator.system = callKit
+        coordinator.isEnabled = true
+        return (coordinator, callKit)
+    }
+
+    @MainActor
+    private func makeIncomingCall(state: SipCallState = .incoming) -> SipCall {
+        SipCall(coreCall: nil, remoteUri: "sip:peer@127.0.0.1", isOutgoing: false, initialState: state)
+    }
+
+    // Given a call that CallKit knows about,
+    // when the call closes with a SIP or local error code,
+    // then CallKit gets the end reason for that code.
+    @MainActor
+    func testCallKitEndReasonFollowsCloseCode() async throws {
+        let (coordinator, callKit) = makeCoordinatorWithFakeCallKit()
+        let expected: [(code: Int, reason: CXCallEndedReason)] = [
+            (0, .remoteEnded),            // BYE or CANCEL: the core passes no status code
+            (200, .remoteEnded),
+            (486, .remoteEnded),          // Busy Here
+            (487, .remoteEnded),          // Request Terminated
+            (600, .remoteEnded),          // Busy Everywhere
+            (603, .remoteEnded),          // Decline
+            (408, .unanswered),           // Request Timeout
+            (480, .unanswered),           // Temporarily Unavailable
+            (404, .failed),               // Not Found
+            (503, .failed),               // Service Unavailable
+            (Int(EIO), .failed),          // local error from the core, not a SIP code
+        ]
+
+        for (code, reason) in expected {
+            let call = makeIncomingCall()
+            try await coordinator.reportIncomingCall(call)
+            coordinator.reportCallClosed(call, code: code)
+            XCTAssertEqual(callKit.endedCalls.last, .init(uuid: call.id, reason: reason), "close code \(code)")
+        }
+    }
+
+    // Given an incoming call that closed before its CallKit report ran,
+    // when the report runs,
+    // then CallKit is not shown the call, so no ringing UI is left behind.
+    @MainActor
+    func testClosedCallIsNotReportedToCallKitAsIncoming() async throws {
+        let (coordinator, callKit) = makeCoordinatorWithFakeCallKit()
+        let call = makeIncomingCall(state: .closed(code: 0, reason: "Connection reset by peer"))
+
+        try await coordinator.reportIncomingCall(call)
+
+        XCTAssertEqual(callKit.reportedIncoming, [])
+    }
+
+    // Given an incoming call whose CallKit report has not finished yet,
+    // when the call closes,
+    // then CallKit is still told that the call ended.
+    @MainActor
+    func testCallKitIsToldWhenCallClosesDuringIncomingReport() async throws {
+        let (coordinator, callKit) = makeCoordinatorWithFakeCallKit()
+        callKit.holdsCalls = true
+        let call = makeIncomingCall()
+
+        let report = Task { try await coordinator.reportIncomingCall(call) }
+        try await waitUntil { !callKit.reportedIncoming.isEmpty }
+        coordinator.reportCallClosed(call, code: 0)
+        callKit.finishHeldCalls()
+        try await report.value
+
+        XCTAssertEqual(callKit.endedCalls.map(\.uuid), [call.id])
+    }
+
+    // Given an outgoing call whose CallKit start request has not finished yet,
+    // when the app hangs the call up,
+    // then CallKit is still told that the call ended.
+    @MainActor
+    func testCallKitIsToldWhenCallClosesDuringStartRequest() async throws {
+        let peer = LoopbackPeer(port: 15101)
+        defer { peer.stop() }
+        let (client, callKit) = try await startClientWithFakeCallKit(peer: peer)
+        callKit.holdsCalls = true
+
+        // The loopback peer always answers with audio and video, so offer both.
+        let start = Task { try await client.callKit.startCall(to: "sip:echo@127.0.0.1:15101", withVideo: true) }
+        try await waitUntil { !callKit.requestedActions.isEmpty }
+        guard let call = client.calls.first else {
+            XCTFail("the outgoing call was never created")
+            callKit.finishHeldCalls()
+            await client.stop()
+            return
+        }
+
+        await call.hangup()
+        try await waitUntil { call.state.isClosed }
+        callKit.finishHeldCalls()
+        _ = try await start.value
+
+        XCTAssertTrue(call.state.isClosed)
+        XCTAssertEqual(callKit.endedCalls.map(\.uuid), [call.id])
+
+        await client.stop()
+    }
+
+    @MainActor
+    func testEventsQueuedBeforeStopAreDroppedAfterStop() async throws {
+        let peer = LoopbackPeer(port: 15092)
+        defer { peer.stop() }
+        let client = try await startRegisteredClient(peer: peer)
+
+        peer.sendInvite()
+        blockMainQueue(seconds: 1.0)
+        // The client answered the INVITE, so its incoming call event is queued.
+        XCTAssertTrue(peer.lastRequest.hasPrefix("SIP/2.0 1"), "INVITE not handled: \(peer.lastRequest.prefix(40))")
+
+        await client.stop()
+        try await Task.sleep(nanoseconds: 300_000_000)
+
+        XCTAssertTrue(client.calls.isEmpty)
+        XCTAssertEqual(client.registrationState, .unregistered)
+    }
+
+    @MainActor
+    func testEventsQueuedBeforeClientIsFreedAreDropped() async throws {
+        let peer = LoopbackPeer(port: 15095)
+        defer { peer.stop() }
+        var client: SipClient? = try await startRegisteredClient(peer: peer)
+        weak var weakClient = client
+        _ = weakClient
+
+        peer.sendInvite()
+        blockMainQueue(seconds: 1.0)
+        XCTAssertTrue(peer.lastRequest.hasPrefix("SIP/2.0 1"), "INVITE not handled: \(peer.lastRequest.prefix(40))")
+
+        // Free the client without stop(); deinit destroys the core client.
+        client = nil
+        XCTAssertNil(weakClient)
+
+        // Run the queued events. Under --asan a freed-client access fails here.
+        try await Task.sleep(nanoseconds: 300_000_000)
+    }
+
+    func testVideoCaptureDriverStopWaitsForInFlightFrame() {
+        let captureDriver = IosVideoCaptureDriver()
+
+        final class BlockingContext {
+            let entered = DispatchSemaphore(value: 0)
+            let release = DispatchSemaphore(value: 0)
+            let countLock = NSLock()
+            var calls = 0
+        }
+        let ctx = BlockingContext()
+
+        captureDriver.setFrameHandler({ _, arg in
+            guard let arg = arg else { return }
+            let ctx = Unmanaged<BlockingContext>.fromOpaque(arg).takeUnretainedValue()
+            ctx.countLock.lock()
+            ctx.calls += 1
+            let isFirst = ctx.calls == 1
+            ctx.countLock.unlock()
+            if isFirst {
+                ctx.entered.signal()
+                ctx.release.wait()
+            }
+        }, arg: Unmanaged.passUnretained(ctx).toOpaque())
+
+        XCTAssertEqual(captureDriver.start(width: 64, height: 48, fps: 30), 0)
+        XCTAssertEqual(ctx.entered.wait(timeout: .now() + 2), .success)
+
+        let stopped = DispatchSemaphore(value: 0)
+        DispatchQueue.global().async {
+            captureDriver.stop()
+            stopped.signal()
+        }
+        let stoppedEarly = stopped.wait(timeout: .now() + 0.3) == .success
+        XCTAssertFalse(stoppedEarly, "stop() returned while a frame callback was still running")
+        ctx.release.signal()
+        if !stoppedEarly {
+            XCTAssertEqual(stopped.wait(timeout: .now() + 2), .success)
+        }
+
+        ctx.countLock.lock()
+        let callsAtStop = ctx.calls
+        ctx.countLock.unlock()
+        Thread.sleep(forTimeInterval: 0.2)
+        ctx.countLock.lock()
+        XCTAssertEqual(ctx.calls, callsAtStop, "frame callback ran after stop() returned")
+        ctx.countLock.unlock()
+
+        withExtendedLifetime(ctx) {}
+    }
+
+    func testVideoCaptureDriverDeliversNoFramesWhileDisabled() {
+        let captureDriver = IosVideoCaptureDriver()
+
+        final class CountingContext {
+            let countLock = NSLock()
+            var calls = 0
+        }
+        let ctx = CountingContext()
+
+        captureDriver.setFrameHandler({ _, arg in
+            guard let arg = arg else { return }
+            let ctx = Unmanaged<CountingContext>.fromOpaque(arg).takeUnretainedValue()
+            ctx.countLock.lock()
+            ctx.calls += 1
+            ctx.countLock.unlock()
+        }, arg: Unmanaged.passUnretained(ctx).toOpaque())
+
+        captureDriver.setEnabled(false)
+        XCTAssertEqual(captureDriver.start(width: 64, height: 48, fps: 30), 0)
+        Thread.sleep(forTimeInterval: 0.3)
+        captureDriver.stop()
+
+        ctx.countLock.lock()
+        XCTAssertEqual(ctx.calls, 0, "frames reached the handler while capture was disabled")
+        ctx.countLock.unlock()
+
+        withExtendedLifetime(ctx) {}
     }
 
     @MainActor

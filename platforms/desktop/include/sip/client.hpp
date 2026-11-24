@@ -87,6 +87,9 @@ public:
 
     void set_video_capture_driver(std::shared_ptr<sip_core::IVideoCaptureDriver> driver);
     void use_synthetic_video_capture();
+    int start_local_preview();
+    int stop_local_preview();
+    bool is_local_preview_active() const;
 
     static std::string get_version();
 

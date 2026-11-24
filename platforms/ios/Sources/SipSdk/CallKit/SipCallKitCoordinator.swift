@@ -7,13 +7,60 @@ import Foundation
 import CallKit
 import AVFoundation
 
+/// The CallKit calls the coordinator makes. Tests swap in a fake, because the
+/// real provider and call controller do not run under XCTest.
+@MainActor
+protocol CallKitSystem: AnyObject {
+    func reportNewIncomingCall(with uuid: UUID, update: CXCallUpdate) async throws
+    func reportCall(with uuid: UUID, endedAt: Date?, reason: CXCallEndedReason)
+    func request(_ transaction: CXTransaction) async throws
+}
+
+/// Sends the coordinator's calls to the real CallKit provider and call controller.
+@MainActor
+final class SystemCallKit: CallKitSystem {
+    private let provider: CXProvider
+    private let callController: CXCallController
+
+    init(provider: CXProvider, callController: CXCallController) {
+        self.provider = provider
+        self.callController = callController
+    }
+
+    func reportNewIncomingCall(with uuid: UUID, update: CXCallUpdate) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            provider.reportNewIncomingCall(with: uuid, update: update) { error in
+                if let error = error {
+                    continuation.resume(throwing: error)
+                } else {
+                    continuation.resume()
+                }
+            }
+        }
+    }
+
+    func reportCall(with uuid: UUID, endedAt: Date?, reason: CXCallEndedReason) {
+        provider.reportCall(with: uuid, endedAt: endedAt, reason: reason)
+    }
+
+    func request(_ transaction: CXTransaction) async throws {
+        try await callController.request(transaction)
+    }
+}
+
 /// Turnkey coordinator bridging iOS system telephony (CallKit) with `SipClient`.
 @MainActor
 public final class SipCallKitCoordinator: NSObject, CXProviderDelegate {
     public let provider: CXProvider
     public let callController: CXCallController
     public weak var client: SipClient?
-    private var reportedCallUUIDs: Set<UUID> = []
+    public var isEnabled: Bool = (NSClassFromString("XCTestCase") == nil)
+
+    /// Where CallKit calls go. Tests replace it with a fake.
+    var system: CallKitSystem
+
+    /// Calls that CallKit knows about and that have not ended yet.
+    private var callKitCallIDs: Set<UUID> = []
 
     public init(localizedName: String = "SipSdk", client: SipClient? = nil, maxCalls: Int = 4) {
         _ = localizedName
@@ -22,6 +69,7 @@ public final class SipCallKitCoordinator: NSObject, CXProviderDelegate {
 
         let config = Self.makeConfiguration(maxCalls: maxCalls)
         self.provider = CXProvider(configuration: config)
+        self.system = SystemCallKit(provider: provider, callController: callController)
         super.init()
         self.provider.setDelegate(self, queue: nil)
     }
@@ -48,6 +96,8 @@ public final class SipCallKitCoordinator: NSObject, CXProviderDelegate {
 
     /// Reports incoming SIP call to CallKit system UI (lock screen banner, full-screen incoming alert).
     public func reportIncomingCall(_ call: SipCall) async throws {
+        // A call that closed before this report ran would ring in CallKit forever.
+        guard isEnabled, !call.state.isClosed else { return }
         let update = CXCallUpdate()
         let handle = CXHandle(type: .generic, value: call.remoteUri)
         update.remoteHandle = handle
@@ -58,18 +108,10 @@ public final class SipCallKitCoordinator: NSObject, CXProviderDelegate {
         update.supportsUngrouping = true
         update.supportsDTMF = true
 
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            provider.reportNewIncomingCall(with: call.id, update: update) { [weak self] error in
-                if let error = error {
-                    continuation.resume(throwing: error)
-                } else {
-                    Task { @MainActor [weak self] in
-                        self?.reportedCallUUIDs.insert(call.id)
-                    }
-                    continuation.resume()
-                }
-            }
-        }
+        // Track the call before the report suspends, so a close that arrives
+        // during the report still ends the call in CallKit.
+        callKitCallIDs.insert(call.id)
+        try await system.reportNewIncomingCall(with: call.id, update: update)
     }
 
     /// Requests CallKit to start an outgoing call.
@@ -84,35 +126,62 @@ public final class SipCallKitCoordinator: NSObject, CXProviderDelegate {
         startAction.isVideo = withVideo
 
         let transaction = CXTransaction(action: startAction)
-        try await callController.request(transaction)
-        reportedCallUUIDs.insert(call.id)
+        // Track the call before the request suspends, so a close that arrives
+        // during the request still ends the call in CallKit.
+        callKitCallIDs.insert(call.id)
+        try await system.request(transaction)
         return call
     }
 
     /// Records a call UUID already reported to CallKit (for example, by a VoIP push handler).
     public func markCallReported(_ uuid: UUID) {
-        reportedCallUUIDs.insert(uuid)
+        callKitCallIDs.insert(uuid)
     }
 
     /// Reports call termination to CallKit when a previously reported CallKit session closes.
     public func reportCallEnded(uuid: UUID, reason: CXCallEndedReason = .remoteEnded) {
-        guard reportedCallUUIDs.remove(uuid) != nil else { return }
-        provider.reportCall(with: uuid, endedAt: Date(), reason: reason)
+        guard callKitCallIDs.remove(uuid) != nil else { return }
+        system.reportCall(with: uuid, endedAt: Date(), reason: reason)
     }
 
     /// Ends CallKit call session.
     public func endCall(_ call: SipCall) async throws {
         let endAction = CXEndCallAction(call: call.id)
         let transaction = CXTransaction(action: endAction)
-        try await callController.request(transaction)
+        try await system.request(transaction)
+    }
+
+    /// Tells CallKit that a SIP call closed, so the system call UI does not stay up.
+    func reportCallClosed(_ call: SipCall, code: Int) {
+        reportCallEnded(call, reason: Self.endedReason(forCloseCode: code))
+    }
+
+    /// Tells CallKit that a call it knows about ended. Calls CallKit never saw,
+    /// or already ended itself, are skipped.
+    func reportCallEnded(_ call: SipCall, reason: CXCallEndedReason) {
+        guard callKitCallIDs.remove(call.id) != nil else { return }
+        system.reportCall(with: call.id, endedAt: Date(), reason: reason)
+    }
+
+    /// Maps the code a call closed with to a CallKit end reason. The core passes
+    /// a SIP status code, 0 for a BYE or CANCEL, or a local errno value below 100.
+    static func endedReason(forCloseCode code: Int) -> CXCallEndedReason {
+        switch code {
+        case 408, 480:
+            return .unanswered
+        case 0, 200..<300, 486, 487, 600, 603:
+            return .remoteEnded
+        default:
+            return .failed
+        }
     }
 
     // MARK: - CXProviderDelegate
 
     nonisolated public func providerDidReset(_ provider: CXProvider) {
         Task { @MainActor in
-            reportedCallUUIDs.removeAll()
-            guard let client = self.client else { return }
+            callKitCallIDs.removeAll()
+            guard self.isEnabled, let client = self.client else { return }
             for call in client.calls {
                 await call.hangup(statusCode: 487, reason: "CallKit Reset")
             }
@@ -142,6 +211,8 @@ public final class SipCallKitCoordinator: NSObject, CXProviderDelegate {
 
     nonisolated public func provider(_ provider: CXProvider, perform action: CXEndCallAction) {
         Task { @MainActor in
+            // CallKit is ending this call itself, so it must not be told again on close.
+            self.callKitCallIDs.remove(action.callUUID)
             guard let client = self.client,
                   let call = client.calls.first(where: { $0.id == action.callUUID }) else {
                 action.fulfill()

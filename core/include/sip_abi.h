@@ -71,10 +71,17 @@ typedef struct sip_callbacks_t {
     void (*on_call_media)(sip_call_t *call, int width, int height, bool on_hold, bool is_muted, void *user_data);
     void (*on_dtmf_digit)(sip_call_t *call, const char *digit, void *user_data);
 
-    /** Optional hook to prepare audio hardware session (e.g. AVAudioSession / AudioManager). */
+    /**
+     * Optional hook to prepare audio hardware session (e.g. AVAudioSession / AudioManager).
+     * Called once when the first call needs audio, not once per call; matched by one
+     * release_audio_session. Runs under an engine lock: must not call back into the SDK.
+     */
     bool (*prepare_audio_session)(sip_client_t *client, void *user_data);
 
-    /** Optional hook to release audio hardware session when all calls finish. */
+    /**
+     * Optional hook to release audio hardware session when all calls finish.
+     * Runs under an engine lock: must not call back into the SDK.
+     */
     void (*release_audio_session)(sip_client_t *client, void *user_data);
 
     /** Real-time call quality telemetry metrics (dispatched periodically, e.g. every 2 seconds). */
@@ -167,6 +174,7 @@ SIP_ABI_EXPORT int sip_client_unregister(sip_client_t *client);
 
 /**
  * Checks whether the client currently has a registered SIP user agent.
+ * Safe to call from any thread: it reads the state from the last registration event.
  */
 SIP_ABI_EXPORT bool sip_client_is_registered(const sip_client_t *client);
 
@@ -314,12 +322,13 @@ SIP_ABI_EXPORT bool sip_call_is_in_conference(const sip_call_t *call);
 SIP_ABI_EXPORT const char *sip_call_get_id(const sip_call_t *call);
 
 /**
- * Returns the remote peer SIP URI string.
+ * Returns the remote peer SIP URI string. Pointer valid until call session destroyed.
  */
 SIP_ABI_EXPORT const char *sip_call_get_remote_uri(const sip_call_t *call);
 
 /**
  * Returns the remote peer display name string (if present in From/To header).
+ * Pointer valid until call session destroyed.
  */
 SIP_ABI_EXPORT const char *sip_call_get_peer_display_name(const sip_call_t *call);
 
@@ -425,11 +434,15 @@ typedef struct sip_video_codec_driver_t {
 
 /**
  * Configures the active audio driver and devices (e.g. "pulse", "alsa", "audiounit").
+ * A null argument keeps the current value; an empty module name keeps the current module.
+ * While the client runs, the change is applied on the SIP thread, after work already queued there.
+ * Do not call it while sip_client_init or sip_client_destroy runs on another thread.
  */
 SIP_ABI_EXPORT int sip_client_set_audio_driver(sip_client_t *client, const char *src_mod, const char *src_dev, const char *play_mod, const char *play_dev);
 
 /**
- * Retrieves the currently active audio driver names.
+ * Retrieves the audio driver names: the ones configured at init, or the last ones set
+ * with sip_client_set_audio_driver, even if the SIP thread has not applied them yet.
  */
 SIP_ABI_EXPORT int sip_client_get_audio_driver(const sip_client_t *client, char *src_mod, size_t src_mod_sz, char *play_mod, size_t play_mod_sz);
 

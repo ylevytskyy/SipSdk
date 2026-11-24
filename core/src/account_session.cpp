@@ -25,7 +25,9 @@ sip_account_t::~sip_account_t()
 bool sip_account_t::is_registered() const
 {
     std::lock_guard<std::mutex> lock(m_mutex);
-    return m_registered.load() && !m_removed.load() && m_raw_ua != nullptr && ua_isregistered(m_raw_ua);
+    // Do not call ua_isregistered(m_raw_ua) here: the SIP thread may destroy the UA
+    // while a caller thread runs this. m_registered follows the registration events.
+    return m_registered.load() && !m_removed.load() && m_raw_ua != nullptr;
 }
 
 void sip_account_t::set_reg_state(sip_reg_state_t state)

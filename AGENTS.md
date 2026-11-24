@@ -51,6 +51,8 @@ audio, real-time call telemetry, and blind/attended `REFER` call transfer.
   `bash scripts/verify-desktop-sdk.sh`
 - Build and verify Native macOS GUI Sample (SwiftUI app `SipSdkMac.xcodeproj`, live launch & registration against Asterisk, window screenshot):
   `bash scripts/verify-macos-gui.sh`
+- Run macOS sample camera driver unit tests only (synthetic camera, no PBX; also step 1b of `verify-macos-gui.sh`):
+  `bash scripts/verify-macos-camera-driver.sh`
 - Compile Baresip v4.12.0 and libre v4.12.0 static prebuilts for desktop targets:
   `bash scripts/build-baresip-desktop.sh`
 - Build and verify Android Platform SDK (`sipsdk.aar`), multi-arch slices (`arm64-v8a`, `armeabi-v7a`, `x86_64`), symbol export audit, registration & audio calling test suites against Asterisk PBX:
@@ -61,6 +63,8 @@ audio, real-time call telemetry, and blind/attended `REFER` call transfer.
   `bash scripts/verify-spm-video-sdk.sh`
 - Run automated iOS Simulator test suite (engine lifecycle, VideoToolbox H.264 RTP round-trip, `SipVideoView`, `SipClient`/`SipCall` controls, `SipCallKitCoordinator`, `SipPushRegistry`, Asterisk PBX registration & video echo call):
   `bash scripts/verify-ios-video-tests.sh`
+- Run the same iOS Simulator test suite under AddressSanitizer (build in `.build-asan`; `--self-test` proves a planted overflow is caught):
+  `bash scripts/verify-ios-asan-tests.sh`
 - Build `SipPhone.xcodeproj` for both `arm64` iOS Simulator and `arm64` generic iOS device:
   `bash scripts/verify-xcode-app-build.sh`
 - Launch `SipPhone.app` on a booted iOS Simulator and verify Keypad / Home screen with screenshots:

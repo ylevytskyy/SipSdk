@@ -195,7 +195,17 @@ private:
     std::atomic<bool> m_stopping{false};
     std::atomic<bool> m_mic_muted{false};
     std::atomic<bool> m_audio_session_active{false};
+    // Serializes prepare/release of the platform audio session, so the platform
+    // gets one prepare per active period, matched by one release.
+    std::mutex m_audio_session_mutex;
     std::atomic<int> m_max_calls{4};
+
+    // Audio driver names that get_audio_driver reports: the ones configured at
+    // start, then the last ones set. Baresip's config is only changed on the
+    // SIP thread, so get_audio_driver reads these instead.
+    mutable std::mutex m_audio_driver_mutex;
+    std::string m_audio_src_mod;
+    std::string m_audio_play_mod;
 
     struct mqueue *m_mq{nullptr};
     struct tls *m_wss_tls{nullptr};
