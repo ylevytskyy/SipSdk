@@ -26,9 +26,14 @@ xcrun clang++ \
   "$ROOT_DIR/platforms/macos/sample/Tests/test_camera_driver.mm" \
   "$BRIDGE_DIR/SipMacCall.mm" \
   "$BRIDGE_DIR/SipMacVideoView.mm" \
+  "$BRIDGE_DIR/SipMacAccount.mm" \
+  "$ROOT_DIR/core/src/account_session.cpp" \
+  "$ROOT_DIR/core/src/call_recorder.cpp" \
   "$ROOT_DIR/core/src/call_session.cpp" \
+  "$ROOT_DIR/core/src/conference_mixer.cpp" \
   "$ROOT_DIR/core/src/engine.cpp" \
   "$ROOT_DIR/core/src/media_driver.cpp" \
+  "$ROOT_DIR/core/src/mkv_writer.cpp" \
   "$ROOT_DIR/core/src/sip_abi.cpp" \
   -L "$PREBUILT_DIR/darwin-arm64/lib" -lbaresip -lre -lz -lm \
   -framework Foundation \

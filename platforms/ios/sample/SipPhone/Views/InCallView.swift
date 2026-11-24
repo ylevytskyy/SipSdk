@@ -14,6 +14,8 @@ struct InCallView: View {
     @State private var localVideoUIView = SipVideoUIView()
     @State private var timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
     @State private var isShowingKeypad = false
+    @State private var isShowingTransferSheet = false
+    @State private var transferTargetUri: String = ""
 
     var body: some View {
         ZStack {
@@ -38,9 +40,15 @@ struct InCallView: View {
                 }
             }
 
-            // Top Header: Remote party & duration
-            VStack {
+            // Top Header: Remote party, multi-line switcher, & call waiting
+            VStack(spacing: 8) {
                 topHeader
+                if model.openCalls.count > 1 {
+                    lineSwitcherBar
+                }
+                if let waiting = model.incomingCall, waiting.id != call.id {
+                    callWaitingBanner(waiting)
+                }
                 Spacer()
             }
             .padding(.top, 16)
@@ -84,8 +92,13 @@ struct InCallView: View {
             KeypadSheet(call: call)
                 .presentationDetents([.medium])
         }
+        .sheet(isPresented: $isShowingTransferSheet) {
+            TransferSheet(model: model, call: call, targetUri: $transferTargetUri)
+                .presentationDetents([.medium])
+        }
         .onReceive(timer) { _ in
             call.updateDuration()
+            _ = call.getStats()
         }
     }
 
@@ -93,15 +106,33 @@ struct InCallView: View {
 
     private var topHeader: some View {
         VStack(spacing: 4) {
-            Text(call.peerDisplayName ?? call.remoteUri)
-                .font(.system(size: 20, weight: .bold))
-                .foregroundColor(.white)
-                .shadow(radius: 4)
+            HStack(spacing: 6) {
+                if call.isSecure {
+                    Image(systemName: "lock.shield.fill")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundColor(.green)
+                }
+                Text(call.peerDisplayName ?? call.remoteUri)
+                    .font(.system(size: 20, weight: .bold))
+                    .foregroundColor(.white)
+                    .shadow(radius: 4)
+            }
 
             Text(headerStatusText)
                 .font(.system(size: 14, weight: .medium))
                 .foregroundColor(.white.opacity(0.8))
                 .shadow(radius: 4)
+
+            if let stats = call.stats, !stats.audioCodec.isEmpty {
+                Text(String(format: "%@ • %u kbps • loss %.1f%% • jitter %u ms",
+                            stats.audioCodec.uppercased(),
+                            stats.audioBitrateKbps,
+                            stats.audioLossRate,
+                            stats.audioJitterMs))
+                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    .foregroundColor(.green.opacity(0.9))
+                    .padding(.top, 2)
+            }
         }
         .padding(.horizontal, 24)
         .padding(.vertical, 10)
@@ -121,6 +152,65 @@ struct InCallView: View {
         case .hold: return "On Hold"
         case .closed(let code, let reason): return "Ended (\(code): \(reason))"
         }
+    }
+
+    private var lineSwitcherBar: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(model.openCalls) { line in
+                    Button {
+                        Task { await model.swapToCall(line) }
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: line.isOnHold ? "pause.circle.fill" : "phone.fill")
+                                .font(.caption2)
+                            Text(line.peerDisplayName ?? line.remoteUri)
+                                .font(.caption.weight(.semibold))
+                                .lineLimit(1)
+                            Text(line.isOnHold ? "Hold" : "Active")
+                                .font(.caption2)
+                                .foregroundColor(.white.opacity(0.8))
+                        }
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(line.id == call.id ? Color.blue : Color.black.opacity(0.5))
+                        .clipShape(Capsule())
+                    }
+                }
+            }
+            .padding(.horizontal, 16)
+        }
+    }
+
+    private func callWaitingBanner(_ waiting: SipCall) -> some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Call Waiting")
+                    .font(.caption.weight(.bold))
+                    .foregroundColor(.green)
+                Text(waiting.peerDisplayName ?? waiting.remoteUri)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundColor(.white)
+                    .lineLimit(1)
+            }
+            Spacer()
+            Button("Decline") {
+                Task { await model.declineIncomingCall() }
+            }
+            .buttonStyle(.bordered)
+            .tint(.red)
+            Button("Hold & Answer") {
+                Task { await model.answerIncomingCall(withVideo: waiting.hasVideo) }
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(.green)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(Color.black.opacity(0.82))
+        .cornerRadius(14)
+        .padding(.horizontal, 16)
     }
 
     private var pipLocalPreview: some View {
@@ -200,11 +290,48 @@ struct InCallView: View {
                 }
             }
 
+            // Swap & Merge/Split Buttons (shown when multiple calls are open)
+            if let other = model.openCalls.first(where: { $0.id != call.id }) {
+                controlButton(
+                    icon: "arrow.left.arrow.right",
+                    label: "Swap",
+                    isActive: false
+                ) {
+                    Task {
+                        await model.swapToCall(other)
+                    }
+                }
+
+                controlButton(
+                    icon: call.isInConference ? "arrow.triangle.branch" : "arrow.triangle.merge",
+                    label: call.isInConference ? "Split" : "Merge",
+                    isActive: call.isInConference
+                ) {
+                    if call.isInConference {
+                        try? model.client.splitCall(call)
+                    } else {
+                        try? model.client.mergeCalls(call, other)
+                    }
+                }
+            }
+
+            // Transfer Button
+            controlButton(
+                icon: "arrowshape.turn.up.right.fill",
+                label: "Transfer",
+                isActive: false
+            ) {
+                isShowingTransferSheet = true
+            }
+
             // Hangup Button
             Button {
                 Task {
+                    let hadOnlyOneCall = model.openCalls.count <= 1
                     await call.hangup()
-                    model.isShowingInCallView = false
+                    if hadOnlyOneCall {
+                        model.isShowingInCallView = false
+                    }
                 }
             } label: {
                 Image(systemName: "phone.down.fill")
@@ -282,6 +409,56 @@ struct KeypadSheet: View {
                 }
             }
             Spacer()
+        }
+    }
+}
+
+// MARK: - In-Call Transfer Sheet
+
+struct TransferSheet: View {
+    @Bindable var model: SipAppModel
+    let call: SipCall
+    @Binding var targetUri: String
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Blind Transfer (REFER)") {
+                    TextField("Target URI or Extension (e.g. 1002)", text: $targetUri)
+                        .autocorrectionDisabled()
+                        .textInputAutocapitalization(.never)
+                    Button("Transfer Now") {
+                        let dest = targetUri.trimmingCharacters(in: .whitespaces)
+                        guard !dest.isEmpty else { return }
+                        let uri = dest.hasPrefix("sip:") ? dest : "sip:\(dest)@\(model.accountStore.account.domain):\(model.accountStore.account.port)"
+                        try? call.transfer(to: uri)
+                        dismiss()
+                    }
+                    .disabled(targetUri.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+
+                let otherCalls = model.client.calls.filter { $0.id != call.id && !$0.state.isClosed }
+                if !otherCalls.isEmpty {
+                    Section("Attended Transfer (Replaces)") {
+                        ForEach(otherCalls) { consult in
+                            Button("Complete Transfer to \(consult.peerDisplayName ?? consult.remoteUri)") {
+                                try? call.attendedTransfer(with: consult)
+                                dismiss()
+                            }
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Call Transfer")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Close") {
+                        dismiss()
+                    }
+                }
+            }
         }
     }
 }

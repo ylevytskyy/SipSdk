@@ -24,6 +24,7 @@ export class FakeSession extends Emitter {
     this.holdCalls = [];
     this.muteCalls = [];
     this.dtmfSent = [];
+    this.referCalls = [];
     this.established = false;
     this.ended = false;
   }
@@ -34,6 +35,11 @@ export class FakeSession extends Emitter {
   mute(options) { this.muteCalls.push(['mute', options]); }
   unmute(options) { this.muteCalls.push(['unmute', options]); }
   sendDTMF(tones, options) { this.dtmfSent.push([tones, options]); }
+  refer(target, options = {}) {
+    if (!this.established) return false;
+    this.referCalls.push([target, options]);
+    return { id: this.referCalls.length };
+  }
   isEstablished() { return this.established; }
   isEnded() { return this.ended; }
 }
@@ -49,13 +55,20 @@ export function createFakeJsSIP() {
       this.config = config;
       this.started = false;
       this.stopped = false;
+      this.registerCalls = 0;
       this.unregisterCalls = [];
       this.outgoing = [];
+      this.messages = [];
       uas.push(this);
+    }
+    sendMessage(target, body, options) {
+      const message = { target, body, options };
+      this.messages.push(message);
+      return message;
     }
     start() { this.started = true; }
     stop() { this.stopped = true; }
-    register() {}
+    register() { this.registerCalls++; }
     unregister(options) { this.unregisterCalls.push(options); }
     call(target, options) {
       const session = new FakeSession({ direction: 'outgoing', uri: target });

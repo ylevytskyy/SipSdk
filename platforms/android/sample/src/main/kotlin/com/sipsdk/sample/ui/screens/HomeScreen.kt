@@ -1,8 +1,10 @@
 package com.sipsdk.sample.ui.screens
 
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -13,67 +15,54 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.CallMade
-import androidx.compose.material.icons.automirrored.filled.CallMissed
-import androidx.compose.material.icons.automirrored.filled.CallReceived
-import androidx.compose.material.icons.filled.Call
-import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.automirrored.filled.Backspace
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Dialpad
+import androidx.compose.material.icons.filled.Keyboard
 import androidx.compose.material.icons.filled.Phone
-import androidx.compose.material.icons.filled.PhoneMissed
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Videocam
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.CenterAlignedTopAppBar
-import androidx.compose.material3.Divider
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.sipsdk.SipRegistrationState
-import com.sipsdk.sample.models.CallDirection
-import com.sipsdk.sample.models.CallHistoryItem
 import com.sipsdk.sample.ui.theme.IosBlue
 import com.sipsdk.sample.ui.theme.IosGray
 import com.sipsdk.sample.ui.theme.IosGreen
+import com.sipsdk.sample.ui.theme.IosOrange
 import com.sipsdk.sample.ui.theme.IosRed
-import com.sipsdk.sample.ui.theme.IosYellow
 import com.sipsdk.sample.viewmodels.SipAppViewModel
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun HomeScreen(
     viewModel: SipAppViewModel,
@@ -82,150 +71,146 @@ fun HomeScreen(
     val dialDestination by viewModel.dialDestination.collectAsState()
     val regState by viewModel.registrationState.collectAsState()
     val regReason by viewModel.regReason.collectAsState()
-    val history by viewModel.history.collectAsState()
     val account = viewModel.accountStore.account
     val focusManager = LocalFocusManager.current
+    var isUriInputMode by remember { mutableStateOf(false) }
 
     val statusColor = when (regState) {
         SipRegistrationState.REGISTERED -> IosGreen
-        SipRegistrationState.REGISTERING -> IosYellow
+        SipRegistrationState.REGISTERING -> IosOrange
         SipRegistrationState.FAILED -> IosRed
         SipRegistrationState.UNREGISTERED -> IosGray
     }
 
-    val statusTitle = when (regState) {
-        SipRegistrationState.REGISTERED -> "Registered · Ready to call"
-        SipRegistrationState.REGISTERING -> "Connecting to SIP server..."
-        SipRegistrationState.FAILED -> "Registration Failed ($regReason)"
-        SipRegistrationState.UNREGISTERED -> "Offline · Not registered"
+    val statusLabel = when (regState) {
+        SipRegistrationState.REGISTERED -> "Online"
+        SipRegistrationState.REGISTERING -> "Connecting"
+        SipRegistrationState.FAILED -> "Failed"
+        SipRegistrationState.UNREGISTERED -> "Offline"
     }
 
-    Scaffold(
-        topBar = {
-            CenterAlignedTopAppBar(
-                title = {
-                    Text(
-                        text = "SipSdk",
-                        fontWeight = FontWeight.SemiBold,
-                        fontSize = 17.sp
-                    )
-                },
-                actions = {
-                    IconButton(onClick = { viewModel.setShowAccountSheet(true) }) {
-                        Icon(
-                            imageVector = Icons.Filled.Settings,
-                            contentDescription = "Settings",
-                            tint = IosBlue
-                        )
-                    }
-                },
-                colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.background
-                )
-            )
-        },
-        containerColor = MaterialTheme.colorScheme.background,
+    val accountLine = when (regState) {
+        SipRegistrationState.FAILED -> regReason.ifBlank { "${account.username} · ${account.domain}" }
+        else -> "${account.username} · ${account.domain} · ${account.transport.uppercase()}"
+    }
+
+    val dialRows = remember {
+        listOf(
+            listOf("1" to "", "2" to "ABC", "3" to "DEF"),
+            listOf("4" to "GHI", "5" to "JKL", "6" to "MNO"),
+            listOf("7" to "PQRS", "8" to "TUV", "9" to "WXYZ"),
+            listOf("*" to "", "0" to "+", "#" to "")
+        )
+    }
+
+    Column(
         modifier = modifier
-    ) { innerPadding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 20.dp, vertical = 10.dp),
-            verticalArrangement = Arrangement.spacedBy(20.dp)
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
+            .statusBarsPadding()
+            .padding(horizontal = 24.dp, vertical = 14.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.SpaceBetween
+    ) {
+        // Minimal Header: Identity + Single Live Status Pill (taps to Settings tab)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            // Header Section
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(2.dp)
+            ) {
                 Text(
                     text = "SipSdk",
-                    fontSize = 32.sp,
+                    fontSize = 24.sp,
                     fontWeight = FontWeight.Bold,
+                    letterSpacing = (-0.5).sp,
                     color = MaterialTheme.colorScheme.onBackground
                 )
                 Text(
-                    text = "Who would you like to call?",
-                    fontSize = 16.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    text = accountLine,
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
 
-            // Status Badge Card
             Surface(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(14.dp))
-                    .clickable { viewModel.setShowAccountSheet(true) }
-                    .shadow(1.dp, RoundedCornerShape(14.dp)),
-                color = MaterialTheme.colorScheme.surface,
-                shape = RoundedCornerShape(14.dp)
+                    .clip(RoundedCornerShape(20.dp))
+                    .clickable { viewModel.setSelectedTab(2) },
+                shape = RoundedCornerShape(20.dp),
+                color = statusColor.copy(alpha = 0.12f),
+                border = BorderStroke(1.dp, statusColor.copy(alpha = 0.25f))
             ) {
                 Row(
-                    modifier = Modifier.padding(16.dp),
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     Box(
                         modifier = Modifier
-                            .size(10.dp)
+                            .size(8.dp)
                             .clip(CircleShape)
                             .background(statusColor)
                     )
-
-                    Column(
-                        modifier = Modifier.weight(1f),
-                        verticalArrangement = Arrangement.spacedBy(2.dp)
-                    ) {
-                        Text(
-                            text = statusTitle,
-                            fontSize = 15.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                        Text(
-                            text = account.aor,
-                            fontSize = 13.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1
-                        )
-                    }
-
-                    Icon(
-                        imageVector = Icons.Filled.ChevronRight,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-                        modifier = Modifier.size(16.dp)
+                    Text(
+                        text = statusLabel,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = statusColor
                     )
                 }
             }
+        }
 
-            // Dialer Section
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text(
-                    text = "Number or SIP address",
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-
+        // Number Display + Quick-Dial Strip
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            if (isUriInputMode) {
                 OutlinedTextField(
                     value = dialDestination,
                     onValueChange = { viewModel.setDialDestination(it) },
                     modifier = Modifier.fillMaxWidth(),
+                    textStyle = TextStyle(
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    ),
                     placeholder = {
                         Text(
-                            text = "1002",
-                            fontSize = 20.sp,
-                            fontWeight = FontWeight.SemiBold
+                            text = "sip:user@domain",
+                            fontSize = 17.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
                         )
                     },
                     trailingIcon = {
-                        if (dialDestination.isNotEmpty()) {
-                            IconButton(onClick = { viewModel.setDialDestination("") }) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            if (dialDestination.isNotEmpty()) {
+                                IconButton(onClick = { viewModel.setDialDestination("") }) {
+                                    Icon(
+                                        imageVector = Icons.Filled.Close,
+                                        contentDescription = "Clear",
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                            }
+                            IconButton(onClick = {
+                                focusManager.clearFocus()
+                                isUriInputMode = false
+                            }) {
                                 Icon(
-                                    imageVector = Icons.Filled.Close,
-                                    contentDescription = "Clear",
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                    imageVector = Icons.Filled.Dialpad,
+                                    contentDescription = "Switch to Keypad",
+                                    tint = IosBlue,
+                                    modifier = Modifier.size(20.dp)
                                 )
                             }
                         }
@@ -238,7 +223,7 @@ fun HomeScreen(
                     keyboardActions = KeyboardActions(
                         onDone = { focusManager.clearFocus() }
                     ),
-                    shape = RoundedCornerShape(12.dp),
+                    shape = RoundedCornerShape(16.dp),
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedContainerColor = MaterialTheme.colorScheme.surface,
                         unfocusedContainerColor = MaterialTheme.colorScheme.surface,
@@ -246,293 +231,273 @@ fun HomeScreen(
                         unfocusedBorderColor = MaterialTheme.colorScheme.outline
                     )
                 )
-
-                Text(
-                    text = "Numbers use your account's domain.",
-                    fontSize = 12.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-                )
-
-                Spacer(modifier = Modifier.height(4.dp))
-
-                // Call Action Buttons
-                Button(
-                    onClick = {
-                        focusManager.clearFocus()
-                        viewModel.makeCall(dialDestination, withVideo = true)
-                    },
-                    enabled = dialDestination.isNotBlank(),
+            } else {
+                Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(52.dp),
-                    shape = RoundedCornerShape(14.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = IosBlue,
-                        contentColor = Color.White
-                    )
+                        .height(54.dp),
+                    contentAlignment = Alignment.Center
                 ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    Text(
+                        text = dialDestination.ifBlank { "Enter number" },
+                        fontSize = if (dialDestination.length > 14) 24.sp else 34.sp,
+                        fontWeight = if (dialDestination.isBlank()) FontWeight.Normal else FontWeight.SemiBold,
+                        letterSpacing = 1.sp,
+                        textAlign = TextAlign.Center,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        color = if (dialDestination.isBlank()) {
+                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f)
+                        } else {
+                            MaterialTheme.colorScheme.onBackground
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 44.dp)
+                    )
+
+                    IconButton(
+                        onClick = { isUriInputMode = true },
+                        modifier = Modifier.align(Alignment.CenterEnd)
                     ) {
                         Icon(
-                            imageVector = Icons.Filled.Videocam,
-                            contentDescription = null,
+                            imageVector = Icons.Filled.Keyboard,
+                            contentDescription = "Enter SIP URI",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.size(20.dp)
-                        )
-                        Text(
-                            text = "Video call",
-                            fontSize = 17.sp,
-                            fontWeight = FontWeight.SemiBold
                         )
                     }
                 }
+            }
 
-                OutlinedButton(
-                    onClick = {
+            // Compact Quick-Dial Strip
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                listOf(
+                    "9001" to "Echo",
+                    "9002" to "Music",
+                    "1002" to "Web"
+                ).forEach { (ext, label) ->
+                    val selected = dialDestination == ext
+                    Surface(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(18.dp))
+                            .clickable { viewModel.setDialDestination(ext) },
+                        shape = RoundedCornerShape(18.dp),
+                        color = if (selected) IosBlue.copy(alpha = 0.12f) else MaterialTheme.colorScheme.surface,
+                        border = BorderStroke(
+                            1.dp,
+                            if (selected) IosBlue.copy(alpha = 0.35f) else MaterialTheme.colorScheme.outline
+                        )
+                    ) {
+                        Text(
+                            text = "$label · $ext",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium,
+                            maxLines = 1,
+                            color = if (selected) IosBlue else MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                        )
+                    }
+                }
+            }
+        }
+
+        // Tactile 3x4 Numeric Keypad
+        if (!isUriInputMode) {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(14.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                dialRows.forEach { row ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceEvenly
+                    ) {
+                        row.forEach { (digit, letters) ->
+                            DialpadKey(
+                                digit = digit,
+                                letters = letters,
+                                onClick = { viewModel.setDialDestination(dialDestination + digit) },
+                                onLongClick = if (digit == "0") {
+                                    { viewModel.setDialDestination("$dialDestination+") }
+                                } else {
+                                    null
+                                }
+                            )
+                        }
+                    }
+                }
+            }
+        } else {
+            Spacer(modifier = Modifier.weight(1f))
+        }
+
+        // Primary Call Action Row (Clear Visual Hierarchy: Secondary Video | Primary Audio | Backspace)
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 8.dp),
+            horizontalArrangement = Arrangement.SpaceEvenly,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // Secondary Tonal Video Call Button
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Surface(
+                    modifier = Modifier
+                        .size(56.dp)
+                        .clip(CircleShape)
+                        .clickable(enabled = dialDestination.isNotBlank()) {
+                            focusManager.clearFocus()
+                            viewModel.makeCall(dialDestination, withVideo = true)
+                        },
+                    shape = CircleShape,
+                    color = if (dialDestination.isNotBlank()) {
+                        IosBlue.copy(alpha = 0.12f)
+                    } else {
+                        MaterialTheme.colorScheme.surfaceVariant
+                    }
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = Icons.Filled.Videocam,
+                            contentDescription = "Video Call",
+                            tint = if (dialDestination.isNotBlank()) {
+                                IosBlue
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                            },
+                            modifier = Modifier.size(24.dp)
+                        )
+                    }
+                }
+                Text(
+                    text = "Video",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            // Primary CTA: Audio Call Button
+            Surface(
+                modifier = Modifier
+                    .size(72.dp)
+                    .shadow(
+                        elevation = if (dialDestination.isNotBlank()) 8.dp else 0.dp,
+                        shape = CircleShape,
+                        ambientColor = IosGreen,
+                        spotColor = IosGreen
+                    )
+                    .clip(CircleShape)
+                    .clickable(enabled = dialDestination.isNotBlank()) {
                         focusManager.clearFocus()
                         viewModel.makeCall(dialDestination, withVideo = false)
                     },
-                    enabled = dialDestination.isNotBlank(),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(52.dp),
-                    shape = RoundedCornerShape(14.dp),
-                    colors = ButtonDefaults.outlinedButtonColors(
-                        containerColor = MaterialTheme.colorScheme.surface,
-                        contentColor = IosBlue
-                    ),
-                    border = ButtonDefaults.outlinedButtonBorder.copy(
-                        brush = androidx.compose.ui.graphics.SolidColor(IosBlue.copy(alpha = 0.5f))
-                    )
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Filled.Phone,
-                            contentDescription = null,
-                            modifier = Modifier.size(18.dp)
-                        )
-                        Text(
-                            text = "Audio call",
-                            fontSize = 17.sp,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                    }
-                }
-            }
-
-            // Recent Calls Section
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Text(
-                        text = "Recent calls",
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onBackground
-                    )
-
-                    TextButton(onClick = { viewModel.setSelectedTab(1) }) {
-                        Text(
-                            text = "See all",
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = IosBlue
-                        )
-                    }
-                }
-
-                val recentList = history.take(3)
-                if (recentList.isEmpty()) {
-                    Surface(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(12.dp)),
-                        color = MaterialTheme.colorScheme.surface,
-                        shape = RoundedCornerShape(12.dp)
-                    ) {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 24.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Filled.Call,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.size(28.dp)
-                            )
-                            Text(
-                                text = "No calls yet",
-                                fontSize = 14.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-                } else {
-                    Surface(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(12.dp)),
-                        color = MaterialTheme.colorScheme.surface,
-                        shape = RoundedCornerShape(12.dp)
-                    ) {
-                        Column {
-                            recentList.forEachIndexed { index, item ->
-                                RecentCallItemRow(
-                                    item = item,
-                                    onClick = {
-                                        viewModel.setDialDestination(item.remoteUri)
-                                        viewModel.makeCall(item.remoteUri, withVideo = item.hasVideo)
-                                    }
-                                )
-                                if (index < recentList.lastIndex) {
-                                    HorizontalDivider(
-                                        modifier = Modifier.padding(start = 44.dp),
-                                        color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f),
-                                        thickness = 0.5.dp
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Quick Camera Check Card
-            Surface(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(14.dp)),
-                color = MaterialTheme.colorScheme.surface,
-                shape = RoundedCornerShape(14.dp)
+                shape = CircleShape,
+                color = if (dialDestination.isNotBlank()) IosGreen else IosGreen.copy(alpha = 0.35f)
             ) {
-                Column(
-                    modifier = Modifier.padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Text(
-                        text = "Check your camera first",
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.onSurface
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        imageVector = Icons.Filled.Phone,
+                        contentDescription = "Audio Call",
+                        tint = Color.White,
+                        modifier = Modifier.size(30.dp)
                     )
-                    Text(
-                        text = "Preview stays on this device.",
-                        fontSize = 13.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Button(
-                        onClick = { viewModel.setSelectedTab(2) },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(44.dp),
-                        shape = RoundedCornerShape(10.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = IosBlue.copy(alpha = 0.12f),
-                            contentColor = IosBlue
-                        )
-                    ) {
-                        Text(
-                            text = "Open video settings",
-                            fontSize = 15.sp,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                    }
                 }
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
+            // Utility: Backspace (tap deletes 1 char, long-press clears)
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(56.dp)
+                        .clip(CircleShape)
+                        .combinedClickable(
+                            enabled = dialDestination.isNotEmpty(),
+                            onClick = {
+                                if (dialDestination.isNotEmpty()) {
+                                    viewModel.setDialDestination(dialDestination.dropLast(1))
+                                }
+                            },
+                            onLongClick = { viewModel.setDialDestination("") }
+                        ),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.Backspace,
+                        contentDescription = "Delete",
+                        tint = if (dialDestination.isNotEmpty()) {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f)
+                        },
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
+                Text(
+                    text = "Clear",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(
+                        alpha = if (dialDestination.isNotEmpty()) 1f else 0.35f
+                    )
+                )
+            }
         }
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun RecentCallItemRow(
-    item: CallHistoryItem,
-    onClick: () -> Unit
+private fun DialpadKey(
+    digit: String,
+    letters: String,
+    onClick: () -> Unit,
+    onLongClick: (() -> Unit)? = null
 ) {
-    val dirIcon = when (item.direction) {
-        CallDirection.OUTGOING -> Icons.AutoMirrored.Filled.CallMade
-        CallDirection.INCOMING -> Icons.AutoMirrored.Filled.CallReceived
-        CallDirection.MISSED -> Icons.AutoMirrored.Filled.CallMissed
-    }
-
-    val dirColor = when (item.direction) {
-        CallDirection.OUTGOING -> IosBlue
-        CallDirection.INCOMING -> IosGreen
-        CallDirection.MISSED -> IosRed
-    }
-
-    Row(
+    Surface(
         modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(horizontal = 14.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp)
+            .size(72.dp)
+            .clip(CircleShape)
+            .combinedClickable(
+                onClick = onClick,
+                onLongClick = onLongClick
+            ),
+        shape = CircleShape,
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.8f))
     ) {
-        Icon(
-            imageVector = dirIcon,
-            contentDescription = null,
-            tint = dirColor,
-            modifier = Modifier.size(16.dp)
-        )
-
         Column(
-            modifier = Modifier.weight(1f),
-            verticalArrangement = Arrangement.spacedBy(2.dp)
+            modifier = Modifier.fillMaxSize(),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
         ) {
             Text(
-                text = item.displayTitle,
-                fontSize = 15.sp,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurface
+                text = digit,
+                fontSize = 27.sp,
+                fontWeight = FontWeight.Medium,
+                color = MaterialTheme.colorScheme.onSurface,
+                lineHeight = 29.sp
             )
-
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                if (item.hasVideo) {
-                    Icon(
-                        imageVector = Icons.Filled.Videocam,
-                        contentDescription = "Video",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(13.dp)
-                    )
-                }
+            if (letters.isNotEmpty()) {
                 Text(
-                    text = item.formattedDuration,
-                    fontSize = 12.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Text(
-                    text = "·",
-                    fontSize = 12.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Text(
-                    text = item.formattedDate,
-                    fontSize = 12.sp,
+                    text = letters,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    letterSpacing = 1.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
         }
-
-        Icon(
-            imageVector = Icons.Filled.ChevronRight,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
-            modifier = Modifier.size(14.dp)
-        )
     }
 }

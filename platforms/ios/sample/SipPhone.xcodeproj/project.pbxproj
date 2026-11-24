@@ -3,7 +3,7 @@
 	archiveVersion = 1;
 	classes = {
 	};
-	objectVersion = 55;
+	objectVersion = 60;
 	objects = {
 
 /* Begin PBXBuildFile section */
@@ -49,7 +49,7 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
-		4001 /* Root */ = {
+		4001 = {
 			isa = PBXGroup;
 			children = (
 				4002 /* SipPhone */,
@@ -153,9 +153,9 @@
 				en,
 				Base,
 			);
-			mainGroup = 4001 /* Root */;
+			mainGroup = 4001;
 			packageReferences = (
-				5003 /* XCLocalSwiftPackageReference "../../../" */,
+				5003 /* XCLocalSwiftPackageReference "../../.." */,
 			);
 			productRefGroup = 4005 /* Products */;
 			projectDirPath = "";
@@ -267,8 +267,10 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGNING_ALLOWED = NO;
-				CODE_SIGN_IDENTITY = "";
 				CODE_SIGNING_REQUIRED = NO;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = 22HTRK4UE7;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = SipPhone/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
@@ -278,6 +280,7 @@
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.sipsdk.sample.SipPhone;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				PROVISIONING_PROFILE_SPECIFIER = "";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -289,8 +292,10 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGNING_ALLOWED = NO;
-				CODE_SIGN_IDENTITY = "";
 				CODE_SIGNING_REQUIRED = NO;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = 22HTRK4UE7;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = SipPhone/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
@@ -300,6 +305,7 @@
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.sipsdk.sample.SipPhone;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				PROVISIONING_PROFILE_SPECIFIER = "";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -330,7 +336,7 @@
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
-		5003 /* XCLocalSwiftPackageReference "../../../" */ = {
+		5003 /* XCLocalSwiftPackageReference "../../.." */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = ../../..;
 		};
@@ -339,11 +345,10 @@
 /* Begin XCSwiftPackageProductDependency section */
 		5002 /* SipSdk */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 5003 /* XCLocalSwiftPackageReference "../../../" */;
+			package = 5003 /* XCLocalSwiftPackageReference "../../.." */;
 			productName = SipSdk;
 		};
 /* End XCSwiftPackageProductDependency section */
-
 	};
 	rootObject = 6000 /* Project object */;
 }

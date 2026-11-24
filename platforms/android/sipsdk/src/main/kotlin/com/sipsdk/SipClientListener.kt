@@ -6,4 +6,15 @@ interface SipClientListener {
     fun onCallStateChanged(call: SipCall, state: SipCallState, code: Int, reason: String) {}
     fun onCallMediaChanged(call: SipCall, width: Int, height: Int, onHold: Boolean, isMuted: Boolean) {}
     fun onDtmfDigit(call: SipCall, digit: String) {}
+    fun onCallStats(call: SipCall, stats: SipCallStats) {}
+    fun onTransferStatus(call: SipCall, code: Int, reason: String) {}
+    fun onTransferRequest(call: SipCall, target: String) {}
+    fun onMessageReceived(message: SipIncomingMessage) {}
+    fun onMessageStatusChanged(messageId: Long, status: SipMessageStatus, code: Int, reason: String) {}
+    fun onCallRejectedBusy(callerUri: String) {}
+    fun onPushCallMissed(callId: String, callerUri: String) {}
+    fun onConferenceChanged(calls: List<SipCall>) {}
+    fun onRecordingStateChanged(call: SipCall, state: SipRecordingState, path: String, errorCode: Int) {}
+    fun onAccountRegistrationStateChanged(account: SipAccount, state: SipRegistrationState, code: Int, reason: String) {}
+    fun onAccountMessageReceived(account: SipAccount, message: SipIncomingMessage) {}
 }

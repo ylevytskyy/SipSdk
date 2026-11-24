@@ -21,6 +21,9 @@ struct SettingsView: View {
     @State private var stunServer: String = ""
     @State private var useIce: Bool = false
     @State private var regIntervalString: String = "3600"
+    @State private var verifyTlsCert: Bool = true
+    @State private var tlsCaFile: String = ""
+    @State private var mediaEnc: String = "none"
 
     // Diagnostics / Handover state
     @State private var handoverMessage: String?
@@ -108,6 +111,38 @@ struct SettingsView: View {
                     Picker("Transport", selection: $transport) {
                         Text("UDP").tag(SipTransport.udp)
                         Text("TCP").tag(SipTransport.tcp)
+                        Text("TLS").tag(SipTransport.tls)
+                        Text("WS").tag(SipTransport.ws)
+                        Text("WSS").tag(SipTransport.wss)
+                    }
+                    .onChange(of: transport) { _, newValue in
+                        if newValue == .tls {
+                            if portString == "5060" { portString = "5061" }
+                            if mediaEnc == "none" { mediaEnc = "srtp-mand" }
+                        } else if newValue == .ws {
+                            if portString == "5060" || portString == "5061" { portString = "8088" }
+                        } else if newValue == .wss {
+                            if portString == "5060" || portString == "5061" || portString == "8088" { portString = "8089" }
+                            if mediaEnc == "none" { mediaEnc = "srtp-mand" }
+                        }
+                    }
+
+                    Picker("Media Encryption", selection: $mediaEnc) {
+                        Text("None (Plain RTP)").tag("none")
+                        Text("SRTP (Optional)").tag("srtp")
+                        Text("SRTP (Mandatory)").tag("srtp-mand")
+                        Text("DTLS-SRTP").tag("dtls_srtp")
+                    }
+
+                    if transport == .tls || transport == .wss {
+                        Toggle("Verify TLS Certificate", isOn: $verifyTlsCert)
+                        HStack {
+                            Text("CA Cert File")
+                                .frame(width: 100, alignment: .leading)
+                            TextField("Optional PEM path", text: $tlsCaFile)
+                                .autocorrectionDisabled()
+                                .textInputAutocapitalization(.never)
+                        }
                     }
 
                     HStack {
@@ -283,10 +318,20 @@ struct SettingsView: View {
         self.stunServer = acc.stunServer ?? ""
         self.useIce = acc.mediaNat == "ice"
         self.regIntervalString = "\(acc.regInterval)"
+        self.verifyTlsCert = acc.verifyTlsCert
+        self.tlsCaFile = acc.tlsCaFile ?? ""
+        self.mediaEnc = acc.mediaEnc ?? ((acc.transport == .tls || acc.transport == .wss) ? "srtp-mand" : "none")
     }
 
     private func saveAndRegister() {
-        let port = Int(portString) ?? 5060
+        let defaultPort: Int
+        switch transport {
+        case .tls: defaultPort = 5061
+        case .ws: defaultPort = 8088
+        case .wss: defaultPort = 8089
+        case .udp, .tcp: defaultPort = 5060
+        }
+        let port = Int(portString) ?? defaultPort
         let regInterval = UInt32(regIntervalString) ?? 3600
 
         let updated = SipAccount(
@@ -299,7 +344,10 @@ struct SettingsView: View {
             outboundProxy: outboundProxy.isEmpty ? nil : outboundProxy,
             stunServer: stunServer.isEmpty ? nil : stunServer,
             mediaNat: useIce ? "ice" : nil,
-            regInterval: regInterval
+            regInterval: regInterval,
+            tlsCaFile: tlsCaFile.isEmpty ? nil : tlsCaFile,
+            verifyTlsCert: verifyTlsCert,
+            mediaEnc: mediaEnc == "none" ? nil : mediaEnc
         )
 
         model.accountStore.account = updated

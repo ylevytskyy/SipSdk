@@ -62,7 +62,11 @@ public final class IosAudioManager: @unchecked Sendable {
 
         let session = self.session()
         do {
+            #if compiler(>=6.2)
             var options: AVAudioSession.CategoryOptions = [.allowBluetoothHFP, .allowBluetoothA2DP]
+            #else
+            var options: AVAudioSession.CategoryOptions = [.allowBluetooth, .allowBluetoothA2DP]
+            #endif
             if speakerEnabled {
                 options.insert(.defaultToSpeaker)
             }

@@ -54,9 +54,20 @@ public struct MainSplitView: View {
                 }
             }
 
-            // Top Incoming Call Alert Banner
-            IncomingCallBanner(appModel: appModel)
-                .padding(.top, 8)
+            // Top Incoming Call Alert Banner & Busy Toast
+            VStack(spacing: 6) {
+                if let busyMsg = appModel.busyBannerMessage {
+                    Text(busyMsg)
+                        .font(.caption.weight(.semibold))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 6)
+                        .background(Color.red.opacity(0.9))
+                        .cornerRadius(8)
+                }
+                IncomingCallBanner(appModel: appModel)
+            }
+            .padding(.top, 8)
         }
     }
 }

@@ -87,6 +87,7 @@ int main()
         "sip_client_is_registered",
         "sip_client_destroy",
         "sip_call_make",
+        "sip_call_dial",
         "sip_call_answer",
         "sip_call_hangup",
         "sip_call_set_hold",
@@ -120,6 +121,14 @@ int main()
         "sip_client_start_local_preview",
         "sip_client_stop_local_preview",
         "sip_client_is_local_preview_active",
+        "sip_client_set_message_callbacks",
+        "sip_client_send_message",
+        "sip_client_register_account",
+        "sip_call_is_secure",
+        "sip_call_get_stats",
+        "sip_call_transfer",
+        "sip_call_attended_transfer",
+        "sip_call_accept_transfer",
         nullptr
     };
 
@@ -152,7 +161,7 @@ int main()
     if (lib) dlclose(lib);
 #endif
 
-    printf("PASS: All 40 public C ABI symbols dynamically exported and resolvable!\n");
+    printf("PASS: All 42 public C ABI symbols dynamically exported and resolvable (incl. sip_client_send_message, sip_client_set_message_callbacks)!\n");
     printf("ALL_WINDOWS_ABI_TESTS_PASSED\n");
     return 0;
 }

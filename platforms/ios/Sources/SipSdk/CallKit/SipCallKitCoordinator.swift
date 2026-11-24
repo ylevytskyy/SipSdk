@@ -62,20 +62,32 @@ public final class SipCallKitCoordinator: NSObject, CXProviderDelegate {
     /// Calls that CallKit knows about and that have not ended yet.
     private var callKitCallIDs: Set<UUID> = []
 
-    public init(localizedName: String = "SipSdk", client: SipClient? = nil) {
+    public init(localizedName: String = "SipSdk", client: SipClient? = nil, maxCalls: Int = 4) {
+        _ = localizedName
         self.client = client
         self.callController = CXCallController()
 
-        let config = CXProviderConfiguration()
-        config.supportsVideo = true
-        config.maximumCallsPerCallGroup = 1
-        config.supportedHandleTypes = [.generic]
-        config.includesCallsInRecents = true
-
+        let config = Self.makeConfiguration(maxCalls: maxCalls)
         self.provider = CXProvider(configuration: config)
         self.system = SystemCallKit(provider: provider, callController: callController)
         super.init()
         self.provider.setDelegate(self, queue: nil)
+    }
+
+    /// Updates CallKit multi-call capacity to match account `maxCalls`.
+    public func updateConfiguration(maxCalls: Int) {
+        provider.configuration = Self.makeConfiguration(maxCalls: maxCalls)
+    }
+
+    private static func makeConfiguration(maxCalls: Int) -> CXProviderConfiguration {
+        let clamped = max(1, min(8, maxCalls))
+        let config = CXProviderConfiguration()
+        config.supportsVideo = true
+        config.maximumCallGroups = clamped
+        config.maximumCallsPerCallGroup = clamped
+        config.supportedHandleTypes = [.generic]
+        config.includesCallsInRecents = true
+        return config
     }
 
     deinit {
@@ -92,8 +104,8 @@ public final class SipCallKitCoordinator: NSObject, CXProviderDelegate {
         update.localizedCallerName = call.peerDisplayName ?? call.remoteUri
         update.hasVideo = call.hasVideo
         update.supportsHolding = true
-        update.supportsGrouping = false
-        update.supportsUngrouping = false
+        update.supportsGrouping = true
+        update.supportsUngrouping = true
         update.supportsDTMF = true
 
         // Track the call before the report suspends, so a close that arrives
@@ -119,6 +131,17 @@ public final class SipCallKitCoordinator: NSObject, CXProviderDelegate {
         callKitCallIDs.insert(call.id)
         try await system.request(transaction)
         return call
+    }
+
+    /// Records a call UUID already reported to CallKit (for example, by a VoIP push handler).
+    public func markCallReported(_ uuid: UUID) {
+        callKitCallIDs.insert(uuid)
+    }
+
+    /// Reports call termination to CallKit when a previously reported CallKit session closes.
+    public func reportCallEnded(uuid: UUID, reason: CXCallEndedReason = .remoteEnded) {
+        guard callKitCallIDs.remove(uuid) != nil else { return }
+        system.reportCall(with: uuid, endedAt: Date(), reason: reason)
     }
 
     /// Ends CallKit call session.
@@ -157,6 +180,7 @@ public final class SipCallKitCoordinator: NSObject, CXProviderDelegate {
 
     nonisolated public func providerDidReset(_ provider: CXProvider) {
         Task { @MainActor in
+            callKitCallIDs.removeAll()
             guard self.isEnabled, let client = self.client else { return }
             for call in client.calls {
                 await call.hangup(statusCode: 487, reason: "CallKit Reset")
@@ -200,17 +224,56 @@ public final class SipCallKitCoordinator: NSObject, CXProviderDelegate {
         }
     }
 
+    @discardableResult
+    internal func applyHoldAction(callUUID: UUID, onHold: Bool) async throws -> Bool {
+        guard let client = self.client,
+              let call = client.calls.first(where: { $0.id == callUUID }) else {
+            return false
+        }
+        try await call.setHold(onHold)
+        return true
+    }
+
     nonisolated public func provider(_ provider: CXProvider, perform action: CXSetHeldCallAction) {
         Task { @MainActor in
-            guard let client = self.client,
-                  let call = client.calls.first(where: { $0.id == action.callUUID }) else {
-                action.fail()
-                return
-            }
-
             do {
-                try await call.setHold(action.isOnHold)
-                action.fulfill()
+                if try await applyHoldAction(callUUID: action.callUUID, onHold: action.isOnHold) {
+                    action.fulfill()
+                } else {
+                    action.fail()
+                }
+            } catch {
+                action.fail()
+            }
+        }
+    }
+
+    @discardableResult
+    internal func applyGroupAction(callUUID: UUID, callUUIDToGroupWith: UUID?) throws -> Bool {
+        guard let client = self.client,
+              let call = client.calls.first(where: { $0.id == callUUID }) else {
+            return false
+        }
+        if let targetUUID = callUUIDToGroupWith {
+            guard let otherCall = client.calls.first(where: { $0.id == targetUUID }) else {
+                return false
+            }
+            try client.mergeCalls(call, otherCall)
+            return true
+        } else {
+            try client.splitCall(call)
+            return true
+        }
+    }
+
+    nonisolated public func provider(_ provider: CXProvider, perform action: CXSetGroupCallAction) {
+        Task { @MainActor in
+            do {
+                if try applyGroupAction(callUUID: action.callUUID, callUUIDToGroupWith: action.callUUIDToGroupWith) {
+                    action.fulfill()
+                } else {
+                    action.fail()
+                }
             } catch {
                 action.fail()
             }

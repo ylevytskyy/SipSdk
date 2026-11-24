@@ -8,6 +8,7 @@ set(CMAKE_C_VISIBILITY_PRESET hidden)
 set(CMAKE_VISIBILITY_INLINES_HIDDEN ON)
 
 add_compile_definitions(USE_UNIXSOCK=ON)
+add_compile_definitions(USE_TLS=1 USE_DTLS=1 USE_OPENSSL=1)
 add_compile_definitions(SIP_CORE_BUILDING_LIB=1)
 
 # Paths to core and prebuilts
@@ -30,9 +31,13 @@ set_target_properties(re PROPERTIES
 add_library(sipcore SHARED
     sip_jni.cpp
     media_codec_driver.cpp
+    ${CORE_DIR}/src/account_session.cpp
+    ${CORE_DIR}/src/call_recorder.cpp
     ${CORE_DIR}/src/call_session.cpp
+    ${CORE_DIR}/src/conference_mixer.cpp
     ${CORE_DIR}/src/engine.cpp
     ${CORE_DIR}/src/media_driver.cpp
+    ${CORE_DIR}/src/mkv_writer.cpp
     ${CORE_DIR}/src/sip_abi.cpp
 )
 

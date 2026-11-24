@@ -1,12 +1,15 @@
 package com.sipsdk
 
+import android.Manifest
 import android.os.Looper
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import androidx.test.rule.GrantPermissionRule
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
+import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.util.concurrent.CountDownLatch
@@ -14,6 +17,12 @@ import java.util.concurrent.TimeUnit
 
 @RunWith(AndroidJUnit4::class)
 class SipCallVideoTest {
+
+    @get:Rule
+    val grantPermissionRule: GrantPermissionRule = GrantPermissionRule.grant(
+        Manifest.permission.RECORD_AUDIO,
+        Manifest.permission.CAMERA
+    )
 
     private val context get() = InstrumentationRegistry.getInstrumentation().targetContext
 
@@ -76,65 +85,68 @@ class SipCallVideoTest {
             }
         }
 
-        assertEquals(0, client.start())
-        assertEquals(0, client.startLocalPreview())
-        assertTrue("Local preview must be active", client.isLocalPreviewActive)
+        try {
+            assertEquals(0, client.start())
+            TestConfig.configureAudioDriverForDevice(client)
+            assertEquals(0, client.startLocalPreview())
+            assertTrue("Local preview must be active", client.isLocalPreviewActive)
 
-        assertEquals(0, client.register())
-        assertTrue("Timeout waiting for registration", regLatch.await(10, TimeUnit.SECONDS))
+            assertEquals(0, client.register())
+            assertTrue("Timeout waiting for registration", regLatch.await(10, TimeUnit.SECONDS))
 
-        // Initiate video call to Asterisk video echo service extension 9001
-        val call = client.makeCall("sip:9001@${TestConfig.host}:5060", withVideo = true)
-        assertNotNull("Expected non-null SipCall instance", call)
-        call!!
+            // Initiate video call to Asterisk video echo service extension 9001
+            val call = client.makeCall("sip:9001@${TestConfig.host}:5060", withVideo = true)
+            assertNotNull("Expected non-null SipCall instance", call)
+            call!!
 
-        assertEquals("sip:9001@${TestConfig.host}:5060", call.remoteUri)
-        assertTrue("Outgoing flag must be true", call.isOutgoing)
-        assertTrue("hasVideo flag must be true", call.hasVideo)
-        assertFalse("Call must not be closed yet", call.isClosed)
+            assertEquals("sip:9001@${TestConfig.host}:5060", call.remoteUri)
+            assertTrue("Outgoing flag must be true", call.isOutgoing)
+            assertTrue("hasVideo flag must be true", call.hasVideo)
+            assertFalse("Call must not be closed yet", call.isClosed)
 
-        // Wait for call establishment
-        assertTrue("Timeout waiting for video call to be established", establishedLatch.await(10, TimeUnit.SECONDS))
-        assertTrue("Call must be established", callEstablished)
+            // Wait for call establishment
+            assertTrue("Timeout waiting for video call to be established", establishedLatch.await(10, TimeUnit.SECONDS))
+            assertTrue("Call must be established", callEstablished)
 
-        // Wait for video media resolution negotiation
-        assertTrue("Timeout waiting for video media parameters", mediaLatch.await(10, TimeUnit.SECONDS))
-        assertTrue("Video media must be received", mediaReceived)
-        assertTrue("Media width must be > 0, got $mediaWidth", mediaWidth > 0)
-        assertTrue("Media height must be > 0, got $mediaHeight", mediaHeight > 0)
-        assertTrue("onCallMediaChanged must be dispatched on Main Looper", looperIsMainOnMedia)
+            // Wait for video media resolution negotiation
+            assertTrue("Timeout waiting for video media parameters", mediaLatch.await(10, TimeUnit.SECONDS))
+            assertTrue("Video media must be received", mediaReceived)
+            assertTrue("Media width must be > 0, got $mediaWidth", mediaWidth > 0)
+            assertTrue("Media height must be > 0, got $mediaHeight", mediaHeight > 0)
+            assertTrue("onCallMediaChanged must be dispatched on Main Looper", looperIsMainOnMedia)
 
-        // Assert SipSurfaceView dimensions updated
-        assertEquals("remoteSurface videoWidth must match mediaWidth", mediaWidth, remoteSurface.videoWidth)
-        assertEquals("remoteSurface videoHeight must match mediaHeight", mediaHeight, remoteSurface.videoHeight)
-        assertTrue("remoteSurface renderedFrameCount must be >= 1", remoteSurface.renderedFrameCount >= 1L)
+            // Assert SipSurfaceView dimensions updated
+            assertEquals("remoteSurface videoWidth must match mediaWidth", mediaWidth, remoteSurface.videoWidth)
+            assertEquals("remoteSurface videoHeight must match mediaHeight", mediaHeight, remoteSurface.videoHeight)
+            assertTrue("remoteSurface renderedFrameCount must be >= 1", remoteSurface.renderedFrameCount >= 1L)
 
-        // Mid-call camera flipping
-        assertEquals(0, client.switchCamera())
-        assertEquals(SipCameraPosition.BACK, client.cameraPosition)
+            // Mid-call camera flipping
+            assertEquals(0, client.switchCamera())
+            assertEquals(SipCameraPosition.BACK, client.cameraPosition)
 
-        assertEquals(0, client.switchCamera())
-        assertEquals(SipCameraPosition.FRONT, client.cameraPosition)
+            assertEquals(0, client.switchCamera())
+            assertEquals(SipCameraPosition.FRONT, client.cameraPosition)
 
-        // RTCP PLI keyframe request
-        val kfRes = call.requestKeyframe()
-        assertEquals("sip_call_request_keyframe must return 0", 0, kfRes)
+            // RTCP PLI keyframe request
+            val kfRes = call.requestKeyframe()
+            assertEquals("sip_call_request_keyframe must return 0", 0, kfRes)
 
-        // Dynamic local video toggle
-        assertEquals(0, client.setLocalVideoEnabled(false))
-        assertFalse(client.isLocalVideoEnabled)
-        assertEquals(0, client.setLocalVideoEnabled(true))
-        assertTrue(client.isLocalVideoEnabled)
+            // Dynamic local video toggle
+            assertEquals(0, client.setLocalVideoEnabled(false))
+            assertFalse(client.isLocalVideoEnabled)
+            assertEquals(0, client.setLocalVideoEnabled(true))
+            assertTrue(client.isLocalVideoEnabled)
 
-        // Stop standalone local preview before hangup so call close must stop camera capture
-        assertEquals(0, client.stopLocalPreview())
+            // Stop standalone local preview before hangup so call close must stop camera capture
+            assertEquals(0, client.stopLocalPreview())
 
-        // Hangup cleanly
-        assertEquals(0, call.hangup())
-        assertTrue("Timeout waiting for call to close", closedLatch.await(5, TimeUnit.SECONDS))
-        assertTrue("Call must be closed", callClosed)
-        assertFalse("Camera capture must stop after video call closes", client.isCameraCaptureRunning)
-
-        client.stop()
+            // Hangup cleanly
+            assertEquals(0, call.hangup())
+            assertTrue("Timeout waiting for call to close", closedLatch.await(5, TimeUnit.SECONDS))
+            assertTrue("Call must be closed", callClosed)
+            assertFalse("Camera capture must stop after video call closes", client.isCameraCaptureRunning)
+        } finally {
+            client.destroy()
+        }
     }
 }

@@ -1,6 +1,8 @@
 #include <sip/call.hpp>
 #include <sip_abi.h>
 
+#include "call_session.h"
+
 namespace sip {
 
 Call::Call(sip_call_t *handle)
@@ -88,9 +90,62 @@ bool Call::is_closed() const
     return m_handle ? sip_call_is_closed(m_handle) : true;
 }
 
+bool Call::is_secure() const
+{
+    return m_handle ? sip_call_is_secure(m_handle) : false;
+}
+
+bool Call::is_in_conference() const
+{
+    return m_handle ? sip_call_is_in_conference(m_handle) : false;
+}
+
+bool Call::is_recording() const
+{
+    return m_handle ? sip_call_is_recording(m_handle) : false;
+}
+
+std::string Call::get_recording_path() const
+{
+    if (!m_handle) return "";
+    const char *p = sip_call_get_recording_path(m_handle);
+    return p ? p : "";
+}
+
 uint32_t Call::get_duration() const
 {
     return m_handle ? sip_call_get_duration(m_handle) : 0;
+}
+
+CallMediaStats Call::get_media_stats() const
+{
+    CallMediaStats out;
+    if (!m_handle) return m_has_final_media_stats ? m_final_media_stats : out;
+    sip_call_media_stats_t s = m_handle->get_media_stats();
+    out.video_frames_decoded = s.video_frames_decoded;
+    out.video_rtp_received = s.video_rtp_received;
+    out.audio_rtp_received = s.audio_rtp_received;
+    return out;
+}
+
+CallStats Call::get_stats() const
+{
+    CallStats out;
+    if (!m_handle) return out;
+    sip_call_stats_t raw{};
+    if (sip_call_get_stats(m_handle, &raw) == 0) {
+        out.audio_loss_rate = raw.audio_loss_rate;
+        out.audio_jitter_ms = raw.audio_jitter_ms;
+        out.audio_rtt_ms = raw.audio_rtt_ms;
+        out.audio_bitrate_kbps = raw.audio_bitrate_kbps;
+        out.audio_codec = raw.audio_codec;
+        out.video_loss_rate = raw.video_loss_rate;
+        out.video_jitter_ms = raw.video_jitter_ms;
+        out.video_bitrate_kbps = raw.video_bitrate_kbps;
+        out.video_fps = raw.video_fps;
+        out.video_codec = raw.video_codec;
+    }
+    return out;
 }
 
 int Call::answer(bool with_video)
@@ -129,8 +184,42 @@ int Call::request_keyframe()
     return sip_call_request_keyframe(m_handle);
 }
 
+int Call::transfer(const std::string &target_uri)
+{
+    if (!m_handle) return -1;
+    return sip_call_transfer(m_handle, target_uri.c_str());
+}
+
+int Call::attended_transfer(const std::shared_ptr<Call> &consult_call)
+{
+    if (!m_handle || !consult_call || !consult_call->m_handle) return -1;
+    return sip_call_attended_transfer(m_handle, consult_call->m_handle);
+}
+
+int Call::accept_transfer(bool accept)
+{
+    if (!m_handle) return -1;
+    return sip_call_accept_transfer(m_handle, accept);
+}
+
+int Call::start_recording(const std::string &path, RecordingMode mode)
+{
+    if (!m_handle || path.empty()) return -1;
+    return sip_call_start_recording(m_handle, path.c_str(), static_cast<sip_recording_mode_t>(mode));
+}
+
+int Call::stop_recording()
+{
+    if (!m_handle) return -1;
+    return sip_call_stop_recording(m_handle);
+}
+
 void Call::invalidate()
 {
+    if (m_handle) {
+        m_final_media_stats = get_media_stats();
+        m_has_final_media_stats = true;
+    }
     m_handle = nullptr;
     m_owns_handle = false;
 }

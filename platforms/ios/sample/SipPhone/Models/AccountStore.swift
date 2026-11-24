@@ -23,7 +23,7 @@ public final class AccountStore {
         #if targetEnvironment(simulator)
         let defaultHost = "127.0.0.1"
         #else
-        let defaultHost = "192.168.0.107"
+        let defaultHost = "192.168.0.161"
         #endif
 
         if let data = userDefaults.data(forKey: accountKey),
@@ -61,7 +61,7 @@ public final class AccountStore {
         #if targetEnvironment(simulator)
         let defaultHost = "127.0.0.1"
         #else
-        let defaultHost = "192.168.0.107"
+        let defaultHost = "192.168.0.161"
         #endif
 
         self.account = SipAccount(

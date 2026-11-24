@@ -13,6 +13,9 @@ set(CMAKE_C_VISIBILITY_PRESET hidden)
 set(CMAKE_VISIBILITY_INLINES_HIDDEN ON)
 
 add_compile_definitions(USE_UNIXSOCK=ON)
+add_compile_definitions(USE_TLS=1)
+add_compile_definitions(USE_DTLS=1)
+add_compile_definitions(USE_OPENSSL=1)
 
 # Detect host desktop slice
 if(APPLE)
@@ -55,6 +58,7 @@ endif()
 
 # Desktop SDK static library
 set(SIP_DESKTOP_SOURCES
+    src/account.cpp
     src/call.cpp
     src/client.cpp
     src/audio_driver.cpp
@@ -102,6 +106,7 @@ if(APPLE)
             "-framework CoreMedia"
             "-framework CoreVideo"
             "-framework VideoToolbox"
+            "-framework Security"
             z
             m
     )
@@ -166,6 +171,24 @@ target_include_directories(test_desktop_lifecycle
 
 add_test(NAME desktop_lifecycle COMMAND test_desktop_lifecycle)
 
+add_executable(test_desktop_multi_account
+    tests/test_desktop_multi_account.cpp
+)
+
+target_link_libraries(test_desktop_multi_account
+    PRIVATE
+        sip::desktop
+)
+
+target_include_directories(test_desktop_multi_account
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../core/include
+        ${PREBUILT_INCLUDE_DIR}
+)
+
+add_test(NAME desktop_multi_account COMMAND test_desktop_multi_account)
+
 add_executable(test_audio_drivers
     tests/test_audio_drivers.cpp
 )
@@ -201,3 +224,28 @@ target_include_directories(test_video_capture
 )
 
 add_test(NAME desktop_video_capture COMMAND test_video_capture)
+
+# Frames are counted where they leave the decoder (needs no PBX).
+if(TARGET sip_core_display_frames_test)
+    add_test(NAME core_display_frames COMMAND sip_core_display_frames_test)
+endif()
+
+# Mix-minus PCM conference mixer unit tests (needs no PBX).
+if(TARGET sip_core_conference_mixer_test)
+    add_test(NAME core_conference_mixer COMMAND sip_core_conference_mixer_test)
+endif()
+
+# Local call recorder (WAV + portable MKV + driver) unit tests (needs no PBX).
+if(TARGET sip_core_call_recorder_test)
+    add_test(NAME core_call_recorder COMMAND sip_core_call_recorder_test)
+endif()
+
+# sip_cli against a scripted SIP peer on loopback (needs no PBX).
+add_executable(test_cli_media
+    tests/test_cli_media.cpp
+)
+
+add_dependencies(test_cli_media sip_cli)
+
+add_test(NAME desktop_cli_media COMMAND test_cli_media $<TARGET_FILE:sip_cli>)
+set_tests_properties(desktop_cli_media PROPERTIES TIMEOUT 240)

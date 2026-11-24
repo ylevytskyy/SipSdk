@@ -1,9 +1,12 @@
 #import "SipMacCall.h"
+#import "SipMacAccount.h"
+#import "SipMacClientInternal.h"
 #include <sip_abi.h>
 #include <mutex>
 
 @implementation SipMacCall {
     struct sip_call_t *_handle;
+    __weak SipMacClient *_client;
     std::mutex _mutex;
     NSString *_cachedCallId;
     NSString *_cachedRemoteUri;
@@ -11,9 +14,15 @@
 
 - (instancetype)initWithHandle:(struct sip_call_t *)handle
 {
+    return [self initWithHandle:handle client:nil];
+}
+
+- (instancetype)initWithHandle:(struct sip_call_t *)handle client:(nullable SipMacClient *)client
+{
     self = [super init];
     if (self) {
         _handle = handle;
+        _client = client;
         if (handle) {
             const char *cid = sip_call_get_id(handle);
             _cachedCallId = cid ? [NSString stringWithUTF8String:cid] : @"";
@@ -25,6 +34,23 @@
         }
     }
     return self;
+}
+
+- (nullable SipMacAccount *)account
+{
+    struct sip_account_t *accHandle = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(_mutex);
+        if (_handle) {
+            accHandle = sip_call_get_account(_handle);
+        }
+    }
+    if (!accHandle) return nil;
+    SipMacClient *client = _client;
+    if (client) {
+        return [client accountForHandle:accHandle];
+    }
+    return [[SipMacAccount alloc] initWithHandle:accHandle client:nil ownsHandle:NO];
 }
 
 - (struct sip_call_t *)handle
@@ -67,6 +93,26 @@
     return _handle ? sip_call_is_on_hold(_handle) : NO;
 }
 
+- (BOOL)isInConference
+{
+    std::lock_guard<std::mutex> lock(_mutex);
+    return _handle ? sip_call_is_in_conference(_handle) : NO;
+}
+
+- (BOOL)isRecording
+{
+    std::lock_guard<std::mutex> lock(_mutex);
+    return _handle ? sip_call_is_recording(_handle) : NO;
+}
+
+- (NSString *)recordingPath
+{
+    std::lock_guard<std::mutex> lock(_mutex);
+    if (!_handle) return @"";
+    const char *p = sip_call_get_recording_path(_handle);
+    return p ? [NSString stringWithUTF8String:p] : @"";
+}
+
 - (BOOL)isMuted
 {
     std::lock_guard<std::mutex> lock(_mutex);
@@ -79,10 +125,51 @@
     return _handle ? sip_call_is_closed(_handle) : YES;
 }
 
+- (BOOL)isSecure
+{
+    std::lock_guard<std::mutex> lock(_mutex);
+    return _handle ? sip_call_is_secure(_handle) : NO;
+}
+
 - (uint32_t)duration
 {
     std::lock_guard<std::mutex> lock(_mutex);
     return _handle ? sip_call_get_duration(_handle) : 0;
+}
+
+- (NSString *)audioCodec
+{
+    std::lock_guard<std::mutex> lock(_mutex);
+    if (!_handle) return @"";
+    sip_call_stats_t st{};
+    if (sip_call_get_stats(_handle, &st) == 0 && st.audio_codec[0] != '\0') {
+        return [NSString stringWithUTF8String:st.audio_codec];
+    }
+    return @"";
+}
+
+- (uint32_t)audioBitrateKbps
+{
+    std::lock_guard<std::mutex> lock(_mutex);
+    if (!_handle) return 0;
+    sip_call_stats_t st{};
+    return sip_call_get_stats(_handle, &st) == 0 ? st.audio_bitrate_kbps : 0;
+}
+
+- (float)audioLossRate
+{
+    std::lock_guard<std::mutex> lock(_mutex);
+    if (!_handle) return 0.0f;
+    sip_call_stats_t st{};
+    return sip_call_get_stats(_handle, &st) == 0 ? st.audio_loss_rate : 0.0f;
+}
+
+- (uint32_t)audioJitterMs
+{
+    std::lock_guard<std::mutex> lock(_mutex);
+    if (!_handle) return 0;
+    sip_call_stats_t st{};
+    return sip_call_get_stats(_handle, &st) == 0 ? st.audio_jitter_ms : 0;
 }
 
 - (int)answerWithVideo:(BOOL)withVideo
@@ -125,6 +212,41 @@
     std::lock_guard<std::mutex> lock(_mutex);
     if (!_handle) return -1;
     return sip_call_request_keyframe(_handle);
+}
+
+- (int)transferToUri:(NSString *)targetUri
+{
+    std::lock_guard<std::mutex> lock(_mutex);
+    if (!_handle || !targetUri) return -1;
+    return sip_call_transfer(_handle, [targetUri UTF8String]);
+}
+
+- (int)attendedTransferWithCall:(SipMacCall *)consultCall
+{
+    std::lock_guard<std::mutex> lock(_mutex);
+    if (!_handle || !consultCall || ![consultCall handle]) return -1;
+    return sip_call_attended_transfer(_handle, [consultCall handle]);
+}
+
+- (int)acceptTransfer:(BOOL)accept
+{
+    std::lock_guard<std::mutex> lock(_mutex);
+    if (!_handle) return -1;
+    return sip_call_accept_transfer(_handle, accept);
+}
+
+- (int)startRecordingToPath:(NSString *)path mode:(SipMacRecordingMode)mode
+{
+    std::lock_guard<std::mutex> lock(_mutex);
+    if (!_handle || !path) return -1;
+    return sip_call_start_recording(_handle, [path UTF8String], static_cast<sip_recording_mode_t>(mode));
+}
+
+- (int)stopRecording
+{
+    std::lock_guard<std::mutex> lock(_mutex);
+    if (!_handle) return -1;
+    return sip_call_stop_recording(_handle);
 }
 
 @end

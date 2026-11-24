@@ -839,7 +839,7 @@ if au_path.exists():
         print("    [PATCH] audiounit.c expanded MAX_NB_FRAMES to 16384")
 PATCH_BARESIP_AUDIOUNIT
 
-elif [[ "$OS_NAME" == "linux" ]]; then
+elif [[ "$OS_NAME" == "linux_no_openssl" ]]; then
   echo "==> Patching libre crypto fallback for Linux non-OpenSSL builds..."
   python3 - "$SOURCE_DIR/re" <<'PATCH_LINUX_CRYPTO'
 import sys
@@ -1246,13 +1246,26 @@ cm_path.write_text(txt)
 PATCH_LINUX_CRYPTO
 fi
 
+if [[ "$OS_NAME" == "darwin" ]]; then
+  OPENSSL_ROOT="$(brew --prefix openssl@3 2>/dev/null || echo '/opt/homebrew/opt/openssl@3')"
+  OPUS_ROOT="$(brew --prefix opus 2>/dev/null || echo '/opt/homebrew/opt/opus')"
+  EXTRA_PREFIX="$OPENSSL_ROOT;$OPUS_ROOT"
+  OPENSSL_ARGS="-DUSE_OPENSSL=ON -DOPENSSL_ROOT_DIR=$OPENSSL_ROOT"
+  BARESIP_MODULES="g711;audiounit;account;stun;turn;ice;srtp;opus"
+else
+  EXTRA_PREFIX=""
+  OPENSSL_ARGS="-DUSE_OPENSSL=ON"
+  BARESIP_MODULES="g711;pulse;alsa;account;stun;turn;ice;srtp;opus"
+fi
+
 echo "==> Configuring libre..."
 mkdir -p "$WORK_ROOT/re-build" "$WORK_ROOT/prefix"
 cmake -S "$SOURCE_DIR/re" -B "$WORK_ROOT/re-build" \
   -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
   -DCMAKE_INSTALL_PREFIX="$WORK_ROOT/prefix" \
-  -DCMAKE_DISABLE_FIND_PACKAGE_OpenSSL=TRUE \
-  -DUSE_OPENSSL=OFF \
+  -DCMAKE_PREFIX_PATH="$WORK_ROOT/prefix;$EXTRA_PREFIX" \
+  $OPENSSL_ARGS \
   -DHAVE_RESOLV=OFF \
   -DUSE_UNIXSOCK=ON \
   -DUSE_REM=ON \
@@ -1264,19 +1277,14 @@ echo "==> Building and installing libre..."
 cmake --build "$WORK_ROOT/re-build" --target re --parallel
 cmake --install "$WORK_ROOT/re-build"
 
-# Select modules based on OS
-if [[ "$OS_NAME" == "darwin" ]]; then
-  BARESIP_MODULES="g711;audiounit;account;stun;turn;ice;srtp"
-else
-  BARESIP_MODULES="g711;pulse;alsa;account;stun;turn;ice;srtp"
-fi
-
 echo "==> Configuring Baresip with modules: $BARESIP_MODULES..."
 mkdir -p "$WORK_ROOT/baresip-build"
 cmake -S "$SOURCE_DIR/baresip" -B "$WORK_ROOT/baresip-build" \
   -DCMAKE_BUILD_TYPE=Release \
-  -DCMAKE_DISABLE_FIND_PACKAGE_OpenSSL=TRUE \
-  -DCMAKE_PREFIX_PATH="$WORK_ROOT/prefix" \
+  -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+  -DCMAKE_PREFIX_PATH="$WORK_ROOT/prefix;$EXTRA_PREFIX" \
+  $OPENSSL_ARGS \
+  -DCMAKE_C_FLAGS="-DUSE_TLS=1 -DUSE_DTLS=1" \
   -Dre_DIR="$WORK_ROOT/prefix/lib/cmake/re" \
   -DRE_INCLUDE_DIR="$WORK_ROOT/prefix/include/re" \
   -DRE_LIBRARY="$WORK_ROOT/prefix/lib/libre.a" \
@@ -1291,13 +1299,22 @@ echo "==> Copying prebuilt headers and libraries to $OUTPUT_DIR..."
 cp "$WORK_ROOT/prefix/lib/libre.a" "$OUTPUT_DIR/lib/"
 
 if [[ "$OS_NAME" == "darwin" ]]; then
-  libtool -static -o "$OUTPUT_DIR/lib/libbaresip.a" "$WORK_ROOT/baresip-build/libbaresip.a" "$WORK_ROOT/prefix/lib/libre.a"
+  libtool -static -o "$OUTPUT_DIR/lib/libbaresip.a" \
+    "$WORK_ROOT/baresip-build/libbaresip.a" \
+    "$WORK_ROOT/prefix/lib/libre.a" \
+    "$OPENSSL_ROOT/lib/libssl.a" \
+    "$OPENSSL_ROOT/lib/libcrypto.a" \
+    "$OPUS_ROOT/lib/libopus.a"
 else
+  MULTI_ARCH="$(gcc -print-multiarch)"
   # Use MRI script for GNU ar on Linux
   ar -M <<MRI_EOF
 create $OUTPUT_DIR/lib/libbaresip.a
 addlib $WORK_ROOT/baresip-build/libbaresip.a
 addlib $WORK_ROOT/prefix/lib/libre.a
+addlib /usr/lib/$MULTI_ARCH/libssl.a
+addlib /usr/lib/$MULTI_ARCH/libcrypto.a
+addlib /usr/lib/$MULTI_ARCH/libopus.a
 save
 end
 MRI_EOF

@@ -1,4 +1,5 @@
 #include "sip_abi.h"
+#include "account_session.h"
 #include "engine.h"
 #include "call_session.h"
 #include "media_driver.h"
@@ -41,7 +42,7 @@ SIP_ABI_EXPORT int sip_client_register_account(sip_client_t *client, const sip_a
     cfg.domain = config->domain ? config->domain : "";
     cfg.pwd = config->pwd ? config->pwd : "";
     cfg.transport = config->transport ? config->transport : "udp";
-    cfg.port = config->port > 0 ? config->port : 5060;
+    cfg.port = config->port > 0 ? config->port : 0;
     cfg.display_name = config->display_name ? config->display_name : "";
     cfg.outbound_proxy = config->outbound_proxy ? config->outbound_proxy : "";
     cfg.stun_server = config->stun_server ? config->stun_server : "";
@@ -49,6 +50,10 @@ SIP_ABI_EXPORT int sip_client_register_account(sip_client_t *client, const sip_a
     cfg.stun_pass = config->stun_pass ? config->stun_pass : "";
     cfg.media_nat = config->media_nat ? config->media_nat : "";
     cfg.reg_interval = config->reg_interval;
+    cfg.tls_ca_file = config->tls_ca_file ? config->tls_ca_file : "";
+    cfg.verify_tls_cert = config->verify_tls_cert;
+    cfg.media_enc = config->media_enc ? config->media_enc : "";
+    cfg.max_calls = config->max_calls;
     return client->engine->register_account(cfg);
 }
 
@@ -104,9 +109,27 @@ SIP_ABI_EXPORT void sip_client_destroy(sip_client_t *client)
 SIP_ABI_EXPORT sip_call_t *sip_call_make(sip_client_t *client, const char *target_uri, bool with_video)
 {
     if (!client || !client->engine) {
+        errno = EINVAL;
         return nullptr;
     }
-    return client->engine->make_call(target_uri, with_video);
+    sip_call_t *call = nullptr;
+    int rc = client->engine->dial_call(target_uri, with_video, &call);
+    if (rc != 0) {
+        errno = rc;
+        return nullptr;
+    }
+    return call;
+}
+
+SIP_ABI_EXPORT int sip_call_dial(sip_client_t *client, const char *target_uri, bool with_video, sip_call_t **out_call)
+{
+    if (out_call) {
+        *out_call = nullptr;
+    }
+    if (!client || !client->engine || !out_call) {
+        return EINVAL;
+    }
+    return client->engine->dial_call(target_uri, with_video, out_call);
 }
 
 SIP_ABI_EXPORT int sip_call_answer(sip_call_t *call, bool with_video)
@@ -139,6 +162,24 @@ SIP_ABI_EXPORT int sip_call_send_dtmf(sip_call_t *call, const char *digits)
     return call->send_dtmf(digits);
 }
 
+SIP_ABI_EXPORT int sip_call_transfer(sip_call_t *call, const char *target_uri)
+{
+    if (!call || !target_uri) return EINVAL;
+    return call->transfer(target_uri);
+}
+
+SIP_ABI_EXPORT int sip_call_attended_transfer(sip_call_t *call, sip_call_t *consult_call)
+{
+    if (!call || !consult_call) return EINVAL;
+    return call->attended_transfer(consult_call);
+}
+
+SIP_ABI_EXPORT int sip_call_accept_transfer(sip_call_t *call, bool accept)
+{
+    if (!call) return EINVAL;
+    return call->accept_transfer(accept);
+}
+
 SIP_ABI_EXPORT int sip_client_set_mic_muted(sip_client_t *client, bool muted)
 {
     if (!client || !client->engine) return EINVAL;
@@ -149,6 +190,36 @@ SIP_ABI_EXPORT bool sip_client_is_mic_muted(const sip_client_t *client)
 {
     if (!client || !client->engine) return false;
     return client->engine->is_client_mic_muted();
+}
+
+SIP_ABI_EXPORT int sip_client_merge_calls(sip_client_t *client, sip_call_t *call_a, sip_call_t *call_b)
+{
+    if (!client || !client->engine || !call_a || !call_b) return EINVAL;
+    return client->engine->merge_calls(call_a, call_b);
+}
+
+SIP_ABI_EXPORT int sip_client_add_to_conference(sip_client_t *client, sip_call_t *call)
+{
+    if (!client || !client->engine || !call) return EINVAL;
+    return client->engine->add_to_conference(call);
+}
+
+SIP_ABI_EXPORT int sip_client_split_call(sip_client_t *client, sip_call_t *call)
+{
+    if (!client || !client->engine || !call) return EINVAL;
+    return client->engine->split_call(call);
+}
+
+SIP_ABI_EXPORT int sip_client_leave_conference(sip_client_t *client)
+{
+    if (!client || !client->engine) return EINVAL;
+    return client->engine->leave_conference();
+}
+
+SIP_ABI_EXPORT bool sip_call_is_in_conference(const sip_call_t *call)
+{
+    if (!call) return false;
+    return call->is_in_conference();
 }
 
 SIP_ABI_EXPORT int sip_client_set_audio_driver(sip_client_t *client, const char *src_mod, const char *src_dev, const char *play_mod, const char *play_dev)
@@ -209,6 +280,18 @@ SIP_ABI_EXPORT bool sip_call_is_closed(const sip_call_t *call)
 {
     if (!call) return true;
     return call->is_closed();
+}
+
+SIP_ABI_EXPORT bool sip_call_is_secure(const sip_call_t *call)
+{
+    if (!call) return false;
+    return call->is_secure();
+}
+
+SIP_ABI_EXPORT int sip_call_get_stats(const sip_call_t *call, sip_call_stats_t *stats)
+{
+    if (!call || !stats) return EINVAL;
+    return call->get_stats(stats);
 }
 
 SIP_ABI_EXPORT uint32_t sip_call_get_duration(const sip_call_t *call)
@@ -333,6 +416,209 @@ SIP_ABI_EXPORT bool sip_client_is_local_preview_active(const sip_client_t *clien
 {
     if (!client || !client->engine) return false;
     return client->engine->is_local_preview_active();
+}
+
+SIP_ABI_EXPORT int sip_client_set_message_callbacks(sip_client_t *client, const sip_message_callbacks_t *callbacks)
+{
+    if (!client || !client->engine) return EINVAL;
+    return client->engine->set_message_callbacks(callbacks);
+}
+
+SIP_ABI_EXPORT int sip_client_send_message(sip_client_t *client,
+                                           const char *peer_uri,
+                                           const char *content_type,
+                                           const uint8_t *body,
+                                           size_t body_len,
+                                           uint64_t *message_id)
+{
+    if (!client || !client->engine) return EINVAL;
+    return client->engine->send_message(peer_uri, content_type, body, body_len, message_id);
+}
+
+SIP_ABI_EXPORT int sip_client_set_recording_callbacks(sip_client_t *client,
+                                                      const sip_recording_callbacks_t *callbacks)
+{
+    if (!client || !client->engine) return EINVAL;
+    return client->engine->set_recording_callbacks(callbacks);
+}
+
+SIP_ABI_EXPORT int sip_client_set_media_recorder_driver(sip_client_t *client,
+                                                        const sip_media_recorder_driver_t *driver)
+{
+    if (!client || !client->engine) return EINVAL;
+    if (!driver) {
+        return client->engine->set_media_recorder_driver(nullptr);
+    }
+    auto cpp_driver = std::make_shared<sip_core::CApiMediaRecorderDriver>(*driver);
+    return client->engine->set_media_recorder_driver(cpp_driver);
+}
+
+SIP_ABI_EXPORT int sip_call_start_recording(sip_call_t *call,
+                                            const char *path,
+                                            sip_recording_mode_t mode)
+{
+    if (!call || !call->engine()) return EINVAL;
+    return call->engine()->start_recording(call, path, mode);
+}
+
+SIP_ABI_EXPORT int sip_call_stop_recording(sip_call_t *call)
+{
+    if (!call || !call->engine()) return EINVAL;
+    return call->engine()->stop_recording(call);
+}
+
+SIP_ABI_EXPORT bool sip_call_is_recording(const sip_call_t *call)
+{
+    if (!call) return false;
+    return call->is_recording();
+}
+
+SIP_ABI_EXPORT const char *sip_call_get_recording_path(const sip_call_t *call)
+{
+    if (!call) return "";
+    return call->get_recording_path();
+}
+
+static sip_core::AccountConfig to_core_account_config(const sip_account_config_t *config)
+{
+    sip_core::AccountConfig cfg;
+    cfg.user = config->user ? config->user : "";
+    cfg.domain = config->domain ? config->domain : "";
+    cfg.pwd = config->pwd ? config->pwd : "";
+    cfg.transport = config->transport ? config->transport : "udp";
+    cfg.port = config->port > 0 ? config->port : 0;
+    cfg.display_name = config->display_name ? config->display_name : "";
+    cfg.outbound_proxy = config->outbound_proxy ? config->outbound_proxy : "";
+    cfg.stun_server = config->stun_server ? config->stun_server : "";
+    cfg.stun_user = config->stun_user ? config->stun_user : "";
+    cfg.stun_pass = config->stun_pass ? config->stun_pass : "";
+    cfg.media_nat = config->media_nat ? config->media_nat : "";
+    cfg.reg_interval = config->reg_interval;
+    cfg.tls_ca_file = config->tls_ca_file ? config->tls_ca_file : "";
+    cfg.verify_tls_cert = config->verify_tls_cert;
+    cfg.media_enc = config->media_enc ? config->media_enc : "";
+    cfg.max_calls = config->max_calls;
+    return cfg;
+}
+
+SIP_ABI_EXPORT int sip_client_set_account_callbacks(sip_client_t *client, const sip_account_callbacks_t *callbacks)
+{
+    if (!client || !client->engine) return EINVAL;
+    return client->engine->set_account_callbacks(callbacks);
+}
+
+SIP_ABI_EXPORT int sip_client_add_account(sip_client_t *client, const sip_account_config_t *config, sip_account_t **out_account)
+{
+    if (out_account) *out_account = nullptr;
+    if (!client || !client->engine || !config || !out_account) return EINVAL;
+    return client->engine->add_account(to_core_account_config(config), out_account);
+}
+
+SIP_ABI_EXPORT int sip_client_remove_account(sip_client_t *client, sip_account_t *account)
+{
+    if (!client || !client->engine || !account) return EINVAL;
+    return client->engine->remove_account(account);
+}
+
+SIP_ABI_EXPORT int sip_client_set_default_account(sip_client_t *client, sip_account_t *account)
+{
+    if (!client || !client->engine || !account) return EINVAL;
+    return client->engine->set_default_account(account);
+}
+
+SIP_ABI_EXPORT sip_account_t *sip_client_get_default_account(const sip_client_t *client)
+{
+    if (!client || !client->engine) return nullptr;
+    return client->engine->get_default_account();
+}
+
+SIP_ABI_EXPORT size_t sip_client_get_account_count(const sip_client_t *client)
+{
+    if (!client || !client->engine) return 0;
+    return client->engine->get_account_count();
+}
+
+SIP_ABI_EXPORT size_t sip_client_get_accounts(const sip_client_t *client, sip_account_t **out_accounts, size_t max_count)
+{
+    if (!client || !client->engine) return 0;
+    return client->engine->get_accounts(out_accounts, max_count);
+}
+
+SIP_ABI_EXPORT int sip_account_reregister(sip_account_t *account)
+{
+    if (!account || !account->engine()) return EINVAL;
+    return account->engine()->reregister_account(account);
+}
+
+SIP_ABI_EXPORT int sip_account_unregister(sip_account_t *account)
+{
+    if (!account || !account->engine()) return EINVAL;
+    return account->engine()->unregister_account(account);
+}
+
+SIP_ABI_EXPORT int sip_account_dial(sip_account_t *account, const char *target_uri, bool with_video, sip_call_t **out_call)
+{
+    if (out_call) *out_call = nullptr;
+    if (!account || !account->engine() || !out_call) return EINVAL;
+    return account->engine()->dial_call_on_account(account, target_uri, with_video, out_call);
+}
+
+SIP_ABI_EXPORT int sip_account_send_message(sip_account_t *account, const char *peer_uri, const char *content_type,
+                                            const uint8_t *body, size_t body_len, uint64_t *message_id)
+{
+    if (!account || !account->engine()) return EINVAL;
+    return account->engine()->send_message_on_account(account, peer_uri, content_type, body, body_len, message_id);
+}
+
+SIP_ABI_EXPORT sip_account_t *sip_call_get_account(const sip_call_t *call)
+{
+    if (!call) return nullptr;
+    return call->account();
+}
+
+SIP_ABI_EXPORT uint64_t sip_account_get_id(const sip_account_t *account)
+{
+    return account ? account->get_id() : 0;
+}
+
+SIP_ABI_EXPORT const char *sip_account_get_aor(const sip_account_t *account)
+{
+    return account ? account->get_aor() : "";
+}
+
+SIP_ABI_EXPORT const char *sip_account_get_user(const sip_account_t *account)
+{
+    return account ? account->get_user() : "";
+}
+
+SIP_ABI_EXPORT const char *sip_account_get_domain(const sip_account_t *account)
+{
+    return account ? account->get_domain() : "";
+}
+
+SIP_ABI_EXPORT bool sip_account_is_registered(const sip_account_t *account)
+{
+    return account ? account->is_registered() : false;
+}
+
+SIP_ABI_EXPORT sip_reg_state_t sip_account_get_reg_state(const sip_account_t *account)
+{
+    return account ? account->get_reg_state() : SIP_REG_STATE_UNREGISTERED;
+}
+
+SIP_ABI_EXPORT void *sip_account_get_user_data(const sip_account_t *account)
+{
+    return account ? account->get_user_data() : nullptr;
+}
+
+SIP_ABI_EXPORT void sip_account_set_user_data(sip_account_t *account, void *user_data)
+{
+    if (account) account->set_user_data(user_data);
+}
+
+SIP_ABI_EXPORT void sip_account_destroy(sip_account_t *account)
+{
+    if (account) account->release();
 }
 
 } // extern "C"

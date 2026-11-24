@@ -4,6 +4,8 @@ public struct InCallView: View {
     @ObservedObject var appModel: SipAppModel
     @State private var showKeypad: Bool = false
     @State private var showDevices: Bool = false
+    @State private var showTransfer: Bool = false
+    @State private var transferTarget: String = ""
 
     private let dtmfDigits = [
         ["1", "2", "3"],
@@ -97,10 +99,16 @@ public struct InCallView: View {
             VStack {
                 HStack {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text(appModel.activeCall?.remoteUri ?? "Active Call")
-                            .font(.headline)
-                            .foregroundColor(.white)
-                            .shadow(radius: 4)
+                        HStack(spacing: 6) {
+                            if appModel.isCallSecure {
+                                Image(systemName: "lock.shield.fill")
+                                    .foregroundColor(.green)
+                            }
+                            Text(appModel.activeCall?.remoteUri ?? "Active Call")
+                                .font(.headline)
+                                .foregroundColor(.white)
+                                .shadow(radius: 4)
+                        }
 
                         HStack(spacing: 8) {
                             Text(callStateDescription)
@@ -114,6 +122,12 @@ public struct InCallView: View {
                                 .font(.subheadline)
                                 .fontWeight(.medium)
                                 .foregroundColor(.white)
+
+                            if !appModel.callStatsSummary.isEmpty {
+                                Text("• \(appModel.callStatsSummary)")
+                                    .font(.caption)
+                                    .foregroundColor(.green)
+                            }
                         }
                         .shadow(radius: 4)
                     }
@@ -126,6 +140,35 @@ public struct InCallView: View {
                                    startPoint: .top,
                                    endPoint: .bottom)
                 )
+
+                // Multi-line switcher chips (when 2+ calls are open)
+                if appModel.calls.count > 1 {
+                    HStack(spacing: 8) {
+                        ForEach(appModel.calls, id: \.callId) { line in
+                            Button(action: {
+                                appModel.swapToCall(line)
+                            }) {
+                                HStack(spacing: 5) {
+                                    Image(systemName: line.isOnHold ? "pause.circle.fill" : "phone.fill")
+                                        .font(.caption)
+                                    Text(line.remoteUri)
+                                        .font(.caption.weight(.semibold))
+                                        .lineLimit(1)
+                                    Text(line.isOnHold ? "Hold" : "Active")
+                                        .font(.caption2)
+                                        .opacity(0.8)
+                                }
+                                .foregroundColor(.white)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 5)
+                                .background(line === appModel.activeCall ? Color.blue : Color.black.opacity(0.65))
+                                .cornerRadius(12)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .padding(.top, 6)
+                }
 
                 Spacer()
 
@@ -152,6 +195,25 @@ public struct InCallView: View {
                     }
                     .padding(12)
                     .background(Color.black.opacity(0.8))
+                    .cornerRadius(12)
+                    .padding(.bottom, 12)
+                }
+
+                // In-Call Blind Transfer Popover
+                if showTransfer {
+                    HStack(spacing: 8) {
+                        TextField("Transfer URI or extension (e.g. 1002)", text: $transferTarget)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 240)
+                        Button("Transfer") {
+                            appModel.transferActiveCall(to: transferTarget)
+                            showTransfer = false
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(transferTarget.trimmingCharacters(in: .whitespaces).isEmpty)
+                    }
+                    .padding(12)
+                    .background(Color.black.opacity(0.85))
                     .cornerRadius(12)
                     .padding(.bottom, 12)
                 }
@@ -328,6 +390,28 @@ public struct InCallView: View {
                     }
                     .buttonStyle(.plain)
 
+                    // Swap Lines
+                    if let other = appModel.calls.first(where: { $0 !== appModel.activeCall && !$0.isClosed }) {
+                        Button(action: {
+                            appModel.swapToCall(other)
+                        }) {
+                            VStack(spacing: 4) {
+                                Image(systemName: "arrow.left.arrow.right")
+                                    .font(.title2)
+                                    .frame(width: 50, height: 50)
+                                    .background(Color.white.opacity(0.25))
+                                    .foregroundColor(.white)
+                                    .clipShape(Circle())
+                                Text("Swap")
+                                    .font(.caption)
+                                    .foregroundColor(.white)
+                            }
+                            .frame(minWidth: 54, minHeight: 64)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    }
+
                     // In-Call Media Device Selection Toggle
                     Button(action: {
                         withAnimation {
@@ -360,6 +444,7 @@ public struct InCallView: View {
                             showKeypad.toggle()
                             if showKeypad {
                                 showDevices = false
+                                showTransfer = false
                             }
                         }
                     }) {
@@ -371,6 +456,32 @@ public struct InCallView: View {
                                 .foregroundColor(.white)
                                 .clipShape(Circle())
                             Text("Keypad")
+                                .font(.caption)
+                                .foregroundColor(.white)
+                        }
+                        .frame(minWidth: 54, minHeight: 64)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+
+                    // Blind Transfer Toggle
+                    Button(action: {
+                        withAnimation {
+                            showTransfer.toggle()
+                            if showTransfer {
+                                showKeypad = false
+                                showDevices = false
+                            }
+                        }
+                    }) {
+                        VStack(spacing: 4) {
+                            Image(systemName: "arrowshape.turn.up.right.fill")
+                                .font(.title2)
+                                .frame(width: 50, height: 50)
+                                .background(showTransfer ? Color.blue : Color.white.opacity(0.25))
+                                .foregroundColor(.white)
+                                .clipShape(Circle())
+                            Text("Transfer")
                                 .font(.caption)
                                 .foregroundColor(.white)
                         }

@@ -38,11 +38,32 @@ public final class SipCall: Identifiable {
     /// True if local microphone is muted for this call.
     public private(set) var isMuted: Bool
 
+    /// True if this call is currently part of the local audio conference.
+    public internal(set) var isInConference: Bool = false
+
+    /// True while this call is being recorded to disk.
+    public internal(set) var isRecording: Bool = false
+
+    /// Active recording output file path, or nil when idle.
+    public internal(set) var recordingPath: String?
+
+    /// Account session that owns this call (when multi-account API is used).
+    public internal(set) var accountSession: SipAccountSession?
+
     /// Active call duration in seconds.
     public private(set) var durationSeconds: UInt32 = 0
 
+    /// True if active call media is encrypted (SRTP).
+    public var isSecure: Bool {
+        guard let coreCall = coreCall else { return false }
+        return sip_call_is_secure(coreCall)
+    }
+
     /// Dimensions of remote video stream.
     public private(set) var videoSize: CGSize = .zero
+
+    /// Real-time call quality telemetry metrics.
+    public private(set) var stats: SipCallStats?
 
     /// Timestamp when call reached established state.
     public private(set) var establishedAt: Date?
@@ -137,7 +158,97 @@ public final class SipCall: Identifiable {
         _ = sip_call_request_keyframe(call)
     }
 
+    /// Initiates a blind call transfer (RFC 3515 REFER) to the specified destination URI.
+    public func transfer(to targetUri: String) throws {
+        guard let call = coreCall else {
+            throw SipError.invalidParameter("Call session handle is invalid")
+        }
+        let rc = sip_call_transfer(call, targetUri)
+        if rc != 0 {
+            throw SipError.coreError(Int(rc), "Failed to initiate call transfer")
+        }
+    }
+
+    /// Initiates an attended call transfer (RFC 3515 REFER with Replaces header).
+    public func attendedTransfer(with consultCall: SipCall) throws {
+        guard let call = coreCall, let consult = consultCall.coreCall else {
+            throw SipError.invalidParameter("Call session handles are invalid")
+        }
+        let rc = sip_call_attended_transfer(call, consult)
+        if rc != 0 {
+            throw SipError.coreError(Int(rc), "Failed to initiate attended transfer")
+        }
+    }
+
+    /// Accepts or rejects an incoming transfer request (REFER).
+    public func acceptTransfer(_ accept: Bool) throws {
+        guard let call = coreCall else {
+            throw SipError.invalidParameter("Call session handle is invalid")
+        }
+        let rc = sip_call_accept_transfer(call, accept)
+        if rc != 0 {
+            throw SipError.coreError(Int(rc), "Failed to \(accept ? "accept" : "reject") transfer")
+        }
+    }
+
+    /// Starts local audio or audio+video recording for this call.
+    public func startRecording(to path: String, mode: SipRecordingMode = .audioStereo) throws {
+        guard let call = coreCall else {
+            throw SipError.invalidParameter("Call session handle is invalid")
+        }
+        let cMode = sip_recording_mode_t(rawValue: UInt32(mode.rawValue))
+        let rc = sip_call_start_recording(call, path, cMode)
+        if rc != 0 {
+            throw SipError.coreError(Int(rc), "Failed to start recording")
+        }
+        isRecording = true
+        recordingPath = path
+    }
+
+    /// Stops and finalizes local recording for this call.
+    public func stopRecording() throws {
+        guard let call = coreCall else {
+            throw SipError.invalidParameter("Call session handle is invalid")
+        }
+        let rc = sip_call_stop_recording(call)
+        if rc != 0 {
+            throw SipError.coreError(Int(rc), "Failed to stop recording")
+        }
+        isRecording = false
+        recordingPath = nil
+    }
+
+    /// Synchronously retrieves current call quality stats from the core engine.
+    @discardableResult
+    public func getStats() -> SipCallStats? {
+        guard let call = coreCall else { return nil }
+        var coreStats = sip_call_stats_t()
+        guard sip_call_get_stats(call, &coreStats) == 0 else { return nil }
+        let s = SipCallStats(
+            audioCodec: withUnsafeBytes(of: coreStats.audio_codec) { p in
+                p.baseAddress != nil ? String(cString: p.baseAddress!.assumingMemoryBound(to: CChar.self)) : ""
+            },
+            audioBitrateKbps: coreStats.audio_bitrate_kbps,
+            audioLossRate: coreStats.audio_loss_rate,
+            audioJitterMs: coreStats.audio_jitter_ms,
+            audioRttMs: coreStats.audio_rtt_ms,
+            videoCodec: withUnsafeBytes(of: coreStats.video_codec) { p in
+                p.baseAddress != nil ? String(cString: p.baseAddress!.assumingMemoryBound(to: CChar.self)) : ""
+            },
+            videoBitrateKbps: coreStats.video_bitrate_kbps,
+            videoLossRate: coreStats.video_loss_rate,
+            videoJitterMs: coreStats.video_jitter_ms,
+            videoFps: coreStats.video_fps
+        )
+        self.stats = s
+        return s
+    }
+
     // MARK: - Internal State Updates
+
+    internal func updateStats(_ newStats: SipCallStats) {
+        self.stats = newStats
+    }
 
     internal func updateState(_ newState: SipCallState) {
         self.state = newState

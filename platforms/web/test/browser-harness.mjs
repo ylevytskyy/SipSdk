@@ -45,6 +45,7 @@ export async function launchBrowser() {
     '--use-fake-device-for-media-stream',
     '--use-fake-ui-for-media-stream',
     '--autoplay-policy=no-user-gesture-required',
+    '--disable-features=WebRtcHideLocalIpsWithMdns',
   ];
   try {
     return await chromium.launch({ headless: true, args });

@@ -21,7 +21,8 @@ case "$ARCH" in
 esac
 LINUX_SLICE="linux-${ARCH}"
 
-if [[ ! -f "$ROOT_DIR/platforms/desktop/prebuilt/$LINUX_SLICE/lib/libbaresip.a" ]]; then
+if [[ ! -f "$ROOT_DIR/platforms/desktop/prebuilt/$LINUX_SLICE/lib/libbaresip.a" ]] || \
+   ! nm -g "$ROOT_DIR/platforms/desktop/prebuilt/$LINUX_SLICE/lib/libbaresip.a" 2>/dev/null | grep -q "exports_opus"; then
   echo "==> Building Baresip desktop prebuilt for Linux ($LINUX_SLICE)..."
   bash "$ROOT_DIR/scripts/build-baresip-desktop.sh" "$ROOT_DIR/platforms/desktop/prebuilt"
 fi
@@ -32,6 +33,10 @@ BUILD_DIR="/tmp/desktop-linux-build"
 rm -rf "$BUILD_DIR"
 cmake -S "$ROOT_DIR/platforms/desktop" -B "$BUILD_DIR" -DCMAKE_BUILD_TYPE=Release
 cmake --build "$BUILD_DIR" --parallel
+
+# Export the fresh Linux core library for the .NET tests (scripts/verify-windows-sdk.sh).
+mkdir -p "$ROOT_DIR/.build/desktop-linux/core"
+cp "$BUILD_DIR/core/libsipcore.so" "$ROOT_DIR/.build/desktop-linux/core/libsipcore.so"
 
 # 4. Resolve Asterisk host to IP and run native CTest / unit tests
 ASTERISK_HOST="${ASTERISK_HOST:-asterisk}"
@@ -45,7 +50,7 @@ fi
 
 echo "==> Running desktop native unit tests on Linux..."
 cd "$BUILD_DIR"
-ctest --output-on-failure
+ctest --output-on-failure -V
 
 # 5. Live PBX test against Asterisk
 echo "==> Running headless CLI call against Asterisk ($ASTERISK_HOST:$ASTERISK_PORT)..."

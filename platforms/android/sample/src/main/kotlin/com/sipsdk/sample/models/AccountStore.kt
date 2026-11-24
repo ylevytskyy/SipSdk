@@ -10,7 +10,10 @@ class AccountStore(context: Context) {
 
     private val isEmulator: Boolean = Build.FINGERPRINT.startsWith("generic")
             || Build.FINGERPRINT.startsWith("unknown")
+            || Build.HARDWARE.contains("goldfish")
+            || Build.HARDWARE.contains("ranchu")
             || Build.MODEL.contains("google_sdk")
+            || Build.MODEL.contains("sdk_gphone")
             || Build.MODEL.contains("Emulator")
             || Build.MODEL.contains("Android SDK built for")
             || Build.MANUFACTURER.contains("Genymotion")

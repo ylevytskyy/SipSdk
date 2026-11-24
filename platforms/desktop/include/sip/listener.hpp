@@ -4,9 +4,11 @@
 #include "types.hpp"
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace sip {
 
+class Account;
 class Call;
 
 class IClientListener {
@@ -31,6 +33,51 @@ public:
 
     virtual void on_dtmf_digit(std::shared_ptr<Call> call, const std::string &digit) {
         (void)call; (void)digit;
+    }
+
+    virtual void on_message_received(const IncomingMessage &message) {
+        (void)message;
+    }
+
+    virtual void on_message_status(uint64_t message_id, MessageStatus status, int code, const std::string &reason) {
+        (void)message_id; (void)status; (void)code; (void)reason;
+    }
+
+    virtual void on_call_stats(std::shared_ptr<Call> call, const CallStats &stats) {
+        (void)call; (void)stats;
+    }
+
+    virtual void on_transfer_status(std::shared_ptr<Call> call, int code, const std::string &reason) {
+        (void)call; (void)code; (void)reason;
+    }
+
+    virtual void on_transfer_request(std::shared_ptr<Call> call, const std::string &refer_to_uri, bool has_replaces) {
+        (void)call; (void)refer_to_uri; (void)has_replaces;
+    }
+
+    virtual void on_call_rejected_busy(const std::string &caller_uri) {
+        (void)caller_uri;
+    }
+
+    virtual void on_conference_changed(const std::vector<std::shared_ptr<Call>> &calls) {
+        (void)calls;
+    }
+
+    virtual void on_recording_state(std::shared_ptr<Call> call, RecordingState state,
+                                    const std::string &path, int error_code) {
+        (void)call; (void)state; (void)path; (void)error_code;
+    }
+
+    virtual void on_account_registration_state(std::shared_ptr<Account> account,
+                                               RegistrationState state,
+                                               int code,
+                                               const std::string &reason) {
+        (void)account; (void)state; (void)code; (void)reason;
+    }
+
+    virtual void on_account_message_received(std::shared_ptr<Account> account,
+                                             const IncomingMessage &message) {
+        (void)account; (void)message;
     }
 };
 

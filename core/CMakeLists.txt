@@ -13,6 +13,9 @@ set(CMAKE_C_VISIBILITY_PRESET hidden)
 set(CMAKE_VISIBILITY_INLINES_HIDDEN ON)
 
 add_compile_definitions(USE_UNIXSOCK=ON)
+add_compile_definitions(USE_TLS=1)
+add_compile_definitions(USE_DTLS=1)
+add_compile_definitions(USE_OPENSSL=1)
 
 # Baresip dependencies
 if(NOT BARESIP_INCLUDE_DIR)
@@ -21,9 +24,13 @@ endif()
 
 # Core static library
 add_library(sip_core STATIC
+    src/account_session.cpp
+    src/call_recorder.cpp
     src/call_session.cpp
+    src/conference_mixer.cpp
     src/engine.cpp
     src/media_driver.cpp
+    src/mkv_writer.cpp
     src/sip_abi.cpp
 )
 
@@ -47,9 +54,13 @@ target_compile_definitions(sip_core
 
 # Core shared library (Windows DLL, macOS dylib, Linux so)
 add_library(sip_core_shared SHARED
+    src/account_session.cpp
+    src/call_recorder.cpp
     src/call_session.cpp
+    src/conference_mixer.cpp
     src/engine.cpp
     src/media_driver.cpp
+    src/mkv_writer.cpp
     src/sip_abi.cpp
 )
 
@@ -94,6 +105,7 @@ elseif(APPLE)
                 "-framework CoreMedia"
                 "-framework CoreVideo"
                 "-framework VideoToolbox"
+                "-framework Security"
                 z
                 m
         )
@@ -110,6 +122,11 @@ else()
                 dl
                 m
                 z
+        )
+        target_link_options(sip_core_shared
+            PRIVATE
+                "-Wl,--exclude-libs,ALL"
+                "-Wl,-Bsymbolic"
         )
     endif()
 endif()
@@ -138,6 +155,8 @@ if(BARESIP_LIBRARY)
     target_include_directories(sip_core_registration_test
         PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/include
+            ${CMAKE_CURRENT_SOURCE_DIR}/src
+            ${BARESIP_INCLUDE_DIR}
     )
 
     target_link_libraries(sip_core_registration_test
@@ -225,12 +244,81 @@ if(BARESIP_LIBRARY)
             ${BARESIP_LIBRARY}
     )
 
+    add_executable(sip_core_display_frames_test
+        tests/test_display_frames.cpp
+    )
+
+    target_include_directories(sip_core_display_frames_test
+        PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/include
+            ${CMAKE_CURRENT_SOURCE_DIR}/src
+            ${BARESIP_INCLUDE_DIR}
+    )
+
+    target_link_libraries(sip_core_display_frames_test
+        PRIVATE
+            sip_core
+            ${BARESIP_LIBRARY}
+    )
+
+    add_executable(sip_core_conference_mixer_test
+        tests/test_conference_mixer.cpp
+        src/conference_mixer.cpp
+    )
+
+    target_include_directories(sip_core_conference_mixer_test
+        PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+
+    add_executable(sip_core_call_recorder_test
+        tests/test_call_recorder.cpp
+        src/call_recorder.cpp
+        src/mkv_writer.cpp
+    )
+
+    target_include_directories(sip_core_call_recorder_test
+        PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+
+    add_executable(sip_core_multi_account_test
+        tests/test_multi_account.cpp
+    )
+
+    target_include_directories(sip_core_multi_account_test
+        PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+
+    target_link_libraries(sip_core_multi_account_test
+        PRIVATE
+            sip_core
+            ${BARESIP_LIBRARY}
+    )
+
     enable_testing()
     add_test(NAME core_capture_driver_adapter COMMAND sip_core_capture_driver_test)
     add_test(NAME core_call_session COMMAND sip_core_call_session_test)
     add_test(NAME core_engine_threading COMMAND sip_core_engine_threading_test)
 
     if(APPLE)
+        target_link_libraries(sip_core_display_frames_test
+            PRIVATE
+                "-framework Foundation"
+                "-framework CoreFoundation"
+                "-framework SystemConfiguration"
+                "-framework CoreAudio"
+                "-framework AudioToolbox"
+                "-framework AVFoundation"
+                "-framework CFNetwork"
+                "-framework CoreMedia"
+                "-framework CoreVideo"
+                "-framework VideoToolbox"
+                z
+                m
+        )
+
         target_link_libraries(sip_core_lifecycle_test
             PRIVATE
                 "-framework Foundation"
@@ -243,6 +331,7 @@ if(BARESIP_LIBRARY)
                 "-framework CoreMedia"
                 "-framework CoreVideo"
                 "-framework VideoToolbox"
+                "-framework Security"
                 z
                 m
         )
@@ -259,6 +348,7 @@ if(BARESIP_LIBRARY)
                 "-framework CoreMedia"
                 "-framework CoreVideo"
                 "-framework VideoToolbox"
+                "-framework Security"
                 z
                 m
         )
@@ -291,6 +381,7 @@ if(BARESIP_LIBRARY)
                 "-framework CoreMedia"
                 "-framework CoreVideo"
                 "-framework VideoToolbox"
+                "-framework Security"
                 z
                 m
         )
@@ -339,6 +430,24 @@ if(BARESIP_LIBRARY)
                 "-framework CoreMedia"
                 "-framework CoreVideo"
                 "-framework VideoToolbox"
+                "-framework Security"
+                z
+                m
+        )
+
+        target_link_libraries(sip_core_multi_account_test
+            PRIVATE
+                "-framework Foundation"
+                "-framework CoreFoundation"
+                "-framework SystemConfiguration"
+                "-framework CoreAudio"
+                "-framework AudioToolbox"
+                "-framework AVFoundation"
+                "-framework CFNetwork"
+                "-framework CoreMedia"
+                "-framework CoreVideo"
+                "-framework VideoToolbox"
+                "-framework Security"
                 z
                 m
         )
@@ -360,5 +469,7 @@ if(BARESIP_LIBRARY)
         target_link_libraries(sip_core_capture_driver_test PRIVATE ${CORE_TEST_LINUX_LIBS})
         target_link_libraries(sip_core_call_session_test PRIVATE ${CORE_TEST_LINUX_LIBS})
         target_link_libraries(sip_core_engine_threading_test PRIVATE ${CORE_TEST_LINUX_LIBS})
+        target_link_libraries(sip_core_display_frames_test PRIVATE ${CORE_TEST_LINUX_LIBS})
+        target_link_libraries(sip_core_multi_account_test PRIVATE ${CORE_TEST_LINUX_LIBS})
     endif()
 endif()

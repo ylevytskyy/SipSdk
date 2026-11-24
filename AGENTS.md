@@ -29,8 +29,9 @@ full reactive telephony controls (`@Observable @MainActor SipClient` and `SipCal
 CallKit integration (`SipCallKitCoordinator`), VoIP PushKit (`SipPushRegistry`),
 zero-downtime network handover (`resetTransports`), and call history.
 The companion web test page (`web/index.html`) supports two-way WebRTC audio + H.264 video
-over `wss://sip.iptel.org:8081`. TLS on the native C stack remains disabled (`USE_OPENSSL=OFF`):
-no SIP over TLS in `BaresipCore`.
+over `wss://sip.iptel.org:8081`. Native builds link static OpenSSL 3.x (`USE_OPENSSL=ON`)
+and `libopus` (`1.5.2`) for SIP over TLS (SIPS), mandatory SRTP/DTLS-SRTP, wideband Opus
+audio, real-time call telemetry, and blind/attended `REFER` call transfer.
 
 ## Stack & tooling
 - SwiftPM package (`Package.swift`, tools 5.9): `SipSdk` modern Swift target
@@ -94,7 +95,7 @@ no SIP over TLS in `BaresipCore`.
 - Simulator runtime & UI verification → `bash scripts/verify-ios-video-tests.sh` and `bash scripts/verify-sim-app-launch.sh`.
 - Web client verification → `node specs/ios-video-phone/verify-web-video.mjs`.
 - Physical device live two-way SIP video call, hardware camera feed, audio route switching, and system CallKit lock-screen UI → physical iOS device with live SIP credentials (`bash scripts/verify-device-live-call.sh`).
-- SIP over TLS → unsupported in this release (`USE_OPENSSL=OFF`).
+- SIP over TLS → supported on native C stack (`USE_OPENSSL=ON`, port 5061) and Web (`wss://`).
 - E2E test tool: `simctl` + custom runner on iOS Simulator; Playwright (`chromium`) for `web/index.html`.
 
 ## Delivery

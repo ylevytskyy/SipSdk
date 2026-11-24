@@ -37,6 +37,72 @@ struct CallMediaInfo {
     bool is_muted{false};
 };
 
+/** What a call has received. Complete once the call is closed. */
+struct CallMediaStats {
+    uint64_t video_frames_decoded{0};  // frames that left the video decoder (not frames sent)
+    uint64_t video_rtp_received{0};    // RTP packets received on the video stream
+    uint64_t audio_rtp_received{0};    // RTP packets received on the audio stream
+};
+
+struct CallStats {
+    float audio_loss_rate{0.0f};
+    uint32_t audio_jitter_ms{0};
+    uint32_t audio_rtt_ms{0};
+    uint32_t audio_bitrate_kbps{0};
+    std::string audio_codec;
+    float video_loss_rate{0.0f};
+    uint32_t video_jitter_ms{0};
+    uint32_t video_bitrate_kbps{0};
+    uint32_t video_fps{0};
+    std::string video_codec;
+};
+
+/** Status of a sent SIP MESSAGE; values match sip_message_status_t. */
+enum class MessageStatus {
+    Sent = 0,
+    Failed,
+    Delivered,  // reserved: IMDN delivery notification
+    Displayed   // reserved: IMDN display (read) notification
+};
+
+/** A SIP MESSAGE received for the registered account. */
+struct IncomingMessage {
+    std::string from;          // sender URI, e.g. "sip:1002@pbx"
+    std::string content_type;  // MIME type, e.g. "text/plain"
+    std::string body;          // raw body bytes
+};
+
+enum class RecordingMode {
+    AudioStereo = 0,
+    AudioMono = 1,
+    AudioVideo = 2
+};
+
+enum class RecordingState {
+    Idle = 0,
+    Recording = 1,
+    Failed = 2
+};
+
+struct AccountConfig {
+    std::string username;
+    std::string domain;
+    std::string password;
+    std::string transport{"udp"};
+    int port{5060};
+    std::string display_name;
+    std::string outbound_proxy;
+    std::string stun_server;
+    std::string stun_user;
+    std::string stun_pass;
+    std::string media_nat;
+    uint32_t reg_interval{0};
+    std::string tls_ca_file;
+    bool verify_tls_cert{true};
+    std::string media_enc;
+    int max_calls{4};
+};
+
 inline const char *to_string(RegistrationState state) {
     switch (state) {
         case RegistrationState::Unregistered: return "Unregistered";
@@ -55,6 +121,16 @@ inline const char *to_string(CallState state) {
         case CallState::Established: return "Established";
         case CallState::Hold:        return "Hold";
         case CallState::Closed:      return "Closed";
+    }
+    return "Unknown";
+}
+
+inline const char *to_string(MessageStatus status) {
+    switch (status) {
+        case MessageStatus::Sent:      return "Sent";
+        case MessageStatus::Failed:    return "Failed";
+        case MessageStatus::Delivered: return "Delivered";
+        case MessageStatus::Displayed: return "Displayed";
     }
     return "Unknown";
 }
