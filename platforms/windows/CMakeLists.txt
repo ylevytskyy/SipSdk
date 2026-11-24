@@ -126,8 +126,11 @@ if(WIN32 OR MINGW)
             crypt32
             bcrypt
             mfplat
+            mf
             mfuuid
             mfreadwrite
+            wmcodecdspuuid
+            ole32
             strmiids
             d3d11
             dxgi
